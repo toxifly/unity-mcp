@@ -93,16 +93,16 @@ async def manage_gameobject(
     ctx: Context,
     action: Annotated[Literal["create", "modify", "delete", "duplicate",
                               "move_relative"], "Action to perform on GameObject."] | None = None,
-    target: Annotated[str,
-                      "GameObject identifier by name or path for modify/delete/component actions"] | None = None,
+    target: Annotated[dict[str, Any] | str | int,
+                      "GameObject reference for modify/delete/duplicate/move_relative actions. Accepts instance ID, name, path, or object like {\"instanceID\": 123} / {\"name\": \"Player\"} / {\"path\": \"/Canvas/Panel\"}."] | None = None,
     search_method: Annotated[Literal["by_id", "by_name", "by_path", "by_tag", "by_layer", "by_component"],
                              "How to find objects. Used with 'find' and some 'target' lookups."] | None = None,
     name: Annotated[str,
                     "GameObject name for 'create' (initial name) and 'modify' (rename) actions ONLY. For 'find' action, use 'search_term' instead."] | None = None,
     tag: Annotated[str,
                    "Tag name - used for both 'create' (initial tag) and 'modify' (change tag)"] | None = None,
-    parent: Annotated[str,
-                      "Parent GameObject reference - used for both 'create' (initial parent) and 'modify' (change parent)"] | None = None,
+    parent: Annotated[dict[str, Any] | str | int,
+                      "Parent GameObject reference - used for both 'create' (initial parent) and 'modify' (change parent). Accepts instance ID, name, path, or {instanceID|name|path}."] | None = None,
     position: Annotated[list[float],
                         "Position as [x, y, z] array"] | None = None,
     rotation: Annotated[list[float],
@@ -160,8 +160,8 @@ async def manage_gameobject(
     offset: Annotated[list[float],
                       "Offset from original/reference position as [x, y, z] array"] | None = None,
     # --- Parameters for 'move_relative' ---
-    reference_object: Annotated[str,
-                                "Reference object for relative movement (required for move_relative)"] | None = None,
+    reference_object: Annotated[dict[str, Any] | str | int,
+                                "Reference object for relative movement (required for move_relative). Accepts instance ID, name, path, or {instanceID|name|path}."] | None = None,
     direction: Annotated[Literal["left", "right", "up", "down", "forward", "back", "front", "backward", "behind"],
                          "Direction for relative movement (e.g., 'right', 'up', 'forward')"] | None = None,
     distance: Annotated[float,
@@ -209,6 +209,64 @@ async def manage_gameobject(
         component_properties)
     if comp_props_error:
         return {"success": False, "message": comp_props_error}
+
+    def _normalize_go_ref(value: Any) -> tuple[Any, str | None, str | None]:
+        """Normalize {instanceID|name|path} references into (value, inferred_search_method, error)."""
+        value = parse_json_payload(value)
+
+        if isinstance(value, dict):
+            instance_id = value.get("instanceID") or value.get("instance_id") or value.get("id")
+            if instance_id is not None:
+                coerced = coerce_int(instance_id, default=None)
+                if coerced is None:
+                    return None, None, f"Invalid instanceID in reference: {instance_id!r}"
+                return coerced, "by_id", None
+
+            path = value.get("path")
+            if isinstance(path, str) and path.strip():
+                p = path.strip()
+                if p.startswith("/"):
+                    p = p[1:]
+                return p, "by_path", None
+
+            name_ref = value.get("name")
+            if isinstance(name_ref, str) and name_ref.strip():
+                return name_ref.strip(), "by_name", None
+
+            return None, None, "Invalid GameObject reference: expected one of {instanceID,name,path}."
+
+        if isinstance(value, str):
+            s = value.strip()
+            if s.startswith("/"):
+                return s[1:], "by_path", None
+            if "/" in s:
+                return s, "by_path", None
+            return s, "by_name", None
+
+        if isinstance(value, int):
+            return value, "by_id", None
+
+        return value, None, None
+
+    if target is not None:
+        normalized_target, inferred_method, err = _normalize_go_ref(target)
+        if err:
+            return {"success": False, "message": err}
+        target = normalized_target
+        if search_method is None and inferred_method:
+            search_method = inferred_method
+
+    if parent is not None:
+        normalized_parent, _, err = _normalize_go_ref(parent)
+        if err:
+            return {"success": False, "message": err}
+        parent = normalized_parent
+
+    if reference_object is not None:
+        normalized_ref, _, err = _normalize_go_ref(reference_object)
+        if err:
+            return {"success": False, "message": err}
+        reference_object = normalized_ref
 
     try:
         # Validate parameter usage to prevent silent failures
