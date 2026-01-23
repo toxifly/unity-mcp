@@ -63,3 +63,26 @@ async def test_manage_gameobject_create_with_tag(monkeypatch):
     assert p["name"] == "TestObject"
     assert p["tag"] == "Player"
     assert p["position"] == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.asyncio
+async def test_manage_gameobject_target_object_reference_infers_search_method(monkeypatch):
+    """Test that {path|name|instanceID} target objects are normalized and inferred into searchMethod."""
+    captured = {}
+
+    async def fake_send(cmd, params, **kwargs):
+        captured["params"] = params
+        return {"success": True, "data": {}}
+
+    monkeypatch.setattr(manage_go_mod, "async_send_command_with_retry", fake_send)
+
+    resp = await manage_go_mod.manage_gameobject(
+        ctx=DummyContext(),
+        action="modify",
+        target={"path": "/Canvas/Panel"},
+        set_active=True,
+    )
+
+    assert resp.get("success") is True
+    assert captured["params"]["target"] == "Canvas/Panel"
+    assert captured["params"]["searchMethod"] == "by_path"

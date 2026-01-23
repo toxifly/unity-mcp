@@ -218,6 +218,64 @@ namespace MCPForUnityTests.Editor.Tools
             }
         }
 
+        [Test]
+        public void CreateFromGameObject_SupportsInstanceIdTarget()
+        {
+            EnsureTempDirectoryExists();
+            StageUtility.GoToMainStage();
+
+            string prefabPath = Path.Combine(TempDirectory, "SceneObjectSavedById.prefab").Replace('\\', '/');
+            GameObject sceneObject = new GameObject("ScenePrefabSourceById");
+
+            try
+            {
+                var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "create_from_gameobject",
+                    ["target"] = sceneObject.GetInstanceID(),
+                    ["prefabPath"] = prefabPath
+                }));
+
+                Assert.IsTrue(result.Value<bool>("success"), "create_from_gameobject should succeed for an instance ID target.");
+
+                var data = result["data"] as JObject;
+                Assert.IsNotNull(data, "Response data should include prefab information.");
+
+                string savedPath = data.Value<string>("prefabPath");
+                Assert.AreEqual(prefabPath, savedPath, "Returned prefab path should match the requested path.");
+
+                GameObject prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(savedPath);
+                Assert.IsNotNull(prefabAsset, "Prefab asset should exist at the saved path.");
+
+                int instanceId = data.Value<int>("instanceId");
+                var linkedInstance = EditorUtility.InstanceIDToObject(instanceId) as GameObject;
+                Assert.IsNotNull(linkedInstance, "Linked instance should resolve from instanceId.");
+                Assert.AreEqual(savedPath, PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(linkedInstance), "Instance should be connected to the new prefab.");
+
+                sceneObject = linkedInstance;
+            }
+            finally
+            {
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null)
+                {
+                    AssetDatabase.DeleteAsset(prefabPath);
+                }
+
+                if (sceneObject != null)
+                {
+                    if (PrefabUtility.IsPartOfPrefabInstance(sceneObject))
+                    {
+                        PrefabUtility.UnpackPrefabInstance(
+                            sceneObject,
+                            PrefabUnpackMode.Completely,
+                            InteractionMode.AutomatedAction
+                        );
+                    }
+                    UnityEngine.Object.DestroyImmediate(sceneObject, true);
+                }
+            }
+        }
+
         private static string CreateTestPrefab(string name)
         {
             EnsureTempDirectoryExists();
