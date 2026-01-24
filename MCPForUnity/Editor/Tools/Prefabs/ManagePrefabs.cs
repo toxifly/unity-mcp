@@ -14,7 +14,8 @@ namespace MCPForUnity.Editor.Tools.Prefabs
     /// </summary>
     public static class ManagePrefabs
     {
-        private const string SupportedActions = "open_stage, close_stage, save_open_stage, create_from_gameobject";
+        private const string SupportedActions =
+            "open_stage, close_stage, save_open_stage, create_from_gameobject, apply_instance_overrides, revert_instance_overrides, unpack_instance";
 
         public static object HandleCommand(JObject @params)
         {
@@ -41,6 +42,12 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                         return SaveOpenStage();
                     case "create_from_gameobject":
                         return CreatePrefabFromGameObject(@params);
+                    case "apply_instance_overrides":
+                        return ApplyInstanceOverrides(@params);
+                    case "revert_instance_overrides":
+                        return RevertInstanceOverrides(@params);
+                    case "unpack_instance":
+                        return UnpackInstance(@params);
                     default:
                         return new ErrorResponse($"Unknown action: '{action}'. Valid actions are: {SupportedActions}.");
                 }
@@ -90,6 +97,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                 return new SuccessResponse("No prefab stage was open.");
             }
 
+            string assetPath = stage.assetPath;
             bool saveBeforeClose = @params["saveBeforeClose"]?.ToObject<bool>() ?? false;
             if (saveBeforeClose && stage.scene.isDirty)
             {
@@ -98,7 +106,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             }
 
             StageUtility.GoToMainStage();
-            return new SuccessResponse($"Closed prefab stage for '{stage.assetPath}'.");
+            return new SuccessResponse($"Closed prefab stage for '{assetPath}'.");
         }
 
         private static object SaveOpenStage()
@@ -263,6 +271,193 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                 mode = stage.mode.ToString(),
                 isDirty = stage.scene.isDirty
             };
+        }
+
+        private static object ApplyInstanceOverrides(JObject @params)
+        {
+            if (@params == null)
+            {
+                return new ErrorResponse("Parameters cannot be null.");
+            }
+
+            GameObject targetGo = ResolveTargetGameObject(@params, out string resolveError);
+            if (targetGo == null)
+            {
+                return new ErrorResponse(resolveError ?? "Target GameObject could not be resolved.");
+            }
+
+            GameObject instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(targetGo);
+            if (instanceRoot == null || !PrefabUtility.IsPartOfPrefabInstance(instanceRoot))
+            {
+                return new ErrorResponse($"GameObject '{targetGo.name}' is not part of a prefab instance.");
+            }
+
+            if (!PrefabUtility.HasPrefabInstanceAnyOverrides(instanceRoot, false))
+            {
+                string prefabPathNoOverrides = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instanceRoot);
+                return new SuccessResponse($"No prefab overrides to apply for '{instanceRoot.name}'.", new
+                {
+                    prefabPath = prefabPathNoOverrides,
+                    instanceId = instanceRoot.GetInstanceID()
+                });
+            }
+
+            string prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instanceRoot);
+            try
+            {
+                PrefabUtility.ApplyPrefabInstance(instanceRoot, InteractionMode.AutomatedAction);
+                AssetDatabase.SaveAssets();
+                return new SuccessResponse($"Applied prefab instance overrides for '{instanceRoot.name}' to '{prefabPath}'.", new
+                {
+                    prefabPath = prefabPath,
+                    instanceId = instanceRoot.GetInstanceID()
+                });
+            }
+            catch (Exception e)
+            {
+                return new ErrorResponse($"Failed to apply prefab instance overrides for '{instanceRoot.name}': {e.Message}");
+            }
+        }
+
+        private static object RevertInstanceOverrides(JObject @params)
+        {
+            if (@params == null)
+            {
+                return new ErrorResponse("Parameters cannot be null.");
+            }
+
+            GameObject targetGo = ResolveTargetGameObject(@params, out string resolveError);
+            if (targetGo == null)
+            {
+                return new ErrorResponse(resolveError ?? "Target GameObject could not be resolved.");
+            }
+
+            GameObject instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(targetGo);
+            if (instanceRoot == null || !PrefabUtility.IsPartOfPrefabInstance(instanceRoot))
+            {
+                return new ErrorResponse($"GameObject '{targetGo.name}' is not part of a prefab instance.");
+            }
+
+            string prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instanceRoot);
+            try
+            {
+                PrefabUtility.RevertPrefabInstance(instanceRoot, InteractionMode.AutomatedAction);
+                return new SuccessResponse($"Reverted prefab instance overrides for '{instanceRoot.name}'.", new
+                {
+                    prefabPath = prefabPath,
+                    instanceId = instanceRoot.GetInstanceID()
+                });
+            }
+            catch (Exception e)
+            {
+                return new ErrorResponse($"Failed to revert prefab instance overrides for '{instanceRoot.name}': {e.Message}");
+            }
+        }
+
+        private static object UnpackInstance(JObject @params)
+        {
+            if (@params == null)
+            {
+                return new ErrorResponse("Parameters cannot be null.");
+            }
+
+            GameObject targetGo = ResolveTargetGameObject(@params, out string resolveError);
+            if (targetGo == null)
+            {
+                return new ErrorResponse(resolveError ?? "Target GameObject could not be resolved.");
+            }
+
+            GameObject instanceRoot = PrefabUtility.GetNearestPrefabInstanceRoot(targetGo);
+            if (instanceRoot == null || !PrefabUtility.IsPartOfPrefabInstance(instanceRoot))
+            {
+                return new ErrorResponse($"GameObject '{targetGo.name}' is not part of a prefab instance.");
+            }
+
+            string modeValue = ParamCoercion.CoerceString(@params["unpackMode"] ?? @params["unpack_mode"], null);
+            PrefabUnpackMode unpackMode = PrefabUnpackMode.OutermostRoot;
+            if (!string.IsNullOrEmpty(modeValue))
+            {
+                if (
+                    modeValue.Equals("completely", StringComparison.OrdinalIgnoreCase)
+                    || modeValue.Equals("complete", StringComparison.OrdinalIgnoreCase)
+                    || modeValue.Equals("full", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    unpackMode = PrefabUnpackMode.Completely;
+                }
+                else if (
+                    modeValue.Equals("outermostroot", StringComparison.OrdinalIgnoreCase)
+                    || modeValue.Equals("outermost_root", StringComparison.OrdinalIgnoreCase)
+                    || modeValue.Equals("outermost", StringComparison.OrdinalIgnoreCase)
+                    || modeValue.Equals("root", StringComparison.OrdinalIgnoreCase)
+                )
+                {
+                    unpackMode = PrefabUnpackMode.OutermostRoot;
+                }
+                else
+                {
+                    return new ErrorResponse("Invalid unpackMode. Valid values: OutermostRoot, Completely.");
+                }
+            }
+
+            string prefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(instanceRoot);
+            try
+            {
+                PrefabUtility.UnpackPrefabInstance(instanceRoot, unpackMode, InteractionMode.AutomatedAction);
+                return new SuccessResponse($"Unpacked prefab instance '{instanceRoot.name}' ({unpackMode}) from '{prefabPath}'.", new
+                {
+                    prefabPath = prefabPath,
+                    instanceId = instanceRoot.GetInstanceID(),
+                    unpackMode = unpackMode.ToString()
+                });
+            }
+            catch (Exception e)
+            {
+                return new ErrorResponse($"Failed to unpack prefab instance '{instanceRoot.name}': {e.Message}");
+            }
+        }
+
+        private static GameObject ResolveTargetGameObject(JObject @params, out string errorMessage)
+        {
+            errorMessage = null;
+            JToken targetToken = @params["target"] ?? @params["name"];
+            if (targetToken == null || targetToken.Type == JTokenType.Null)
+            {
+                errorMessage = "'target' parameter is required.";
+                return null;
+            }
+
+            string searchMethod = ParamCoercion.CoerceString(
+                @params["searchMethod"] ?? @params["search_method"],
+                null
+            );
+
+            if (string.IsNullOrEmpty(searchMethod))
+            {
+                if (targetToken.Type == JTokenType.Integer)
+                {
+                    searchMethod = "by_id";
+                }
+                else
+                {
+                    var s = targetToken.ToString();
+                    searchMethod = !string.IsNullOrEmpty(s) && s.Contains("/") ? "by_path" : "by_name";
+                }
+            }
+
+            bool includeInactive = ParamCoercion.CoerceBool(
+                @params["searchInactive"] ?? @params["includeInactive"] ?? @params["search_inactive"] ?? @params["include_inactive"],
+                false
+            );
+
+            GameObject go = GameObjectLookup.FindByTarget(targetToken, searchMethod, includeInactive);
+            if (go == null)
+            {
+                errorMessage = $"GameObject '{targetToken}' not found (method='{searchMethod}').";
+                return null;
+            }
+
+            return go;
         }
 
     }

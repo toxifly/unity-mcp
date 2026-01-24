@@ -11,7 +11,7 @@ from services.tools.utils import coerce_bool, coerce_int, parse_json_payload
 
 
 @mcp_for_unity_tool(
-    description="Performs prefab operations (open_stage, close_stage, save_open_stage, create_from_gameobject).",
+    description="Performs prefab operations (open_stage, close_stage, save_open_stage, create_from_gameobject, apply_instance_overrides, revert_instance_overrides, unpack_instance).",
     annotations=ToolAnnotations(
         title="Manage Prefabs",
         destructiveHint=True,
@@ -19,7 +19,18 @@ from services.tools.utils import coerce_bool, coerce_int, parse_json_payload
 )
 async def manage_prefabs(
     ctx: Context,
-    action: Annotated[Literal["open_stage", "close_stage", "save_open_stage", "create_from_gameobject"], "Perform prefab operations."],
+    action: Annotated[
+        Literal[
+            "open_stage",
+            "close_stage",
+            "save_open_stage",
+            "create_from_gameobject",
+            "apply_instance_overrides",
+            "revert_instance_overrides",
+            "unpack_instance",
+        ],
+        "Perform prefab operations.",
+    ],
     prefab_path: Annotated[str,
                            "Prefab asset path relative to Assets e.g. Assets/Prefabs/favorite.prefab"] | None = None,
     mode: Annotated[str,
@@ -34,6 +45,8 @@ async def manage_prefabs(
                                "Allow replacing an existing prefab at the same path"] | None = None,
     search_inactive: Annotated[bool | str,
                                "Include inactive objects when resolving the target"] | None = None,
+    unpack_mode: Annotated[str,
+                           "For unpack_instance: unpack mode. Valid values: OutermostRoot, Completely."] | None = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -90,6 +103,8 @@ async def manage_prefabs(
             effective_method = search_method or inferred_method
             if effective_method:
                 params["searchMethod"] = effective_method
+        elif action in {"create_from_gameobject", "apply_instance_overrides", "revert_instance_overrides", "unpack_instance"}:
+            return {"success": False, "message": f"'target' is required for action '{action}'."}
 
         allow_overwrite_val = coerce_bool(allow_overwrite)
         if allow_overwrite_val is not None:
@@ -97,6 +112,9 @@ async def manage_prefabs(
         search_inactive_val = coerce_bool(search_inactive)
         if search_inactive_val is not None:
             params["searchInactive"] = search_inactive_val
+
+        if unpack_mode and action == "unpack_instance":
+            params["unpackMode"] = unpack_mode
         response = await send_with_unity_instance(async_send_command_with_retry, unity_instance, "manage_prefabs", params)
 
         if isinstance(response, dict) and response.get("success"):

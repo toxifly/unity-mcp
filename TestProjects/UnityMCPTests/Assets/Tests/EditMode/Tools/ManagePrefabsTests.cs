@@ -102,12 +102,155 @@ namespace MCPForUnityTests.Editor.Tools
                 }));
 
                 Assert.IsTrue(closeResult.Value<bool>("success"), "close_stage should succeed when stage is open.");
+                StringAssert.Contains(prefabPath, closeResult.Value<string>("message"), "close_stage message should include the prefab path.");
                 Assert.IsNull(PrefabStageUtility.GetCurrentPrefabStage(), "Prefab stage should be closed after close_stage.");
             }
             finally
             {
                 StageUtility.GoToMainStage();
                 AssetDatabase.DeleteAsset(prefabPath);
+            }
+        }
+
+        [Test]
+        public void ApplyInstanceOverrides_AppliesChangesToPrefabAsset()
+        {
+            EnsureTempDirectoryExists();
+            StageUtility.GoToMainStage();
+
+            string prefabPath = CreateTestPrefab("ApplyOverridesCube");
+            GameObject instance = null;
+
+            try
+            {
+                var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                Assert.IsNotNull(prefabAsset, "Prefab asset should load for instantiation.");
+
+                instance = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+                Assert.IsNotNull(instance, "PrefabUtility.InstantiatePrefab should return a GameObject instance.");
+
+                instance.transform.localScale = new Vector3(3f, 3f, 3f);
+
+                var applyResult = ToJObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "apply_instance_overrides",
+                    ["target"] = instance.GetInstanceID(),
+                }));
+
+                Assert.IsTrue(applyResult.Value<bool>("success"), applyResult.ToString());
+
+                var reloadedPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                Assert.IsNotNull(reloadedPrefab, "Prefab asset should still exist after apply.");
+                Assert.AreEqual(new Vector3(3f, 3f, 3f), reloadedPrefab.transform.localScale, "Prefab asset should reflect applied overrides.");
+            }
+            finally
+            {
+                if (instance != null)
+                {
+                    if (PrefabUtility.IsPartOfPrefabInstance(instance))
+                    {
+                        PrefabUtility.UnpackPrefabInstance(
+                            instance,
+                            PrefabUnpackMode.Completely,
+                            InteractionMode.AutomatedAction
+                        );
+                    }
+                    UnityEngine.Object.DestroyImmediate(instance, true);
+                }
+
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null)
+                {
+                    AssetDatabase.DeleteAsset(prefabPath);
+                }
+            }
+        }
+
+        [Test]
+        public void RevertInstanceOverrides_RevertsChangesOnInstance()
+        {
+            EnsureTempDirectoryExists();
+            StageUtility.GoToMainStage();
+
+            string prefabPath = CreateTestPrefab("RevertOverridesCube");
+            GameObject instance = null;
+
+            try
+            {
+                var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                instance = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+                Assert.IsNotNull(instance);
+
+                instance.transform.localScale = new Vector3(2f, 2f, 2f);
+                Assert.AreEqual(new Vector3(2f, 2f, 2f), instance.transform.localScale);
+
+                var revertResult = ToJObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "revert_instance_overrides",
+                    ["target"] = instance.GetInstanceID(),
+                }));
+
+                Assert.IsTrue(revertResult.Value<bool>("success"), revertResult.ToString());
+                Assert.AreEqual(Vector3.one, instance.transform.localScale, "Instance scale should revert to prefab defaults.");
+            }
+            finally
+            {
+                if (instance != null)
+                {
+                    if (PrefabUtility.IsPartOfPrefabInstance(instance))
+                    {
+                        PrefabUtility.UnpackPrefabInstance(
+                            instance,
+                            PrefabUnpackMode.Completely,
+                            InteractionMode.AutomatedAction
+                        );
+                    }
+                    UnityEngine.Object.DestroyImmediate(instance, true);
+                }
+
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null)
+                {
+                    AssetDatabase.DeleteAsset(prefabPath);
+                }
+            }
+        }
+
+        [Test]
+        public void UnpackInstance_UnpacksPrefabInstance()
+        {
+            EnsureTempDirectoryExists();
+            StageUtility.GoToMainStage();
+
+            string prefabPath = CreateTestPrefab("UnpackInstanceCube");
+            GameObject instance = null;
+
+            try
+            {
+                var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+                instance = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+                Assert.IsNotNull(instance);
+                Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(instance), "Instance should initially be a prefab instance.");
+
+                var unpackResult = ToJObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "unpack_instance",
+                    ["target"] = instance.GetInstanceID(),
+                    ["unpackMode"] = "Completely",
+                }));
+
+                Assert.IsTrue(unpackResult.Value<bool>("success"), unpackResult.ToString());
+                Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(instance), "Instance should no longer be part of a prefab instance after unpack.");
+            }
+            finally
+            {
+                if (instance != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(instance, true);
+                }
+
+                if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(prefabPath) != null)
+                {
+                    AssetDatabase.DeleteAsset(prefabPath);
+                }
             }
         }
 

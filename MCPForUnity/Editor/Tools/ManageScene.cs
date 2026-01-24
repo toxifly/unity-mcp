@@ -97,14 +97,47 @@ namespace MCPForUnity.Editor.Tools
             int? buildIndex = cmd.buildIndex;
             // bool loadAdditive = @params["loadAdditive"]?.ToObject<bool>() ?? false; // Example for future extension
 
-            // Ensure path is relative to Assets/, removing any leading "Assets/"
-            string relativeDir = path ?? string.Empty;
-            if (!string.IsNullOrEmpty(relativeDir))
+            // --- Path normalization ---
+            // `path` may be provided as:
+            //  - A full scene file path: "Assets/Scenes/MyScene.unity"
+            //  - A folder path under Assets: "Assets/Scenes" (combined with `name`)
+            //  - A folder path relative to Assets: "Scenes" (combined with `name`)
+            //
+            // Historically this tool treated `path` as a folder, which could accidentally create a folder
+            // ending with ".unity" when callers passed a full file path. Detect and handle file paths.
+            bool pathIsSceneFile = false;
+            string relativeDir = string.Empty;   // relative to Assets/ (no leading "Assets/")
+            string sceneFileName = null;         // ends with .unity when available
+            string relativePath = null;          // always starts with "Assets/" when available
+
+            string assetsRelative = path ?? string.Empty;
+            if (!string.IsNullOrEmpty(assetsRelative))
             {
-                relativeDir = relativeDir.Replace('\\', '/').Trim('/');
-                if (relativeDir.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                assetsRelative = assetsRelative.Replace('\\', '/').Trim('/');
+                if (assetsRelative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
                 {
-                    relativeDir = relativeDir.Substring("Assets/".Length).TrimStart('/');
+                    assetsRelative = assetsRelative.Substring("Assets/".Length).TrimStart('/');
+                }
+
+                if (assetsRelative.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
+                {
+                    pathIsSceneFile = true;
+                    sceneFileName = Path.GetFileName(assetsRelative);
+                    relativeDir = Path.GetDirectoryName(assetsRelative) ?? string.Empty;
+                    relativeDir = relativeDir.Replace('\\', '/');
+                    relativePath = Path.Combine("Assets", assetsRelative).Replace('\\', '/');
+
+                    // If `name` was provided but doesn't match the file name, prefer the file name.
+                    string derivedName = Path.GetFileNameWithoutExtension(sceneFileName);
+                    if (string.IsNullOrEmpty(name) || !string.Equals(name, derivedName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        name = derivedName;
+                    }
+                }
+                else
+                {
+                    // Treat as folder path under Assets/
+                    relativeDir = assetsRelative;
                 }
             }
 
@@ -119,16 +152,20 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("Action parameter is required.");
             }
 
-            string sceneFileName = string.IsNullOrEmpty(name) ? null : $"{name}.unity";
+            if (!pathIsSceneFile)
+            {
+                sceneFileName = string.IsNullOrEmpty(name) ? null : $"{name}.unity";
+                // Ensure relativePath always starts with "Assets/" and uses forward slashes
+                relativePath = string.IsNullOrEmpty(sceneFileName)
+                    ? null
+                    : Path.Combine("Assets", relativeDir, sceneFileName).Replace('\\', '/');
+            }
+
             // Construct full system path correctly: ProjectRoot/Assets/relativeDir/sceneFileName
-            string fullPathDir = Path.Combine(Application.dataPath, relativeDir); // Combine with Assets path (Application.dataPath ends in Assets)
+            string fullPathDir = Path.Combine(Application.dataPath, relativeDir); // Application.dataPath ends in Assets
             string fullPath = string.IsNullOrEmpty(sceneFileName)
                 ? null
                 : Path.Combine(fullPathDir, sceneFileName);
-            // Ensure relativePath always starts with "Assets/" and uses forward slashes
-            string relativePath = string.IsNullOrEmpty(sceneFileName)
-                ? null
-                : Path.Combine("Assets", relativeDir, sceneFileName).Replace('\\', '/');
 
             // Ensure directory exists for 'create'
             if (action == "create" && !string.IsNullOrEmpty(fullPathDir))
@@ -150,9 +187,9 @@ namespace MCPForUnity.Editor.Tools
             switch (action)
             {
                 case "create":
-                    if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(relativePath))
+                    if (string.IsNullOrEmpty(relativePath))
                         return new ErrorResponse(
-                            "'name' and 'path' parameters are required for 'create' action."
+                            "Scene path is required for 'create'. Provide either a full '.unity' file path in 'path' (e.g. Assets/Scenes/MyScene.unity) or a folder 'path' plus 'name'."
                         );
                     return CreateScene(fullPath, relativePath);
                 case "load":
