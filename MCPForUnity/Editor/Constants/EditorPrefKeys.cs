@@ -82,5 +82,9 @@ namespace MCPForUnity.Editor.Constants
         internal const string AssetGenOutputRoot = "MCPForUnity.AssetGen.OutputRoot";
         internal const string AssetGenAutoNormalize = "MCPForUnity.AssetGen.AutoNormalize";
         internal const string AssetGenProviderEnabledPrefix = "MCPForUnity.AssetGen.Enabled.";
+
+        // Screenshots
+        // Downscale factor applied *after* capture (1.0 = full size, 0.5 = half res).
+        internal const string ScreenshotDownscaleFactor = "MCPForUnity.ScreenshotDownscaleFactor";
     }
 }
