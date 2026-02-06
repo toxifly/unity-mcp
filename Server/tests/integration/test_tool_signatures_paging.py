@@ -19,6 +19,16 @@ def test_manage_scene_signature_includes_paging_params():
     assert "include_transform" in names
 
 
+def test_manage_scene_signature_includes_screenshot_capture_size_params():
+    import services.tools.manage_scene as mod
+
+    sig = inspect.signature(mod.manage_scene)
+    names = list(sig.parameters.keys())
+
+    assert "screenshot_width" in names
+    assert "screenshot_height" in names
+
+
 def test_manage_gameobject_signature_includes_paging_params():
     import services.tools.manage_gameobject as mod
 

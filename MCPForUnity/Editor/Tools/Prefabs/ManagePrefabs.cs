@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace MCPForUnity.Editor.Tools.Prefabs
 {

@@ -207,8 +207,50 @@ def build_settings():
     type=int,
     help="Supersize multiplier (1-4)."
 )
+@click.option(
+    "--with-preview",
+    is_flag=True,
+    help="Return a preview image blob (equivalent to return_mode=both)."
+)
+@click.option(
+    "--preview-only",
+    is_flag=True,
+    help="Return preview-focused payload (sets return_mode=preview)."
+)
+@click.option(
+    "--wait-for-write",
+    is_flag=True,
+    help="Wait for deterministic screenshot write/import path."
+)
+@click.option("--width", type=int, default=None, help="Target screenshot width in pixels.")
+@click.option("--height", type=int, default=None, help="Target screenshot height in pixels.")
+@click.option("--preview-max-width", type=int, default=None, help="Preview max width.")
+@click.option("--preview-max-height", type=int, default=None, help="Preview max height.")
+@click.option(
+    "--preview-format",
+    type=click.Choice(["jpg", "png"], case_sensitive=False),
+    default=None,
+    help="Preview format."
+)
+@click.option("--preview-jpeg-quality", type=int, default=None, help="Preview JPEG quality (1-100).")
+@click.option("--preview-max-pixels", type=int, default=None, help="Preview pixel cap.")
+@click.option("--timeout-ms", type=int, default=None, help="Screenshot timeout in milliseconds.")
 @handle_unity_errors
-def screenshot(filename: Optional[str], supersize: int):
+def screenshot(
+    filename: Optional[str],
+    supersize: int,
+    with_preview: bool,
+    preview_only: bool,
+    wait_for_write: bool,
+    width: Optional[int],
+    height: Optional[int],
+    preview_max_width: Optional[int],
+    preview_max_height: Optional[int],
+    preview_format: Optional[str],
+    preview_jpeg_quality: Optional[int],
+    preview_max_pixels: Optional[int],
+    timeout_ms: Optional[int],
+):
     """Capture a screenshot of the scene.
 
     \b
@@ -216,14 +258,49 @@ def screenshot(filename: Optional[str], supersize: int):
         unity-mcp scene screenshot
         unity-mcp scene screenshot --filename "level_preview"
         unity-mcp scene screenshot --supersize 2
+        unity-mcp scene screenshot --width 640 --height 360
+        unity-mcp scene screenshot --with-preview --wait-for-write
     """
     config = get_config()
 
-    params: dict[str, Any] = {"action": "screenshot"}
+    preview_requested = with_preview or preview_only or any(
+        v is not None for v in (
+            preview_max_width,
+            preview_max_height,
+            preview_format,
+            preview_jpeg_quality,
+            preview_max_pixels,
+        )
+    )
+    params: dict[str, Any] = {
+        "action": "screenshot_with_preview" if preview_requested else "screenshot"
+    }
     if filename:
         params["fileName"] = filename
     if supersize > 1:
         params["superSize"] = supersize
+    if preview_only:
+        params["returnMode"] = "preview"
+    elif with_preview or preview_requested:
+        params["returnMode"] = "both"
+    if wait_for_write:
+        params["waitForWrite"] = True
+    if width is not None:
+        params["width"] = width
+    if height is not None:
+        params["height"] = height
+    if preview_max_width is not None:
+        params["previewMaxWidth"] = preview_max_width
+    if preview_max_height is not None:
+        params["previewMaxHeight"] = preview_max_height
+    if preview_format:
+        params["previewFormat"] = preview_format
+    if preview_jpeg_quality is not None:
+        params["previewJpegQuality"] = preview_jpeg_quality
+    if preview_max_pixels is not None:
+        params["previewMaxPixels"] = preview_max_pixels
+    if timeout_ms is not None:
+        params["timeoutMs"] = timeout_ms
 
     result = run_command("manage_scene", params, config)
     click.echo(format_output(result, config.format))

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers; // For Response class
 using MCPForUnity.Runtime.Helpers; // For ScreenshotUtility
@@ -27,6 +28,17 @@ namespace MCPForUnity.Editor.Tools
             public int? buildIndex { get; set; }
             public string fileName { get; set; } = string.Empty;
             public int? superSize { get; set; }
+            public int? width { get; set; }
+            public int? height { get; set; }
+            public bool? returnPreview { get; set; }
+            public string returnMode { get; set; } = string.Empty;
+            public int? previewMaxWidth { get; set; }
+            public int? previewMaxHeight { get; set; }
+            public string previewFormat { get; set; } = string.Empty;
+            public int? previewJpegQuality { get; set; }
+            public int? previewMaxPixels { get; set; }
+            public bool? waitForWrite { get; set; }
+            public int? timeoutMs { get; set; }
 
             // get_hierarchy paging + safety (summary-first)
             public JToken parent { get; set; }
@@ -36,6 +48,28 @@ namespace MCPForUnity.Editor.Tools
             public int? maxDepth { get; set; }
             public int? maxChildrenPerNode { get; set; }
             public bool? includeTransform { get; set; }
+        }
+
+        private sealed class ScreenshotRequestOptions
+        {
+            public string ReturnMode { get; set; } = "path"; // path | preview | both
+            public bool WaitForWrite { get; set; }
+            public int TimeoutMs { get; set; } = 5000;
+            public int PreviewMaxWidth { get; set; } = 960;
+            public int PreviewMaxHeight { get; set; } = 540;
+            public string PreviewFormat { get; set; } = "jpg"; // jpg | png
+            public int PreviewJpegQuality { get; set; } = 70;
+            public int PreviewMaxPixels { get; set; } = 600000;
+            public int? CaptureWidth { get; set; }
+            public int? CaptureHeight { get; set; }
+
+            public bool WantsPreview =>
+                string.Equals(ReturnMode, "preview", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(ReturnMode, "both", StringComparison.OrdinalIgnoreCase);
+
+            public bool HasCaptureSizeOverride => CaptureWidth.HasValue || CaptureHeight.HasValue;
+
+            public bool RequiresImmediateCapture => WaitForWrite || WantsPreview || HasCaptureSizeOverride;
         }
 
         private static SceneCommand ToSceneCommand(JObject p)
@@ -49,6 +83,17 @@ namespace MCPForUnity.Editor.Tools
                 buildIndex = ParamCoercion.CoerceIntNullable(p["buildIndex"] ?? p["build_index"]),
                 fileName = (p["fileName"] ?? p["filename"])?.ToString() ?? string.Empty,
                 superSize = ParamCoercion.CoerceIntNullable(p["superSize"] ?? p["super_size"] ?? p["supersize"]),
+                width = ParamCoercion.CoerceIntNullable(p["width"] ?? p["captureWidth"] ?? p["capture_width"]),
+                height = ParamCoercion.CoerceIntNullable(p["height"] ?? p["captureHeight"] ?? p["capture_height"]),
+                returnPreview = ParamCoercion.CoerceBoolNullable(p["returnPreview"] ?? p["return_preview"]),
+                returnMode = (p["returnMode"] ?? p["return_mode"])?.ToString() ?? string.Empty,
+                previewMaxWidth = ParamCoercion.CoerceIntNullable(p["previewMaxWidth"] ?? p["preview_max_width"]),
+                previewMaxHeight = ParamCoercion.CoerceIntNullable(p["previewMaxHeight"] ?? p["preview_max_height"]),
+                previewFormat = (p["previewFormat"] ?? p["preview_format"])?.ToString() ?? string.Empty,
+                previewJpegQuality = ParamCoercion.CoerceIntNullable(p["previewJpegQuality"] ?? p["preview_jpeg_quality"]),
+                previewMaxPixels = ParamCoercion.CoerceIntNullable(p["previewMaxPixels"] ?? p["preview_max_pixels"]),
+                waitForWrite = ParamCoercion.CoerceBoolNullable(p["waitForWrite"] ?? p["wait_for_write"]),
+                timeoutMs = ParamCoercion.CoerceIntNullable(p["timeoutMs"] ?? p["timeout_ms"]),
 
                 // get_hierarchy paging + safety
                 parent = p["parent"],
@@ -200,11 +245,14 @@ namespace MCPForUnity.Editor.Tools
                 case "get_build_settings":
                     return GetBuildSettingsScenes();
                 case "screenshot":
-                    return CaptureScreenshot(cmd.fileName, cmd.superSize);
+                    return CaptureScreenshot(cmd, previewModeDefault: false);
+                case "screenshot_with_preview":
+                case "screenshot_preview":
+                    return CaptureScreenshot(cmd, previewModeDefault: true);
                 // Add cases for modifying build settings, additive loading, unloading etc.
                 default:
                     return new ErrorResponse(
-                        $"Unknown action: '{action}'. Valid actions: create, load, save, get_hierarchy, get_active, get_build_settings, screenshot."
+                        $"Unknown action: '{action}'. Valid actions: create, load, save, get_hierarchy, get_active, get_build_settings, screenshot, screenshot_with_preview, screenshot_preview."
                     );
             }
         }
@@ -216,7 +264,14 @@ namespace MCPForUnity.Editor.Tools
         /// </summary>
         public static object ExecuteScreenshot(string fileName = null, int? superSize = null)
         {
-            return CaptureScreenshot(fileName, superSize);
+            return CaptureScreenshot(
+                new SceneCommand
+                {
+                    fileName = fileName ?? string.Empty,
+                    superSize = superSize,
+                },
+                previewModeDefault: false
+            );
         }
 
         private static object CreateScene(string fullPath, string relativePath)
@@ -398,11 +453,13 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static object CaptureScreenshot(string fileName, int? superSize)
+        private static object CaptureScreenshot(SceneCommand cmd, bool previewModeDefault)
         {
             try
             {
-                int resolvedSuperSize = (superSize.HasValue && superSize.Value > 0) ? superSize.Value : 1;
+                int resolvedSuperSize = (cmd?.superSize.HasValue == true && cmd.superSize.Value > 0) ? cmd.superSize.Value : 1;
+                string requestedFileName = string.IsNullOrWhiteSpace(cmd?.fileName) ? null : cmd.fileName;
+                ScreenshotRequestOptions request = ResolveScreenshotRequest(cmd, previewModeDefault);
 
                 // Batch mode warning
                 if (Application.isBatchMode)
@@ -410,9 +467,9 @@ namespace MCPForUnity.Editor.Tools
                     McpLog.Warn("[ManageScene] Screenshot capture in batch mode uses camera-based fallback. Results may vary.");
                 }
 
-                // Check Screen Capture module availability and warn if not available
+                // Check Screen Capture module availability and camera fallback availability.
                 bool screenCaptureAvailable = ScreenshotUtility.IsScreenCaptureModuleAvailable;
-                bool hasCameraFallback = Camera.main != null || UnityEngine.Object.FindObjectsOfType<Camera>().Length > 0;
+                bool hasCameraFallback = ScreenshotUtility.TryFindAvailableCamera(out Camera availableCamera);
 
 #if UNITY_2022_1_OR_NEWER
                 if (!screenCaptureAvailable && !hasCameraFallback)
@@ -439,18 +496,35 @@ namespace MCPForUnity.Editor.Tools
                 }
 #endif
 
+                if (request.RequiresImmediateCapture && !hasCameraFallback)
+                {
+                    return new ErrorResponse(
+                        "Immediate screenshot mode requires a Camera in the scene. " +
+                        "Add a Camera or call action='screenshot' without preview/wait/width/height options."
+                    );
+                }
+
                 // Best-effort: ensure Game View exists and repaints before capture.
                 if (!Application.isBatchMode)
                 {
                     EnsureGameView();
                 }
 
-                ScreenshotCaptureResult result = ScreenshotUtility.CaptureToAssetsFolder(fileName, resolvedSuperSize, ensureUniqueFileName: true);
+                bool useImmediateCapture = request.RequiresImmediateCapture;
+                ScreenshotCaptureResult result = useImmediateCapture
+                    ? ScreenshotUtility.CaptureFromCameraToAssetsFolder(
+                        availableCamera,
+                        requestedFileName,
+                        resolvedSuperSize,
+                        ensureUniqueFileName: true,
+                        targetWidth: request.CaptureWidth,
+                        targetHeight: request.CaptureHeight)
+                    : ScreenshotUtility.CaptureToAssetsFolder(requestedFileName, resolvedSuperSize, ensureUniqueFileName: true);
 
-                // ScreenCapture.CaptureScreenshot is async. Import after the file actually hits disk.
-                if (result.IsAsync)
+                if (result.IsAsync && !useImmediateCapture)
                 {
-                    ScheduleAssetImportWhenFileExists(result.AssetsRelativePath, result.FullPath, timeoutSeconds: 30.0);
+                    double importTimeoutSeconds = Mathf.Max(0.25f, request.TimeoutMs / 1000f);
+                    ScheduleAssetImportWhenFileExists(result.AssetsRelativePath, result.FullPath, timeoutSeconds: importTimeoutSeconds);
                 }
                 else
                 {
@@ -458,23 +532,307 @@ namespace MCPForUnity.Editor.Tools
                     AssetDatabase.ImportAsset(result.AssetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
                 }
 
-                string verb = result.IsAsync ? "Screenshot requested" : "Screenshot captured";
-                string message = $"{verb} to '{result.AssetsRelativePath}' (full: {result.FullPath}).";
+                // Keep the default screenshot call cheap by returning only paths when capture remains async.
+                if (result.IsAsync && !useImmediateCapture)
+                {
+                    string message = $"Screenshot requested to '{result.AssetsRelativePath}' (full: {result.FullPath}).";
+                    return new SuccessResponse(
+                        message,
+                        new
+                        {
+                            path = result.AssetsRelativePath,
+                            fullPath = result.FullPath,
+                            superSize = result.SuperSize,
+                            isAsync = result.IsAsync,
+                            returnMode = request.ReturnMode,
+                            waitForWrite = request.WaitForWrite,
+                            captureWidth = request.CaptureWidth,
+                            captureHeight = request.CaptureHeight,
+                        }
+                    );
+                }
 
-                return new SuccessResponse(
-                    message,
-                    new
-                    {
-                        path = result.AssetsRelativePath,
-                        fullPath = result.FullPath,
-                        superSize = result.SuperSize,
-                        isAsync = result.IsAsync,
-                    }
-                );
+                if (!File.Exists(result.FullPath))
+                {
+                    return new ErrorResponse($"Screenshot file was not found after capture at '{result.FullPath}'.");
+                }
+
+                if (!TryBuildScreenshotPayload(result, request, out object payload, out string payloadError))
+                {
+                    return new ErrorResponse(payloadError ?? "Failed to build screenshot payload.");
+                }
+
+                string successMessage = request.WantsPreview
+                    ? $"Screenshot captured to '{result.AssetsRelativePath}' with preview."
+                    : $"Screenshot captured to '{result.AssetsRelativePath}'.";
+
+                return new SuccessResponse(successMessage, payload);
             }
             catch (Exception e)
             {
                 return new ErrorResponse($"Error capturing screenshot: {e.Message}");
+            }
+        }
+
+        private static ScreenshotRequestOptions ResolveScreenshotRequest(SceneCommand cmd, bool previewModeDefault)
+        {
+            var request = new ScreenshotRequestOptions();
+
+            request.ReturnMode = NormalizeReturnMode(cmd?.returnMode, cmd?.returnPreview, previewModeDefault);
+            request.WaitForWrite = cmd?.waitForWrite ?? previewModeDefault;
+            request.TimeoutMs = Mathf.Clamp(cmd?.timeoutMs ?? 5000, 250, 120000);
+            request.PreviewMaxWidth = Mathf.Clamp(cmd?.previewMaxWidth ?? 960, 1, 8192);
+            request.PreviewMaxHeight = Mathf.Clamp(cmd?.previewMaxHeight ?? 540, 1, 8192);
+            request.PreviewFormat = NormalizePreviewFormat(cmd?.previewFormat);
+            request.PreviewJpegQuality = Mathf.Clamp(cmd?.previewJpegQuality ?? 70, 1, 100);
+            request.PreviewMaxPixels = Mathf.Clamp(cmd?.previewMaxPixels ?? 600000, 1024, 8000000);
+            request.CaptureWidth = ClampCaptureDimension(cmd?.width);
+            request.CaptureHeight = ClampCaptureDimension(cmd?.height);
+
+            return request;
+        }
+
+        private static int? ClampCaptureDimension(int? value)
+        {
+            if (!value.HasValue)
+            {
+                return null;
+            }
+
+            int maxDim = Mathf.Max(1, SystemInfo.maxTextureSize);
+            return Mathf.Clamp(value.Value, 1, maxDim);
+        }
+
+        private static string NormalizeReturnMode(string returnMode, bool? returnPreview, bool previewModeDefault)
+        {
+            string normalized = (returnMode ?? string.Empty).Trim().ToLowerInvariant();
+            if (normalized == "path" || normalized == "preview" || normalized == "both")
+            {
+                return normalized;
+            }
+
+            if (returnPreview.HasValue)
+            {
+                return returnPreview.Value ? "both" : "path";
+            }
+
+            return previewModeDefault ? "both" : "path";
+        }
+
+        private static string NormalizePreviewFormat(string previewFormat)
+        {
+            string format = (previewFormat ?? string.Empty).Trim().ToLowerInvariant();
+            if (format == "png")
+            {
+                return "png";
+            }
+
+            if (format == "jpg" || format == "jpeg")
+            {
+                return "jpg";
+            }
+
+            return "jpg";
+        }
+
+        private static bool TryBuildScreenshotPayload(ScreenshotCaptureResult result, ScreenshotRequestOptions request, out object payload, out string error)
+        {
+            payload = null;
+            error = null;
+
+            Texture2D source = null;
+            try
+            {
+                if (!TryLoadTextureFromFile(result.FullPath, out source, out string loadError))
+                {
+                    error = loadError;
+                    return false;
+                }
+
+                object preview = null;
+                if (request.WantsPreview)
+                {
+                    if (!TryBuildPreviewPayload(source, request, out preview, out string previewError))
+                    {
+                        error = previewError;
+                        return false;
+                    }
+                }
+
+                long fileSizeBytes = new FileInfo(result.FullPath).Length;
+                string sha = ComputeFileSha256Hex(result.FullPath);
+
+                payload = new
+                {
+                    path = result.AssetsRelativePath,
+                    fullPath = result.FullPath,
+                    superSize = result.SuperSize,
+                    isAsync = result.IsAsync,
+                    width = source.width,
+                    height = source.height,
+                    fileSizeBytes = fileSizeBytes,
+                    sha256 = sha,
+                    returnMode = request.ReturnMode,
+                    waitForWrite = request.WaitForWrite,
+                    timeoutMs = request.TimeoutMs,
+                    captureWidth = request.CaptureWidth,
+                    captureHeight = request.CaptureHeight,
+                    preview = preview,
+                };
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = $"Failed to build screenshot payload: {e.Message}";
+                return false;
+            }
+            finally
+            {
+                if (source != null)
+                {
+                    if (Application.isPlaying) UnityEngine.Object.Destroy(source);
+                    else UnityEngine.Object.DestroyImmediate(source);
+                }
+            }
+        }
+
+        private static bool TryLoadTextureFromFile(string fullPath, out Texture2D texture, out string error)
+        {
+            texture = null;
+            error = null;
+
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(fullPath);
+                var tex = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false);
+                if (!tex.LoadImage(bytes, markNonReadable: false) || tex.width <= 0 || tex.height <= 0)
+                {
+                    if (Application.isPlaying) UnityEngine.Object.Destroy(tex);
+                    else UnityEngine.Object.DestroyImmediate(tex);
+                    error = $"Failed to decode screenshot image at '{fullPath}'.";
+                    return false;
+                }
+
+                texture = tex;
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = $"Failed to read screenshot file '{fullPath}': {e.Message}";
+                return false;
+            }
+        }
+
+        private static bool TryBuildPreviewPayload(Texture2D source, ScreenshotRequestOptions request, out object previewPayload, out string error)
+        {
+            previewPayload = null;
+            error = null;
+
+            RenderTexture rt = null;
+            RenderTexture prevActive = null;
+            Texture2D previewTexture = null;
+            bool restorePrevActive = false;
+            try
+            {
+                Vector2Int targetSize = ComputePreviewDimensions(source.width, source.height, request);
+
+                if (targetSize.x == source.width && targetSize.y == source.height)
+                {
+                    previewTexture = source;
+                }
+                else
+                {
+                    prevActive = RenderTexture.active;
+                    restorePrevActive = true;
+
+                    rt = RenderTexture.GetTemporary(targetSize.x, targetSize.y, 0, RenderTextureFormat.ARGB32);
+                    if (rt == null)
+                    {
+                        error = "Failed to allocate preview render texture.";
+                        return false;
+                    }
+                    rt.filterMode = FilterMode.Bilinear;
+
+                    Graphics.Blit(source, rt);
+                    RenderTexture.active = rt;
+
+                    previewTexture = new Texture2D(targetSize.x, targetSize.y, TextureFormat.RGB24, mipChain: false);
+                    previewTexture.ReadPixels(new Rect(0, 0, targetSize.x, targetSize.y), 0, 0);
+                    previewTexture.Apply();
+                }
+
+                bool writePng = string.Equals(request.PreviewFormat, "png", StringComparison.OrdinalIgnoreCase);
+                byte[] encoded = writePng
+                    ? previewTexture.EncodeToPNG()
+                    : previewTexture.EncodeToJPG(request.PreviewJpegQuality);
+
+                if (encoded == null || encoded.Length == 0)
+                {
+                    error = "Failed to encode screenshot preview.";
+                    return false;
+                }
+
+                previewPayload = new
+                {
+                    mimeType = writePng ? "image/png" : "image/jpeg",
+                    width = previewTexture.width,
+                    height = previewTexture.height,
+                    blob = Convert.ToBase64String(encoded),
+                };
+                return true;
+            }
+            catch (Exception e)
+            {
+                error = $"Failed to build screenshot preview: {e.Message}";
+                return false;
+            }
+            finally
+            {
+                if (restorePrevActive)
+                {
+                    RenderTexture.active = prevActive;
+                }
+
+                if (rt != null)
+                {
+                    RenderTexture.ReleaseTemporary(rt);
+                }
+
+                if (previewTexture != null && !ReferenceEquals(previewTexture, source))
+                {
+                    if (Application.isPlaying) UnityEngine.Object.Destroy(previewTexture);
+                    else UnityEngine.Object.DestroyImmediate(previewTexture);
+                }
+            }
+        }
+
+        private static Vector2Int ComputePreviewDimensions(int sourceWidth, int sourceHeight, ScreenshotRequestOptions request)
+        {
+            if (sourceWidth <= 0 || sourceHeight <= 0)
+            {
+                return new Vector2Int(1, 1);
+            }
+
+            float scaleByWidth = request.PreviewMaxWidth > 0 ? (float)request.PreviewMaxWidth / sourceWidth : 1f;
+            float scaleByHeight = request.PreviewMaxHeight > 0 ? (float)request.PreviewMaxHeight / sourceHeight : 1f;
+            float sourcePixels = Mathf.Max(1f, sourceWidth * sourceHeight);
+            float scaleByPixels = request.PreviewMaxPixels > 0
+                ? Mathf.Sqrt(request.PreviewMaxPixels / sourcePixels)
+                : 1f;
+
+            float scale = Mathf.Min(1f, scaleByWidth, scaleByHeight, scaleByPixels);
+            int targetWidth = Mathf.Max(1, Mathf.RoundToInt(sourceWidth * scale));
+            int targetHeight = Mathf.Max(1, Mathf.RoundToInt(sourceHeight * scale));
+            return new Vector2Int(targetWidth, targetHeight);
+        }
+
+        private static string ComputeFileSha256Hex(string fullPath)
+        {
+            using (var sha = SHA256.Create())
+            using (var stream = File.OpenRead(fullPath))
+            {
+                byte[] hash = sha.ComputeHash(stream);
+                return BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
             }
         }
 

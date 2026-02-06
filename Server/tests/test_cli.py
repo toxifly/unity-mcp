@@ -463,6 +463,54 @@ class TestSceneCommands:
                 cli, ["scene", "screenshot", "--filename", "test"])
             assert result.exit_code == 0
 
+    def test_scene_screenshot_with_dimensions(self, runner, mock_unity_response):
+        """Test scene screenshot command with direct capture dimensions."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(
+                cli,
+                ["scene", "screenshot", "--width", "320", "--height", "180"],
+            )
+            assert result.exit_code == 0
+            called_tool, called_params, _called_config = mock_run.call_args[0]
+            assert called_tool == "manage_scene"
+            assert called_params["action"] == "screenshot"
+            assert called_params["width"] == 320
+            assert called_params["height"] == 180
+
+    def test_scene_screenshot_with_preview_options(self, runner, mock_unity_response):
+        """Test scene screenshot command with preview options."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(
+                cli,
+                [
+                    "scene",
+                    "screenshot",
+                    "--with-preview",
+                    "--wait-for-write",
+                    "--width",
+                    "640",
+                    "--height",
+                    "360",
+                    "--preview-max-width",
+                    "800",
+                    "--preview-max-height",
+                    "450",
+                    "--preview-format",
+                    "jpg",
+                ],
+            )
+            assert result.exit_code == 0
+            called_tool, called_params, _called_config = mock_run.call_args[0]
+            assert called_tool == "manage_scene"
+            assert called_params["action"] == "screenshot_with_preview"
+            assert called_params["returnMode"] == "both"
+            assert called_params["waitForWrite"] is True
+            assert called_params["width"] == 640
+            assert called_params["height"] == 360
+            assert called_params["previewMaxWidth"] == 800
+            assert called_params["previewMaxHeight"] == 450
+            assert called_params["previewFormat"] == "jpg"
+
 
 # =============================================================================
 # Asset Command Tests

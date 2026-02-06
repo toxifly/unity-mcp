@@ -70,14 +70,25 @@ namespace MCPForUnity.Runtime.Helpers
 
             try
             {
-                // Use FindObjectsOfType for Unity 2021 compatibility.
-                var cams = UnityEngine.Object.FindObjectsOfType<Camera>();
+                // Use the modern API on newer Unity versions; keep fallback for older versions.
+                Camera[] cams;
+#if UNITY_2022_2_OR_NEWER
+                cams = UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+#else
+                cams = UnityEngine.Object.FindObjectsOfType<Camera>();
+#endif
                 return cams.FirstOrDefault();
             }
             catch
             {
                 return null;
             }
+        }
+
+        public static bool TryFindAvailableCamera(out Camera camera)
+        {
+            camera = FindAvailableCamera();
+            return camera != null;
         }
 
         public static ScreenshotCaptureResult CaptureToAssetsFolder(string fileName = null, int superSize = 1, bool ensureUniqueFileName = true)
@@ -128,20 +139,37 @@ namespace MCPForUnity.Runtime.Helpers
         /// <summary>
         /// Captures a screenshot from a specific camera by rendering into a temporary RenderTexture (works in Edit Mode).
         /// </summary>
-        public static ScreenshotCaptureResult CaptureFromCameraToAssetsFolder(Camera camera, string fileName = null, int superSize = 1, bool ensureUniqueFileName = true)
+        public static ScreenshotCaptureResult CaptureFromCameraToAssetsFolder(
+            Camera camera,
+            string fileName = null,
+            int superSize = 1,
+            bool ensureUniqueFileName = true,
+            int? targetWidth = null,
+            int? targetHeight = null)
         {
             if (camera == null)
             {
                 throw new ArgumentNullException(nameof(camera));
             }
 
-            ScreenshotCaptureResult result = PrepareCaptureResult(fileName, superSize, ensureUniqueFileName, isAsync: false);
-            int size = result.SuperSize;
+            bool hasTargetSize = targetWidth.HasValue || targetHeight.HasValue;
+            int effectiveSuperSize = hasTargetSize ? 1 : superSize;
+            ScreenshotCaptureResult result = PrepareCaptureResult(fileName, effectiveSuperSize, ensureUniqueFileName, isAsync: false);
 
-            int width = Mathf.Max(1, camera.pixelWidth > 0 ? camera.pixelWidth : Screen.width);
-            int height = Mathf.Max(1, camera.pixelHeight > 0 ? camera.pixelHeight : Screen.height);
-            width *= size;
-            height *= size;
+            int cameraWidth = Mathf.Max(1, camera.pixelWidth > 0 ? camera.pixelWidth : Screen.width);
+            int cameraHeight = Mathf.Max(1, camera.pixelHeight > 0 ? camera.pixelHeight : Screen.height);
+            int width;
+            int height;
+            if (hasTargetSize)
+            {
+                ResolveCaptureDimensions(cameraWidth, cameraHeight, targetWidth, targetHeight, out width, out height);
+            }
+            else
+            {
+                int size = result.SuperSize;
+                width = cameraWidth * size;
+                height = cameraHeight * size;
+            }
 
             RenderTexture prevRT = camera.targetTexture;
             RenderTexture prevActive = RenderTexture.active;
@@ -179,6 +207,44 @@ namespace MCPForUnity.Runtime.Helpers
             }
 
             return result;
+        }
+
+        private static void ResolveCaptureDimensions(
+            int baseWidth,
+            int baseHeight,
+            int? targetWidth,
+            int? targetHeight,
+            out int width,
+            out int height)
+        {
+            int safeBaseWidth = Mathf.Max(1, baseWidth);
+            int safeBaseHeight = Mathf.Max(1, baseHeight);
+            float aspect = (float)safeBaseWidth / safeBaseHeight;
+
+            if (targetWidth.HasValue && targetHeight.HasValue)
+            {
+                width = Mathf.Max(1, targetWidth.Value);
+                height = Mathf.Max(1, targetHeight.Value);
+            }
+            else if (targetWidth.HasValue)
+            {
+                width = Mathf.Max(1, targetWidth.Value);
+                height = Mathf.Max(1, Mathf.RoundToInt(width / Mathf.Max(0.0001f, aspect)));
+            }
+            else if (targetHeight.HasValue)
+            {
+                height = Mathf.Max(1, targetHeight.Value);
+                width = Mathf.Max(1, Mathf.RoundToInt(height * aspect));
+            }
+            else
+            {
+                width = safeBaseWidth;
+                height = safeBaseHeight;
+            }
+
+            int maxDim = Mathf.Max(1, SystemInfo.maxTextureSize);
+            width = Mathf.Clamp(width, 1, maxDim);
+            height = Mathf.Clamp(height, 1, maxDim);
         }
 
         private static ScreenshotCaptureResult PrepareCaptureResult(string fileName, int superSize, bool ensureUniqueFileName, bool isAsync)

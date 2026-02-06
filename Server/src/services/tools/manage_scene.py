@@ -12,7 +12,7 @@ from services.tools.preflight import preflight
 
 
 @mcp_for_unity_tool(
-    description="Performs CRUD operations on Unity scenes. Read-only actions: get_hierarchy, get_active, get_build_settings, screenshot. Modifying actions: create, load, save.",
+    description="Performs CRUD operations on Unity scenes. Read-only actions: get_hierarchy, get_active, get_build_settings, screenshot, screenshot_with_preview. Modifying actions: create, load, save.",
     annotations=ToolAnnotations(
         title="Manage Scene",
         destructiveHint=True,
@@ -28,6 +28,8 @@ async def manage_scene(
         "get_active",
         "get_build_settings",
         "screenshot",
+        "screenshot_with_preview",
+        "screenshot_preview",
     ], "Perform CRUD operations on Unity scenes, and capture a screenshot."],
     name: Annotated[str, "Scene name."] | None = None,
     path: Annotated[str, "Scene path."] | None = None,
@@ -36,7 +38,29 @@ async def manage_scene(
     screenshot_file_name: Annotated[str,
                                     "Screenshot file name (optional). Defaults to timestamp when omitted."] | None = None,
     screenshot_super_size: Annotated[int | str,
-                                     "Screenshot supersize multiplier (integer ≥1). Optional."] | None = None,
+                                     "Screenshot supersize multiplier (integer >=1). Optional."] | None = None,
+    screenshot_width: Annotated[int | str,
+                                "Target screenshot width in pixels. Optional; when set, uses direct capture sizing."] | None = None,
+    screenshot_height: Annotated[int | str,
+                                 "Target screenshot height in pixels. Optional; when set, uses direct capture sizing."] | None = None,
+    screenshot_return_mode: Annotated[Literal["path", "preview", "both"] | str,
+                                      "Screenshot response mode: path (default), preview, or both."] | None = None,
+    screenshot_return_preview: Annotated[bool | str,
+                                         "Legacy shortcut. If true and return_mode not set, behaves like return_mode='both'."] | None = None,
+    screenshot_preview_max_width: Annotated[int | str,
+                                            "Preview max width in pixels (default 960)."] | None = None,
+    screenshot_preview_max_height: Annotated[int | str,
+                                             "Preview max height in pixels (default 540)."] | None = None,
+    screenshot_preview_format: Annotated[Literal["jpg", "png"] | str,
+                                         "Preview format: jpg (default) or png."] | None = None,
+    screenshot_preview_jpeg_quality: Annotated[int | str,
+                                               "Preview JPEG quality 1-100 (default 70)."] | None = None,
+    screenshot_preview_max_pixels: Annotated[int | str,
+                                             "Preview pixel hard cap (default 600000)."] | None = None,
+    screenshot_wait_for_write: Annotated[bool | str,
+                                         "If true, waits for a deterministic screenshot write path (camera-based)."] | None = None,
+    screenshot_timeout_ms: Annotated[int | str,
+                                     "Timeout for screenshot write/import operations in milliseconds."] | None = None,
     # --- get_hierarchy paging/safety ---
     parent: Annotated[str | int,
                       "Optional parent GameObject reference (name/path/instanceID) to list direct children."] | None = None,
@@ -62,6 +86,8 @@ async def manage_scene(
     try:
         coerced_build_index = coerce_int(build_index, default=None)
         coerced_super_size = coerce_int(screenshot_super_size, default=None)
+        coerced_width = coerce_int(screenshot_width, default=None)
+        coerced_height = coerce_int(screenshot_height, default=None)
         coerced_page_size = coerce_int(page_size, default=None)
         coerced_cursor = coerce_int(cursor, default=None)
         coerced_max_nodes = coerce_int(max_nodes, default=None)
@@ -70,6 +96,19 @@ async def manage_scene(
             max_children_per_node, default=None)
         coerced_include_transform = coerce_bool(
             include_transform, default=None)
+        coerced_preview_max_width = coerce_int(
+            screenshot_preview_max_width, default=None)
+        coerced_preview_max_height = coerce_int(
+            screenshot_preview_max_height, default=None)
+        coerced_preview_jpeg_quality = coerce_int(
+            screenshot_preview_jpeg_quality, default=None)
+        coerced_preview_max_pixels = coerce_int(
+            screenshot_preview_max_pixels, default=None)
+        coerced_wait_for_write = coerce_bool(
+            screenshot_wait_for_write, default=None)
+        coerced_return_preview = coerce_bool(
+            screenshot_return_preview, default=None)
+        coerced_timeout_ms = coerce_int(screenshot_timeout_ms, default=None)
 
         params: dict[str, Any] = {"action": action}
         if name:
@@ -82,6 +121,28 @@ async def manage_scene(
             params["fileName"] = screenshot_file_name
         if coerced_super_size is not None:
             params["superSize"] = coerced_super_size
+        if coerced_width is not None:
+            params["width"] = coerced_width
+        if coerced_height is not None:
+            params["height"] = coerced_height
+        if screenshot_return_mode:
+            params["returnMode"] = screenshot_return_mode
+        if coerced_return_preview is not None:
+            params["returnPreview"] = coerced_return_preview
+        if coerced_preview_max_width is not None:
+            params["previewMaxWidth"] = coerced_preview_max_width
+        if coerced_preview_max_height is not None:
+            params["previewMaxHeight"] = coerced_preview_max_height
+        if screenshot_preview_format:
+            params["previewFormat"] = screenshot_preview_format
+        if coerced_preview_jpeg_quality is not None:
+            params["previewJpegQuality"] = coerced_preview_jpeg_quality
+        if coerced_preview_max_pixels is not None:
+            params["previewMaxPixels"] = coerced_preview_max_pixels
+        if coerced_wait_for_write is not None:
+            params["waitForWrite"] = coerced_wait_for_write
+        if coerced_timeout_ms is not None:
+            params["timeoutMs"] = coerced_timeout_ms
 
         # get_hierarchy paging/safety params (optional)
         if parent is not None:
@@ -109,3 +170,4 @@ async def manage_scene(
 
     except Exception as e:
         return {"success": False, "message": f"Python error managing scene: {str(e)}"}
+
