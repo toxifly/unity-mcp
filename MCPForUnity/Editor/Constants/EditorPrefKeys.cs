@@ -53,5 +53,9 @@ namespace MCPForUnity.Editor.Constants
 
         internal const string TelemetryDisabled = "MCPForUnity.TelemetryDisabled";
         internal const string CustomerUuid = "MCPForUnity.CustomerUUID";
+
+        // Screenshots
+        // Downscale factor applied *after* capture (1.0 = full size, 0.5 = half res).
+        internal const string ScreenshotDownscaleFactor = "MCPForUnity.ScreenshotDownscaleFactor";
     }
 }

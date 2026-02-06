@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers; // For Response class
 using MCPForUnity.Runtime.Helpers; // For ScreenshotUtility
 using Newtonsoft.Json.Linq;
@@ -437,6 +438,7 @@ namespace MCPForUnity.Editor.Tools
                 }
                 else
                 {
+                    TryDownscaleScreenshotInPlaceIfConfigured(result.FullPath);
                     AssetDatabase.ImportAsset(result.AssetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
                 }
 
@@ -520,6 +522,7 @@ namespace MCPForUnity.Editor.Tools
             double start = EditorApplication.timeSinceStartup;
             int failureCount = 0;
             bool hasSeenFile = false;
+            bool readyToImport = false;
             const int maxLoggedFailures = 3;
             EditorApplication.CallbackFunction tick = null;
             tick = () =>
@@ -530,10 +533,21 @@ namespace MCPForUnity.Editor.Tools
                     {
                         hasSeenFile = true;
 
-                        AssetDatabase.ImportAsset(assetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
-                        try { McpLog.Debug($"[ManageScene] Imported asset at '{assetsRelativePath}'."); } catch { }
-                        EditorApplication.update -= tick;
-                        return;
+                        if (!readyToImport)
+                        {
+                            // Attempt to downscale *before* importing, so the imported asset matches what we want on disk.
+                            // If the screenshot file is still being written/locked, wait for the next tick.
+                            readyToImport = TryDownscaleScreenshotInPlaceIfConfigured(fullPath);
+                            // If not ready, don't return early; allow timeout/unsubscribe logic to run below.
+                        }
+
+                        if (readyToImport)
+                        {
+                            AssetDatabase.ImportAsset(assetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
+                            try { McpLog.Debug($"[ManageScene] Imported asset at '{assetsRelativePath}'."); } catch { }
+                            EditorApplication.update -= tick;
+                            return;
+                        }
                     }
                 }
                 catch (Exception e)
@@ -580,6 +594,129 @@ namespace MCPForUnity.Editor.Tools
             };
 
             EditorApplication.update += tick;
+        }
+
+        private static float GetScreenshotDownscaleFactor()
+        {
+            try
+            {
+                float factor = EditorPrefs.GetFloat(EditorPrefKeys.ScreenshotDownscaleFactor, 1f);
+                if (float.IsNaN(factor) || float.IsInfinity(factor)) return 1f;
+                return Mathf.Clamp(factor, 0.1f, 1f);
+            }
+            catch
+            {
+                return 1f;
+            }
+        }
+
+        /// <summary>
+        /// Returns true if it's safe to proceed with import. Returns false when the file appears locked/incomplete and we should retry.
+        /// </summary>
+        private static bool TryDownscaleScreenshotInPlaceIfConfigured(string fullPath)
+        {
+            float factor = GetScreenshotDownscaleFactor();
+            if (factor >= 0.999f) return true;
+
+            try
+            {
+                if (!File.Exists(fullPath)) return false;
+
+                byte[] bytes;
+                try
+                {
+                    bytes = File.ReadAllBytes(fullPath);
+                }
+                catch (IOException)
+                {
+                    return false;
+                }
+
+                var src = new Texture2D(2, 2, TextureFormat.RGBA32, mipChain: false);
+                Texture2D dst = null;
+                RenderTexture rt = null;
+                RenderTexture prevActive = null;
+                bool restorePrevActive = false;
+
+                try
+                {
+                    prevActive = RenderTexture.active;
+                    restorePrevActive = true;
+
+                    bool loaded = src.LoadImage(bytes, markNonReadable: false);
+                    if (!loaded || src.width <= 0 || src.height <= 0)
+                    {
+                        return true; // can't decode; proceed with original
+                    }
+
+                    int targetWidth = Mathf.Max(1, Mathf.RoundToInt(src.width * factor));
+                    int targetHeight = Mathf.Max(1, Mathf.RoundToInt(src.height * factor));
+                    if (targetWidth == src.width && targetHeight == src.height)
+                    {
+                        return true;
+                    }
+
+                    rt = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
+                    if (rt == null)
+                    {
+                        return true; // can't allocate; proceed with original
+                    }
+                    rt.filterMode = FilterMode.Bilinear;
+
+                    Graphics.Blit(src, rt);
+
+                    RenderTexture.active = rt;
+                    dst = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, mipChain: false);
+                    dst.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
+                    dst.Apply();
+
+                    string ext = Path.GetExtension(fullPath) ?? string.Empty;
+                    bool writeJpeg =
+                        ext.Equals(".jpg", StringComparison.OrdinalIgnoreCase) ||
+                        ext.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+
+                    byte[] encoded = writeJpeg ? dst.EncodeToJPG(90) : dst.EncodeToPNG();
+                    try
+                    {
+                        File.WriteAllBytes(fullPath, encoded);
+                    }
+                    catch (IOException)
+                    {
+                        return false;
+                    }
+
+                    return true;
+                }
+                finally
+                {
+                    if (restorePrevActive)
+                    {
+                        RenderTexture.active = prevActive;
+                    }
+
+                    if (rt != null)
+                    {
+                        RenderTexture.ReleaseTemporary(rt);
+                    }
+
+                    if (src != null)
+                    {
+                        if (Application.isPlaying) UnityEngine.Object.Destroy(src);
+                        else UnityEngine.Object.DestroyImmediate(src);
+                    }
+
+                    if (dst != null)
+                    {
+                        if (Application.isPlaying) UnityEngine.Object.Destroy(dst);
+                        else UnityEngine.Object.DestroyImmediate(dst);
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                try { McpLog.Debug($"[ManageScene] screenshot: downscale failed for '{fullPath}': {e.Message}"); } catch { }
+                return true; // don't block import on unexpected errors
+            }
         }
 
         private static object GetActiveSceneInfo()
