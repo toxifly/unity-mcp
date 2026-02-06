@@ -41,47 +41,23 @@ namespace MCPForUnity.Editor.Tools
         private static SceneCommand ToSceneCommand(JObject p)
         {
             if (p == null) return new SceneCommand();
-            int? BI(JToken t)
-            {
-                if (t == null || t.Type == JTokenType.Null) return null;
-                var s = t.ToString().Trim();
-                if (s.Length == 0) return null;
-                if (int.TryParse(s, out var i)) return i;
-                if (double.TryParse(s, out var d)) return (int)d;
-                return t.Type == JTokenType.Integer ? t.Value<int>() : (int?)null;
-            }
-            bool? BB(JToken t)
-            {
-                if (t == null || t.Type == JTokenType.Null) return null;
-                try
-                {
-                    if (t.Type == JTokenType.Boolean) return t.Value<bool>();
-                    var s = t.ToString().Trim();
-                    if (s.Length == 0) return null;
-                    if (bool.TryParse(s, out var b)) return b;
-                    if (s == "1") return true;
-                    if (s == "0") return false;
-                }
-                catch { }
-                return null;
-            }
             return new SceneCommand
             {
                 action = (p["action"]?.ToString() ?? string.Empty).Trim().ToLowerInvariant(),
                 name = p["name"]?.ToString() ?? string.Empty,
                 path = p["path"]?.ToString() ?? string.Empty,
-                buildIndex = BI(p["buildIndex"] ?? p["build_index"]),
+                buildIndex = ParamCoercion.CoerceIntNullable(p["buildIndex"] ?? p["build_index"]),
                 fileName = (p["fileName"] ?? p["filename"])?.ToString() ?? string.Empty,
-                superSize = BI(p["superSize"] ?? p["super_size"] ?? p["supersize"]),
+                superSize = ParamCoercion.CoerceIntNullable(p["superSize"] ?? p["super_size"] ?? p["supersize"]),
 
                 // get_hierarchy paging + safety
                 parent = p["parent"],
-                pageSize = BI(p["pageSize"] ?? p["page_size"]),
-                cursor = BI(p["cursor"]),
-                maxNodes = BI(p["maxNodes"] ?? p["max_nodes"]),
-                maxDepth = BI(p["maxDepth"] ?? p["max_depth"]),
-                maxChildrenPerNode = BI(p["maxChildrenPerNode"] ?? p["max_children_per_node"]),
-                includeTransform = BB(p["includeTransform"] ?? p["include_transform"]),
+                pageSize = ParamCoercion.CoerceIntNullable(p["pageSize"] ?? p["page_size"]),
+                cursor = ParamCoercion.CoerceIntNullable(p["cursor"]),
+                maxNodes = ParamCoercion.CoerceIntNullable(p["maxNodes"] ?? p["max_nodes"]),
+                maxDepth = ParamCoercion.CoerceIntNullable(p["maxDepth"] ?? p["max_depth"]),
+                maxChildrenPerNode = ParamCoercion.CoerceIntNullable(p["maxChildrenPerNode"] ?? p["max_children_per_node"]),
+                includeTransform = ParamCoercion.CoerceBoolNullable(p["includeTransform"] ?? p["include_transform"]),
             };
         }
 
@@ -114,7 +90,7 @@ namespace MCPForUnity.Editor.Tools
             string assetsRelative = path ?? string.Empty;
             if (!string.IsNullOrEmpty(assetsRelative))
             {
-                assetsRelative = assetsRelative.Replace('\\', '/').Trim('/');
+                assetsRelative = AssetPathUtility.NormalizeSeparators(assetsRelative).Trim('/');
                 if (assetsRelative.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
                 {
                     assetsRelative = assetsRelative.Substring("Assets/".Length).TrimStart('/');
@@ -167,6 +143,11 @@ namespace MCPForUnity.Editor.Tools
             string fullPath = string.IsNullOrEmpty(sceneFileName)
                 ? null
                 : Path.Combine(fullPathDir, sceneFileName);
+            // Ensure relativePath uses forward slashes
+            if (relativePath != null)
+            {
+                relativePath = AssetPathUtility.NormalizeSeparators(relativePath);
+            }
 
             // Ensure directory exists for 'create'
             if (action == "create" && !string.IsNullOrEmpty(fullPathDir))
@@ -423,10 +404,45 @@ namespace MCPForUnity.Editor.Tools
             {
                 int resolvedSuperSize = (superSize.HasValue && superSize.Value > 0) ? superSize.Value : 1;
 
+                // Batch mode warning
+                if (Application.isBatchMode)
+                {
+                    McpLog.Warn("[ManageScene] Screenshot capture in batch mode uses camera-based fallback. Results may vary.");
+                }
+
+                // Check Screen Capture module availability and warn if not available
+                bool screenCaptureAvailable = ScreenshotUtility.IsScreenCaptureModuleAvailable;
+                bool hasCameraFallback = Camera.main != null || UnityEngine.Object.FindObjectsOfType<Camera>().Length > 0;
+
+#if UNITY_2022_1_OR_NEWER
+                if (!screenCaptureAvailable && !hasCameraFallback)
+                {
+                    return new ErrorResponse(
+                        "Cannot capture screenshot. The Screen Capture module is not enabled and no Camera was found in the scene. " +
+                        "Please either: (1) Enable the Screen Capture module: Window > Package Manager > Built-in > Screen Capture > Enable, " +
+                        "or (2) Add a Camera to your scene for camera-based fallback capture."
+                    );
+                }
+
+                if (!screenCaptureAvailable)
+                {
+                    McpLog.Warn("[ManageScene] Screen Capture module not enabled. Using camera-based fallback. " +
+                        "For best results, enable it: Window > Package Manager > Built-in > Screen Capture > Enable.");
+                }
+#else
+                if (!hasCameraFallback)
+                {
+                    return new ErrorResponse(
+                        "No camera found in the scene. Screenshot capture on Unity versions before 2022.1 requires a Camera in the scene. " +
+                        "Please add a Camera to your scene or upgrade to Unity 2022.1+ for ScreenCapture API support."
+                    );
+                }
+#endif
+
                 // Best-effort: ensure Game View exists and repaints before capture.
                 if (!Application.isBatchMode)
                 {
-                    BestEffortPrepareGameViewForScreenshot();
+                    EnsureGameView();
                 }
 
                 ScreenshotCaptureResult result = ScreenshotUtility.CaptureToAssetsFolder(fileName, resolvedSuperSize, ensureUniqueFileName: true);
@@ -462,7 +478,7 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static void BestEffortPrepareGameViewForScreenshot()
+        private static void EnsureGameView()
         {
             try
             {
@@ -508,7 +524,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception e)
             {
-                try { McpLog.Debug($"[ManageScene] screenshot: BestEffortPrepareGameViewForScreenshot failed: {e.Message}"); } catch { }
+                try { McpLog.Debug($"[ManageScene] screenshot: EnsureGameView failed: {e.Message}"); } catch { }
             }
         }
 
@@ -516,6 +532,7 @@ namespace MCPForUnity.Editor.Tools
         {
             if (string.IsNullOrWhiteSpace(assetsRelativePath) || string.IsNullOrWhiteSpace(fullPath))
             {
+                McpLog.Warn("[ManageScene] ScheduleAssetImportWhenFileExists: invalid paths provided, skipping import scheduling.");
                 return;
             }
 
@@ -544,7 +561,7 @@ namespace MCPForUnity.Editor.Tools
                         if (readyToImport)
                         {
                             AssetDatabase.ImportAsset(assetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
-                            try { McpLog.Debug($"[ManageScene] Imported asset at '{assetsRelativePath}'."); } catch { }
+                            McpLog.Debug($"[ManageScene] Imported asset at '{assetsRelativePath}'.");
                             EditorApplication.update -= tick;
                             return;
                         }
@@ -556,13 +573,7 @@ namespace MCPForUnity.Editor.Tools
 
                     if (failureCount <= maxLoggedFailures)
                     {
-                        try
-                        {
-                            McpLog.Warn(
-                                $"[ManageScene] Exception while importing asset '{assetsRelativePath}' from '{fullPath}' (attempt {failureCount}): {e}"
-                            );
-                        }
-                        catch { }
+                        McpLog.Warn($"[ManageScene] Exception while importing asset '{assetsRelativePath}' from '{fullPath}' (attempt {failureCount}): {e}");
                     }
                 }
 
@@ -570,23 +581,11 @@ namespace MCPForUnity.Editor.Tools
                 {
                     if (!hasSeenFile)
                     {
-                        try
-                        {
-                            McpLog.Warn(
-                                $"[ManageScene] Timed out waiting for file '{fullPath}' (asset: '{assetsRelativePath}') after {timeoutSeconds:F1} seconds. The asset was not imported."
-                            );
-                        }
-                        catch { }
+                        McpLog.Warn($"[ManageScene] Timed out waiting for file '{fullPath}' (asset: '{assetsRelativePath}') after {timeoutSeconds:F1} seconds. The asset was not imported.");
                     }
                     else
                     {
-                        try
-                        {
-                            McpLog.Warn(
-                                $"[ManageScene] Timed out importing asset '{assetsRelativePath}' from '{fullPath}' after {timeoutSeconds:F1} seconds. The file existed but the asset was not imported."
-                            );
-                        }
-                        catch { }
+                        McpLog.Warn($"[ManageScene] Timed out importing asset '{assetsRelativePath}' from '{fullPath}' after {timeoutSeconds:F1} seconds. The file existed but the asset was not imported.");
                     }
 
                     EditorApplication.update -= tick;
@@ -714,7 +713,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception e)
             {
-                try { McpLog.Debug($"[ManageScene] screenshot: downscale failed for '{fullPath}': {e.Message}"); } catch { }
+                McpLog.Debug($"[ManageScene] screenshot: downscale failed for '{fullPath}': {e.Message}");
                 return true; // don't block import on unexpected errors
             }
         }
@@ -960,8 +959,7 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                try { McpLog.Debug($"[ManageScene] Failed to enumerate components for '{go.name}': {ex.Message}"); }
-                catch { }
+                McpLog.Debug($"[ManageScene] Failed to enumerate components for '{go.name}': {ex.Message}");
             }
 
             var d = new Dictionary<string, object>

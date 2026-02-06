@@ -1,6 +1,6 @@
 <img width="676" height="380" alt="MCP for Unity" src="docs/images/logo.png" />
 
-| [English](README.md) | [简体中文](README-zh.md) |
+| [English](README.md) | [简体中文](docs/i18n/README-zh.md) |
 |----------------------|---------------------------------|
 
 #### Proudly sponsored and maintained by [Coplay](https://www.coplay.dev/?ref=unity-mcp) -- the best AI assistant for Unity.
@@ -13,7 +13,7 @@
 [![](https://badge.mcpx.dev?status=on 'MCP Enabled')](https://modelcontextprotocol.io/introduction)
 [![](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
 
-**Create your Unity apps with LLMs!** MCP for Unity bridges AI assistants (Claude, Cursor, VS Code, etc.) with your Unity Editor via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Give your LLM tools to manage assets, control scenes, edit scripts, and automate tasks.
+**Create your Unity apps with LLMs!** MCP for Unity bridges AI assistants (Claude, Cursor, VS Code, etc.) with your Unity Editor via the [Model Context Protocol](https://modelcontextprotocol.io/introduction). Give your LLM the tools to manage assets, control scenes, edit scripts, and automate tasks.
 
 <img alt="MCP for Unity building a scene" src="docs/images/building_scene.gif">
 
@@ -25,7 +25,7 @@
 
 * **Unity 2021.3 LTS+** — [Download Unity](https://unity.com/download)
 * **Python 3.10+** and **uv** — [Install uv](https://docs.astral.sh/uv/getting-started/installation/)
-* **An MCP Client** — [Claude Desktop](https://claude.ai/download) | [Cursor](https://www.cursor.com/en/downloads) | [VS Code Copilot](https://code.visualstudio.com/docs/copilot/overview) | [Windsurf](https://windsurf.com)
+* **An MCP Client** — [Claude Desktop](https://claude.ai/download) | [Cursor](https://www.cursor.com/en/downloads) | [VS Code Copilot](https://code.visualstudio.com/docs/copilot/overview) | [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli) | [Windsurf](https://windsurf.com)
 
 ### 1. Install the Unity Package
 
@@ -33,12 +33,12 @@ In Unity: `Window > Package Manager > + > Add package from git URL...`
 
 > [!TIP]
 > ```text
-> https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity
+> https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main
 > ```
 
-**Need a stable/fixed version?** Use a tagged URL (requires uninstall to update):
+**Want the latest beta?** Use the beta branch:
 ```text
-https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v9.0.3
+https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#beta
 ```
 
 <details>
@@ -76,10 +76,10 @@ openupm add com.coplaydev.unity-mcp
 * **Extensible** — Works with various MCP Clients
 
 ### Available Tools
-`manage_asset` • `manage_editor` • `manage_gameobject` • `manage_components` • `manage_material` • `manage_prefabs` • `manage_scene` • `manage_script` • `manage_scriptable_object` • `manage_shader` • `manage_vfx` • `batch_execute` • `find_gameobjects` • `find_in_file` • `read_console` • `refresh_unity` • `run_tests` • `get_test_job` • `execute_menu_item` • `apply_text_edits` • `script_apply_edits` • `validate_script` • `create_script` • `delete_script` • `get_sha`
+`manage_asset` • `manage_editor` • `manage_gameobject` • `manage_components` • `manage_material` • `manage_prefabs` • `manage_scene` • `manage_script` • `manage_scriptable_object` • `manage_shader` • `manage_vfx` • `manage_texture` • `batch_execute` • `find_gameobjects` • `find_in_file` • `read_console` • `refresh_unity` • `run_tests` • `get_test_job` • `execute_menu_item` • `apply_text_edits` • `script_apply_edits` • `validate_script` • `create_script` • `delete_script` • `get_sha`
 
 ### Available Resources
-`custom_tools` • `unity_instances` • `menu_items` • `get_tests` • `gameobject` • `gameobject_components` • `editor_state` • `editor_selection` • `editor_prefab_stage` • `project_info` • `project_tags` • `project_layers`
+`custom_tools` • `unity_instances` • `menu_items` • `get_tests` • `gameobject` • `gameobject_components` • `prefab_api` • `prefab_info` • `prefab_hierarchy` • `editor_state` • `editor_selection` • `editor_prefab_stage` • `project_info` • `project_tags` • `project_layers`
 
 **Performance Tip:** Use `batch_execute` for multiple operations — it's 10-100x faster than individual calls!
 </details>
@@ -113,15 +113,15 @@ If auto-setup doesn't work, add this to your MCP client's config file:
 ```
 
 <details>
-<summary>Stdio configuration (legacy)</summary>
+<summary>Stdio configuration (uvx)</summary>
 
 **macOS/Linux:**
 ```json
 {
   "mcpServers": {
     "unityMCP": {
-      "command": "uv",
-      "args": ["run", "--directory", "/Users/YOUR_USERNAME/Library/AppSupport/UnityMCP/UnityMcpServer/src", "server.py", "--transport", "stdio"]
+      "command": "uvx",
+      "args": ["--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"]
     }
   }
 }
@@ -132,8 +132,8 @@ If auto-setup doesn't work, add this to your MCP client's config file:
 {
   "mcpServers": {
     "unityMCP": {
-      "command": "C:/Users/YOUR_USERNAME/AppData/Local/Microsoft/WinGet/Links/uv.exe",
-      "args": ["run", "--directory", "C:/Users/YOUR_USERNAME/AppData/Local/UnityMCP/UnityMcpServer/src", "server.py", "--transport", "stdio"]
+      "command": "C:/Users/YOUR_USERNAME/AppData/Local/Microsoft/WinGet/Links/uvx.exe",
+      "args": ["--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"]
     }
   }
 }
@@ -157,8 +157,8 @@ MCP for Unity supports multiple Unity Editor instances. To target a specific one
 For **Strict** validation that catches undefined namespaces, types, and methods:
 
 1. Install [NuGetForUnity](https://github.com/GlitchEnzo/NuGetForUnity)
-2. `Window > NuGet Package Manager` → Install `Microsoft.CodeAnalysis` v4.14.0
-3. Also install `SQLitePCLRaw.core` and `SQLitePCLRaw.bundle_e_sqlite3`
+2. `Window > NuGet Package Manager` → Install `Microsoft.CodeAnalysis` v5.0
+3. Also install `SQLitePCLRaw.core` and `SQLitePCLRaw.bundle_e_sqlite3` v3.0.2
 4. Add `USE_ROSLYN` to `Player Settings > Scripting Define Symbols`
 5. Restart Unity
 
@@ -191,7 +191,7 @@ Still stuck? [Open an Issue](https://github.com/CoplayDev/unity-mcp/issues) or [
 <details>
 <summary><strong>Contributing</strong></summary>
 
-See [README-DEV.md](docs/README-DEV.md) for development setup. For custom tools, see [CUSTOM_TOOLS.md](docs/CUSTOM_TOOLS.md).
+See [README-DEV.md](docs/development/README-DEV.md) for development setup. For custom tools, see [CUSTOM_TOOLS.md](docs/reference/CUSTOM_TOOLS.md).
 
 1. Fork → Create issue → Branch (`feature/your-idea`) → Make changes → PR
 </details>
@@ -199,7 +199,7 @@ See [README-DEV.md](docs/README-DEV.md) for development setup. For custom tools,
 <details>
 <summary><strong>Telemetry & Privacy</strong></summary>
 
-Anonymous, privacy-focused telemetry (no code, no project names, no personal data). Opt out with `DISABLE_TELEMETRY=true`. See [TELEMETRY.md](docs/TELEMETRY.md).
+Anonymous, privacy-focused telemetry (no code, no project names, no personal data). Opt out with `DISABLE_TELEMETRY=true`. See [TELEMETRY.md](docs/reference/TELEMETRY.md).
 </details>
 
 ---
@@ -212,13 +212,33 @@ Anonymous, privacy-focused telemetry (no code, no project names, no personal dat
 
 [![Star History Chart](https://api.star-history.com/svg?repos=CoplayDev/unity-mcp&type=Date)](https://www.star-history.com/#CoplayDev/unity-mcp&Date)
 
+<details>
+<summary><strong>Citation for Research</strong></summary>
+If you are working on research that is related to Unity-MCP, please cite us!
+
+```bibtex
+@inproceedings{10.1145/3757376.3771417,
+author = {Wu, Shutong and Barnett, Justin P.},
+title = {MCP-Unity: Protocol-Driven Framework for Interactive 3D Authoring},
+year = {2025},
+isbn = {9798400721366},
+publisher = {Association for Computing Machinery},
+address = {New York, NY, USA},
+url = {https://doi.org/10.1145/3757376.3771417},
+doi = {10.1145/3757376.3771417},
+series = {SA Technical Communications '25}
+}
+```
+</details>
+
 ## Unity AI Tools by Coplay
 
-Coplay offers 2 AI tools for Unity:
+Coplay offers 3 AI tools for Unity:
 - **MCP for Unity** is available freely under the MIT license.
 - **Coplay** is a premium Unity AI assistant that sits within Unity and is more than the MCP for Unity.
+- **Coplay MCP** a free-for-now MCP for Coplay tools.
 
-(These tools have different tech stacks. See this blog post [comparing Coplay to MCP for Unity](https://www.coplay.dev/blog/comparing-coplay-and-unity-mcp).)
+(These tools have different tech stacks. See this blog post [comparing Coplay to MCP for Unity](https://coplay.dev/blog/coplay-vs-coplay-mcp-vs-unity-mcp).)
 
 <img alt="Coplay" src="docs/images/coplay-logo.png" />
 

@@ -20,7 +20,7 @@ __all__ = [
 ]
 
 
-def register_all_tools(mcp: FastMCP):
+def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
     """
     Auto-discover and register all tools in the tools/ directory.
 
@@ -46,7 +46,14 @@ def register_all_tools(mcp: FastMCP):
         description = tool_info['description']
         kwargs = tool_info['kwargs']
 
-        # Apply the @mcp.tool decorator, telemetry, and logging
+        if not project_scoped_tools and tool_name == "execute_custom_tool":
+            logger.info(
+                "Skipping execute_custom_tool registration (project-scoped tools disabled)")
+            continue
+
+        # Apply decorators: logging -> telemetry -> mcp.tool
+        # Note: Parameter normalization (camelCase -> snake_case) is handled by
+        # ParamNormalizerMiddleware before FastMCP validation
         wrapped = log_execution(tool_name, "Tool")(func)
         wrapped = telemetry_tool(tool_name)(wrapped)
         wrapped = mcp.tool(

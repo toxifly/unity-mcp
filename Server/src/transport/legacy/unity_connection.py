@@ -233,14 +233,21 @@ class UnityConnection:
             logger.error(f"Error during receive: {str(e)}")
             raise
 
-    def send_command(self, command_type: str, params: dict[str, Any] = None) -> dict[str, Any]:
-        """Send a command with retry/backoff and port rediscovery. Pings only when requested."""
+    def send_command(self, command_type: str, params: dict[str, Any] = None, max_attempts: int | None = None) -> dict[str, Any]:
+        """Send a command with retry/backoff and port rediscovery. Pings only when requested.
+
+        Args:
+            command_type: The Unity command to send
+            params: Command parameters
+            max_attempts: Maximum retry attempts (None = use config default, 0 = no retries)
+        """
         # Defensive guard: catch empty/placeholder invocations early
         if not command_type:
             raise ValueError("MCP call missing command_type")
         if params is None:
             return MCPResponse(success=False, error="MCP call received with no parameters (client placeholder?)")
-        attempts = max(config.max_retries, 5)
+        attempts = max(config.max_retries,
+                       5) if max_attempts is None else max_attempts
         base_backoff = max(0.5, config.retry_delay)
 
         def read_status_file(target_hash: str | None = None) -> dict | None:
@@ -299,8 +306,10 @@ class UnityConnection:
         for attempt in range(attempts + 1):
             try:
                 # Ensure connected (handshake occurs within connect())
+                t_conn_start = time.time()
                 if not self.sock and not self.connect():
                     raise ConnectionError("Could not connect to Unity")
+                logger.info("[TIMING-STDIO] connect took %.3fs command=%s", time.time() - t_conn_start, command_type)
 
                 # Build payload
                 if command_type == 'ping':
@@ -317,12 +326,14 @@ class UnityConnection:
                     with contextlib.suppress(Exception):
                         logger.debug(
                             f"send {len(payload)} bytes; mode={mode}; head={payload[:32].decode('utf-8', 'ignore')}")
+                    t_send_start = time.time()
                     if self.use_framing:
                         header = struct.pack('>Q', len(payload))
                         self.sock.sendall(header)
                         self.sock.sendall(payload)
                     else:
                         self.sock.sendall(payload)
+                    logger.info("[TIMING-STDIO] sendall took %.3fs command=%s", time.time() - t_send_start, command_type)
 
                     # During retry bursts use a short receive timeout and ensure restoration
                     restore_timeout = None
@@ -330,7 +341,9 @@ class UnityConnection:
                         restore_timeout = self.sock.gettimeout()
                         self.sock.settimeout(1.0)
                     try:
+                        t_recv_start = time.time()
                         response_data = self.receive_full_response(self.sock)
+                        logger.info("[TIMING-STDIO] receive took %.3fs command=%s len=%d", time.time() - t_recv_start, command_type, len(response_data))
                         with contextlib.suppress(Exception):
                             logger.debug(
                                 f"recv {len(response_data)} bytes; mode={mode}")
@@ -412,7 +425,8 @@ class UnityConnection:
 
                     # Cap backoff depending on state
                     if status and status.get('reloading'):
-                        cap = 0.8
+                        # Domain reload can take 10-20s; use longer waits
+                        cap = 5.0
                     elif fast_error:
                         cap = 0.25
                     else:
@@ -734,7 +748,8 @@ def send_command_with_retry(
     *,
     instance_id: str | None = None,
     max_retries: int | None = None,
-    retry_ms: int | None = None
+    retry_ms: int | None = None,
+    retry_on_reload: bool = True
 ) -> dict[str, Any] | MCPResponse:
     """Send a command to a Unity instance, waiting politely through Unity reloads.
 
@@ -744,6 +759,8 @@ def send_command_with_retry(
         instance_id: Optional Unity instance identifier (name, hash, name@hash, etc.)
         max_retries: Maximum number of retries for reload states
         retry_ms: Delay between retries in milliseconds
+        retry_on_reload: If False, don't retry when Unity is reloading (for commands
+            that trigger compilation/reload and shouldn't be re-sent)
 
     Returns:
         Response dictionary or MCPResponse from Unity
@@ -751,28 +768,47 @@ def send_command_with_retry(
     Uses config.reload_retry_ms and config.reload_max_retries by default. Preserves the
     structured failure if retries are exhausted.
     """
+    t_retry_start = time.time()
+    logger.info("[TIMING-STDIO] send_command_with_retry START command=%s", command_type)
+    t_get_conn = time.time()
     conn = get_unity_connection(instance_id)
+    logger.info("[TIMING-STDIO] get_unity_connection took %.3fs command=%s", time.time() - t_get_conn, command_type)
     if max_retries is None:
         max_retries = getattr(config, "reload_max_retries", 40)
     if retry_ms is None:
         retry_ms = getattr(config, "reload_retry_ms", 250)
+    # Default to 20s to handle domain reloads (which can take 10-20s after tests or script changes).
+    #
+    # NOTE: This wait can impact agentic workflows where domain reloads happen
+    # frequently (e.g., after test runs, script compilation). The 20s default
+    # balances handling slow reloads vs. avoiding unnecessary delays.
+    #
+    # TODO: Make this more deterministic by detecting Unity's actual reload state
+    # rather than blindly waiting up to 20s. See Issue #657.
+    #
+    # Configurable via: UNITY_MCP_RELOAD_MAX_WAIT_S (default: 20.0, max: 20.0)
     try:
         max_wait_s = float(os.environ.get(
-            "UNITY_MCP_RELOAD_MAX_WAIT_S", "2.0"))
+            "UNITY_MCP_RELOAD_MAX_WAIT_S", "20.0"))
     except ValueError as e:
-        raw_val = os.environ.get("UNITY_MCP_RELOAD_MAX_WAIT_S", "2.0")
+        raw_val = os.environ.get("UNITY_MCP_RELOAD_MAX_WAIT_S", "20.0")
         logger.warning(
-            "Invalid UNITY_MCP_RELOAD_MAX_WAIT_S=%r, using default 2.0: %s",
+            "Invalid UNITY_MCP_RELOAD_MAX_WAIT_S=%r, using default 20.0: %s",
             raw_val, e)
-        max_wait_s = 2.0
-    # Clamp to [0, 30] to prevent misconfiguration from causing excessive waits
-    max_wait_s = max(0.0, min(max_wait_s, 30.0))
+        max_wait_s = 20.0
+    # Clamp to [0, 20] to prevent misconfiguration from causing excessive waits
+    max_wait_s = max(0.0, min(max_wait_s, 20.0))
 
-    response = conn.send_command(command_type, params)
+    # If retry_on_reload=False, disable connection-level retries too (issue #577)
+    # Commands that trigger compilation/reload shouldn't retry on disconnect
+    send_max_attempts = None if retry_on_reload else 0
+
+    response = conn.send_command(
+        command_type, params, max_attempts=send_max_attempts)
     retries = 0
     wait_started = None
     reason = _extract_response_reason(response)
-    while _is_reloading_response(response) and retries < max_retries:
+    while retry_on_reload and _is_reloading_response(response) and retries < max_retries:
         if wait_started is None:
             wait_started = time.monotonic()
             logger.debug(
@@ -832,6 +868,7 @@ def send_command_with_retry(
             instance_id or "default",
             waited,
         )
+    logger.info("[TIMING-STDIO] send_command_with_retry DONE total=%.3fs command=%s", time.time() - t_retry_start, command_type)
     return response
 
 
@@ -842,7 +879,8 @@ async def async_send_command_with_retry(
     instance_id: str | None = None,
     loop=None,
     max_retries: int | None = None,
-    retry_ms: int | None = None
+    retry_ms: int | None = None,
+    retry_on_reload: bool = True
 ) -> dict[str, Any] | MCPResponse:
     """Async wrapper that runs the blocking retry helper in a thread pool.
 
@@ -853,6 +891,7 @@ async def async_send_command_with_retry(
         loop: Optional asyncio event loop
         max_retries: Maximum number of retries for reload states
         retry_ms: Delay between retries in milliseconds
+        retry_on_reload: If False, don't retry when Unity is reloading
 
     Returns:
         Response dictionary or MCPResponse on error
@@ -864,7 +903,8 @@ async def async_send_command_with_retry(
         return await loop.run_in_executor(
             None,
             lambda: send_command_with_retry(
-                command_type, params, instance_id=instance_id, max_retries=max_retries, retry_ms=retry_ms),
+                command_type, params, instance_id=instance_id, max_retries=max_retries,
+                retry_ms=retry_ms, retry_on_reload=retry_on_reload),
         )
     except Exception as e:
         return MCPResponse(success=False, error=str(e))
