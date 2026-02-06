@@ -46,7 +46,7 @@ async def manage_scene(
     screenshot_return_mode: Annotated[Literal["path", "preview", "both"] | str,
                                       "Screenshot response mode: path (default), preview, or both."] | None = None,
     screenshot_return_preview: Annotated[bool | str,
-                                         "Legacy shortcut. If true and return_mode not set, behaves like return_mode='both'."] | None = None,
+                                         "Legacy shortcut. If true and screenshot_return_mode is not set, behaves like screenshot_return_mode='both'."] | None = None,
     screenshot_preview_max_width: Annotated[int | str,
                                             "Preview max width in pixels (default 960)."] | None = None,
     screenshot_preview_max_height: Annotated[int | str,

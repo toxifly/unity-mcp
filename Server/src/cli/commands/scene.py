@@ -210,12 +210,12 @@ def build_settings():
 @click.option(
     "--with-preview",
     is_flag=True,
-    help="Return a preview image blob (equivalent to return_mode=both)."
+    help="Return a preview image blob (equivalent to screenshot_return_mode=both)."
 )
 @click.option(
     "--preview-only",
     is_flag=True,
-    help="Return preview-focused payload (sets return_mode=preview)."
+    help="Return preview-focused payload (sets screenshot_return_mode=preview)."
 )
 @click.option(
     "--wait-for-write",

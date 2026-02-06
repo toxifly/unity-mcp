@@ -27,6 +27,10 @@ def test_manage_scene_signature_includes_screenshot_capture_size_params():
 
     assert "screenshot_width" in names
     assert "screenshot_height" in names
+    assert "screenshot_wait_for_write" in names
+    assert "screenshot_return_mode" in names
+    assert "wait_for_write" not in names
+    assert "return_mode" not in names
 
 
 def test_manage_gameobject_signature_includes_paging_params():

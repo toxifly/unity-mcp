@@ -20,6 +20,8 @@ namespace MCPForUnity.Editor.Tools
     [McpForUnityTool("manage_scene", AutoRegister = false)]
     public static class ManageScene
     {
+        private const double DefaultAsyncScreenshotImportTimeoutSeconds = 30d;
+
         private sealed class SceneCommand
         {
             public string action { get; set; } = string.Empty;
@@ -521,14 +523,26 @@ namespace MCPForUnity.Editor.Tools
                         targetHeight: request.CaptureHeight)
                     : ScreenshotUtility.CaptureToAssetsFolder(requestedFileName, resolvedSuperSize, ensureUniqueFileName: true);
 
+                bool shouldApplyDownscale = !request.HasCaptureSizeOverride;
+
                 if (result.IsAsync && !useImmediateCapture)
                 {
-                    double importTimeoutSeconds = Mathf.Max(0.25f, request.TimeoutMs / 1000f);
-                    ScheduleAssetImportWhenFileExists(result.AssetsRelativePath, result.FullPath, timeoutSeconds: importTimeoutSeconds);
+                    double importTimeoutSeconds = cmd?.timeoutMs.HasValue == true
+                        ? Mathf.Max(0.25f, request.TimeoutMs / 1000f)
+                        : DefaultAsyncScreenshotImportTimeoutSeconds;
+                    ScheduleAssetImportWhenFileExists(
+                        result.AssetsRelativePath,
+                        result.FullPath,
+                        timeoutSeconds: importTimeoutSeconds,
+                        applyDownscale: shouldApplyDownscale
+                    );
                 }
                 else
                 {
-                    TryDownscaleScreenshotInPlaceIfConfigured(result.FullPath);
+                    if (shouldApplyDownscale)
+                    {
+                        TryDownscaleScreenshotInPlaceIfConfigured(result.FullPath);
+                    }
                     AssetDatabase.ImportAsset(result.AssetsRelativePath, ImportAssetOptions.ForceSynchronousImport);
                 }
 
@@ -886,7 +900,7 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static void ScheduleAssetImportWhenFileExists(string assetsRelativePath, string fullPath, double timeoutSeconds)
+        private static void ScheduleAssetImportWhenFileExists(string assetsRelativePath, string fullPath, double timeoutSeconds, bool applyDownscale = true)
         {
             if (string.IsNullOrWhiteSpace(assetsRelativePath) || string.IsNullOrWhiteSpace(fullPath))
             {
@@ -910,9 +924,12 @@ namespace MCPForUnity.Editor.Tools
 
                         if (!readyToImport)
                         {
-                            // Attempt to downscale *before* importing, so the imported asset matches what we want on disk.
+                            // Optional downscale before import, so the imported asset matches what we want on disk.
+                            // If downscale is disabled for this capture, import as soon as the file exists.
                             // If the screenshot file is still being written/locked, wait for the next tick.
-                            readyToImport = TryDownscaleScreenshotInPlaceIfConfigured(fullPath);
+                            readyToImport = applyDownscale
+                                ? TryDownscaleScreenshotInPlaceIfConfigured(fullPath)
+                                : true;
                             // If not ready, don't return early; allow timeout/unsubscribe logic to run below.
                         }
 
