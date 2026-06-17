@@ -645,10 +645,16 @@ namespace MCPForUnity.Editor.Helpers
             }
         }
 
+        private const int MaxArrayElements = 50;
+        private const int MaxObjectDepth = 8;
+
         // Helper to convert JToken back to basic object structure
-        private static object ConvertJTokenToPlainObject(JToken token)
+        private static object ConvertJTokenToPlainObject(JToken token, int depth = 0)
         {
             if (token == null) return null;
+
+            if (depth > MaxObjectDepth)
+                return "[truncated: max depth exceeded]";
 
             switch (token.Type)
             {
@@ -656,15 +662,27 @@ namespace MCPForUnity.Editor.Helpers
                     var objDict = new Dictionary<string, object>();
                     foreach (var prop in ((JObject)token).Properties())
                     {
-                        objDict[prop.Name] = ConvertJTokenToPlainObject(prop.Value);
+                        objDict[prop.Name] = ConvertJTokenToPlainObject(prop.Value, depth + 1);
                     }
                     return objDict;
 
                 case JTokenType.Array:
+                    var arr = (JArray)token;
                     var list = new List<object>();
-                    foreach (var item in (JArray)token)
+                    int totalCount = arr.Count;
+                    int limit = Math.Min(totalCount, MaxArrayElements);
+                    for (int i = 0; i < limit; i++)
                     {
-                        list.Add(ConvertJTokenToPlainObject(item));
+                        list.Add(ConvertJTokenToPlainObject(arr[i], depth + 1));
+                    }
+                    if (totalCount > MaxArrayElements)
+                    {
+                        list.Add(new Dictionary<string, object>
+                        {
+                            { "_truncated", true },
+                            { "_totalCount", totalCount },
+                            { "_returnedCount", MaxArrayElements }
+                        });
                     }
                     return list;
 
