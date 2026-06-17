@@ -87,6 +87,7 @@ async def test_get_gameobject_components(monkeypatch):
 
     assert resp.success is True
     assert captured["params"]["instanceID"] == 12345
+    assert captured["params"]["includeProperties"] is False
 
 
 @pytest.mark.asyncio
@@ -251,4 +252,76 @@ async def test_get_gameobject_not_found(monkeypatch):
 
     assert resp.success is False
     assert "99999" in (resp.message or "")
+
+
+@pytest.mark.asyncio
+async def test_get_gameobject_components_whitelist(monkeypatch):
+    """Test property_whitelist filters component properties on the resource."""
+    async def fake_send(cmd, params, **kwargs):
+        return {
+            "success": True,
+            "data": {
+                "gameObjectID": 100,
+                "gameObjectName": "Test",
+                "components": [
+                    {
+                        "typeName": "UnityEngine.Rigidbody",
+                        "instanceID": 10,
+                        "properties": {"mass": 1.0, "drag": 0.5, "angularDrag": 0.1},
+                    }
+                ],
+                "totalCount": 1,
+                "hasMore": False,
+            },
+        }
+
+    monkeypatch.setattr(gameobject_res_mod, "async_send_command_with_retry", fake_send)
+
+    resp = await gameobject_res_mod.get_gameobject_components(
+        ctx=DummyContext(),
+        instance_id="100",
+        include_properties=True,
+        property_whitelist=["mass"],
+    )
+
+    assert resp.success is True
+    comp = resp.data["components"][0]
+    assert comp["properties"] == {"mass": 1.0}
+    assert resp.data.get("_filtered") is True
+
+
+@pytest.mark.asyncio
+async def test_get_gameobject_components_blacklist(monkeypatch):
+    """Test property_blacklist excludes component properties on the resource."""
+    async def fake_send(cmd, params, **kwargs):
+        return {
+            "success": True,
+            "data": {
+                "gameObjectID": 100,
+                "gameObjectName": "Test",
+                "components": [
+                    {
+                        "typeName": "UnityEngine.Rigidbody",
+                        "instanceID": 10,
+                        "properties": {"mass": 1.0, "drag": 0.5, "angularDrag": 0.1},
+                    }
+                ],
+                "totalCount": 1,
+                "hasMore": False,
+            },
+        }
+
+    monkeypatch.setattr(gameobject_res_mod, "async_send_command_with_retry", fake_send)
+
+    resp = await gameobject_res_mod.get_gameobject_components(
+        ctx=DummyContext(),
+        instance_id="100",
+        include_properties=True,
+        property_blacklist=["drag", "angularDrag"],
+    )
+
+    assert resp.success is True
+    comp = resp.data["components"][0]
+    assert comp["properties"] == {"mass": 1.0}
+    assert resp.data.get("_filtered") is True
 

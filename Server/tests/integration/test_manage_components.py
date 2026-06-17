@@ -279,7 +279,7 @@ async def test_manage_components_get_components_resolves_path(monkeypatch):
             return {"success": True, "data": {"instanceIDs": [111]}}
         if cmd == "get_gameobject_components":
             assert params["instanceID"] == 111
-            assert params["includeProperties"] is True
+            assert params["includeProperties"] is False
             return {"success": True, "data": {"gameObjectID": 111, "components": []}}
         return {"success": False, "message": f"Unexpected cmd: {cmd}"}
 
@@ -332,4 +332,89 @@ async def test_manage_components_get_properties_filters(monkeypatch):
     data = resp.get("data") or {}
     assert data.get("properties") == {"mass": 5.0}
     assert data.get("missing") == ["missingField"]
+
+
+@pytest.mark.asyncio
+async def test_manage_components_get_components_property_whitelist(monkeypatch):
+    """Test get_components with property_whitelist filters the response."""
+    calls = []
+
+    async def fake_send(cmd, params, **kwargs):
+        calls.append((cmd, params))
+        if cmd == "find_gameobjects":
+            return {"success": True, "data": {"instanceIDs": [111]}}
+        if cmd == "get_gameobject_components":
+            return {
+                "success": True,
+                "data": {
+                    "gameObjectID": 111,
+                    "components": [
+                        {
+                            "typeName": "UnityEngine.Rigidbody",
+                            "instanceID": 1,
+                            "properties": {"mass": 5.0, "drag": 0.5, "angularDrag": 0.05},
+                        }
+                    ],
+                },
+            }
+        return {"success": False}
+
+    monkeypatch.setattr(manage_comp_mod, "async_send_command_with_retry", fake_send)
+
+    resp = await manage_comp_mod.manage_components(
+        ctx=DummyContext(),
+        action="get_components",
+        target={"name": "Player"},
+        include_properties=True,
+        property_whitelist=["mass", "drag"],
+    )
+
+    assert resp.get("success") is True
+    data = resp.get("data") or {}
+    comp = data["components"][0]
+    assert comp["properties"] == {"mass": 5.0, "drag": 0.5}
+    assert data.get("_filtered") is True
+
+
+@pytest.mark.asyncio
+async def test_manage_components_get_components_property_blacklist(monkeypatch):
+    """Test get_components with property_blacklist filters the response."""
+    calls = []
+
+    async def fake_send(cmd, params, **kwargs):
+        calls.append((cmd, params))
+        if cmd == "find_gameobjects":
+            return {"success": True, "data": {"instanceIDs": [222]}}
+        if cmd == "get_gameobject_components":
+            return {
+                "success": True,
+                "data": {
+                    "gameObjectID": 222,
+                    "components": [
+                        {
+                            "typeName": "UnityEngine.Rigidbody",
+                            "instanceID": 2,
+                            "properties": {"mass": 5.0, "drag": 0.5, "angularDrag": 0.05},
+                        }
+                    ],
+                },
+            }
+        return {"success": False}
+
+    monkeypatch.setattr(manage_comp_mod, "async_send_command_with_retry", fake_send)
+
+    resp = await manage_comp_mod.manage_components(
+        ctx=DummyContext(),
+        action="get_components",
+        target={"name": "Enemy"},
+        include_properties=True,
+        property_blacklist=["angularDrag"],
+    )
+
+    assert resp.get("success") is True
+    data = resp.get("data") or {}
+    comp = data["components"][0]
+    assert "angularDrag" not in comp["properties"]
+    assert comp["properties"] == {"mass": 5.0, "drag": 0.5}
+    assert data.get("_filtered") is True
 

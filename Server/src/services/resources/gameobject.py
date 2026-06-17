@@ -13,6 +13,7 @@ from fastmcp import Context
 from models import MCPResponse
 from services.registry import mcp_for_unity_resource
 from services.tools import get_unity_instance_from_context
+from services.tools.utils import filter_component_properties
 from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
 
@@ -74,7 +75,7 @@ async def get_gameobject_api_docs(_ctx: Context) -> MCPResponse:
                 "parameters": {
                     "page_size": "Number of components per page (default: 25)",
                     "cursor": "Pagination offset (default: 0)",
-                    "include_properties": "Include full property data (default: true)"
+                    "include_properties": "Include full property data (default: false)"
                 }
             },
             "mcpforunity://scene/gameobject/{instance_id}/component/{component_name}": {
@@ -159,7 +160,7 @@ class ComponentsData(BaseModel):
     nextCursor: int | None = None
     totalCount: int = 0
     hasMore: bool = False
-    includeProperties: bool = True
+    includeProperties: bool = False
 
 
 class ComponentsResponse(MCPResponse):
@@ -177,7 +178,9 @@ async def get_gameobject_components(
     instance_id: str,
     page_size: int = 25,
     cursor: int = 0,
-    include_properties: bool = True
+    include_properties: bool = False,
+    property_whitelist: list[str] | None = None,
+    property_blacklist: list[str] | None = None,
 ) -> MCPResponse:
     """Get all components on a GameObject."""
     unity_instance = await get_unity_instance_from_context(ctx)
@@ -198,7 +201,18 @@ async def get_gameobject_components(
         }
     )
 
-    return _normalize_response(response)
+    resp = _normalize_response(response)
+    if resp.success and (property_whitelist or property_blacklist) and isinstance(resp.data, dict):
+        components = resp.data.get("components")
+        if isinstance(components, list):
+            components, was_filtered = filter_component_properties(
+                components, property_whitelist, property_blacklist,
+            )
+            resp.data["components"] = components
+            if was_filtered:
+                resp.data["_filtered"] = True
+
+    return resp
 
 
 class SingleComponentData(BaseModel):

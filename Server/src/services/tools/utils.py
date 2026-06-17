@@ -212,6 +212,48 @@ def normalize_vector3(value: Any, param_name: str = "vector") -> tuple[list[floa
     return None, f"{param_name} must be a list, dict, or string, got {type(value).__name__}"
 
 
+def filter_component_properties(
+    components: list[dict],
+    whitelist: list[str] | None,
+    blacklist: list[str] | None,
+) -> tuple[list[dict], bool]:
+    """Filter properties within component dicts.
+
+    When *whitelist* is set, keep only those keys inside each component's
+    ``properties`` sub-dict.  When *blacklist* is set, remove those keys.
+    Metadata fields (``typeName``, ``instanceID``) are always preserved.
+
+    Returns ``(filtered_components, was_filtered)``.
+    """
+    if not whitelist and not blacklist:
+        return components, False
+
+    _METADATA_KEYS = {"typeName", "instanceID"}
+    filtered: list[dict] = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            filtered.append(comp)
+            continue
+
+        new_comp = {k: v for k, v in comp.items() if k in _METADATA_KEYS or k == "properties"}
+
+        # Copy over any other top-level metadata keys (e.g. "enabled")
+        for k, v in comp.items():
+            if k not in new_comp:
+                new_comp[k] = v
+
+        props = comp.get("properties")
+        if isinstance(props, dict):
+            if whitelist:
+                props = {k: v for k, v in props.items() if k in whitelist}
+            if blacklist:
+                props = {k: v for k, v in props.items() if k not in blacklist}
+            new_comp["properties"] = props
+        filtered.append(new_comp)
+
+    return filtered, True
+
+
 def normalize_string_list(value: Any, param_name: str = "list") -> tuple[list[str] | None, str | None]:
     """
     Normalize a string list parameter that might be a JSON string or plain string.
