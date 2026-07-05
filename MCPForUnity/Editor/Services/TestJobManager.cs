@@ -116,6 +116,9 @@ namespace MCPForUnity.Editor.Services
                 _currentJobId = null;
             }
             PersistToSessionState(force: true);
+            // Also unwind the runner service's pending run task (it holds the operation lock);
+            // no-op when the editor is legitimately in play mode or nothing is pending.
+            AbortWedgedRunnerSafely("clear_stuck requested");
             return cleared;
         }
 
@@ -488,6 +491,7 @@ namespace MCPForUnity.Editor.Services
 
             TestJob jobToReturn = null;
             bool shouldPersist = false;
+            bool shouldAbortRunner = false;
             lock (LockObj)
             {
                 if (!Jobs.TryGetValue(jobId, out var job))
@@ -495,16 +499,30 @@ namespace MCPForUnity.Editor.Services
                     return null;
                 }
 
-                // Check if job is stuck in "running" state without having called OnRunStarted (TotalTests still null).
-                // This happens when tests fail to initialize (e.g., unsaved scene, compilation issues).
-                // After 15 seconds without initialization, auto-fail the job to prevent hanging.
-                if (job.Status == TestJobStatus.Running && job.TotalTests == null)
+                // Auto-fail a job that is stuck in "running" but has never actually begun executing
+                // tests. This covers two ways a run can die before delivering RunFinished:
+                //   (a) the run never initialized at all — RunStarted was not delivered, so TotalTests
+                //       is still null (e.g. unsaved scene, compilation issues); and
+                //   (b) RunStarted announced a total, but the Unity Test Framework runner threw before
+                //       the first TestStarted / RunFinished (e.g. a NullReference during runner setup).
+                //       Here TotalTests is non-null yet no leaf test ever started or completed, and
+                //       neither RunFinished nor the awaited task ever fire — so nothing else clears the
+                //       job and it wedges _currentJobId indefinitely (get_test_job stays "running" and
+                //       every new run_tests is rejected with "tests_running").
+                // Detect both via "no leaf test has started and none completed", bounded by the init
+                // timeout measured from the last observed activity (StartedUnixMs when no callback ever
+                // fired, or the RunStarted timestamp for case (b)). A genuinely slow first test is not
+                // affected: once TestStarted fires, CurrentTestFullName is set and this guard is inert.
+                bool noTestHasBegun = job.Status == TestJobStatus.Running
+                    && job.CompletedTests == 0
+                    && string.IsNullOrEmpty(job.CurrentTestFullName);
+                if (noTestHasBegun)
                 {
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     long initTimeout = job.InitTimeoutMs > 0 ? job.InitTimeoutMs : DefaultInitializationTimeoutMs;
-                    if (!EditorApplication.isCompiling && !EditorApplication.isUpdating && now - job.StartedUnixMs > initTimeout)
+                    if (!EditorApplication.isCompiling && !EditorApplication.isUpdating && now - job.LastUpdateUnixMs > initTimeout)
                     {
-                        McpLog.Warn($"[TestJobManager] Job {jobId} failed to initialize within {initTimeout}ms, auto-failing");
+                        McpLog.Warn($"[TestJobManager] Job {jobId} stalled before any test started (no RunFinished within {initTimeout}ms), auto-failing");
                         job.Status = TestJobStatus.Failed;
                         job.Error = "Test job failed to initialize (tests did not start within timeout)";
                         job.FinishedUnixMs = now;
@@ -512,12 +530,51 @@ namespace MCPForUnity.Editor.Services
                         if (_currentJobId == jobId)
                         {
                             _currentJobId = null;
-                            // Keep TestRunStatus in sync: when initialization times out, neither
-                            // RunStarted nor RunFinished fires, so the running flag would otherwise leak.
-                            // Only clear it if this job is still the active one — a newer job may have taken over.
+                            // Keep TestRunStatus in sync: when the run dies before the first test, neither
+                            // a progressing RunStarted nor RunFinished clears the running flag, so it would
+                            // otherwise leak. Only clear it if this job is still the active one — a newer
+                            // job may have taken over.
                             TestRunStatus.MarkFinished();
                         }
                         shouldPersist = true;
+                    }
+                }
+
+                // Auto-fail a PlayMode job whose runner died MID-RUN (e.g. the Unity Test Framework
+                // threw a NullReference in PlayModeRunTask after tests had started): play mode
+                // exited, but RunFinished was never delivered and the awaited run task never
+                // completes, so nothing else finalizes the job — it stays "running" forever, and
+                // the incomplete completion source keeps holding the runner's operation lock, which
+                // wedges every subsequent run too. A healthy PlayMode run keeps the editor IN play
+                // mode and advances LastUpdateUnixMs on every leaf test, so "tests began + not in
+                // play mode + quiet past the stuck threshold" is unambiguous (RunFinished delivery
+                // after normal play-mode exit lands well within the threshold). EditMode jobs are
+                // not covered: they have no play-mode signal to distinguish a dead runner from a
+                // slow test.
+                bool midRunWedged = job.Status == TestJobStatus.Running
+                    && !noTestHasBegun
+                    && string.Equals(job.Mode, nameof(TestMode.PlayMode), StringComparison.OrdinalIgnoreCase)
+                    && !EditorApplication.isPlaying
+                    && !EditorApplication.isPlayingOrWillChangePlaymode
+                    && !EditorApplication.isCompiling
+                    && !EditorApplication.isUpdating;
+                if (midRunWedged)
+                {
+                    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    if (now - job.LastUpdateUnixMs > StuckThresholdMs)
+                    {
+                        McpLog.Warn($"[TestJobManager] Job {jobId} wedged mid-run at {job.CompletedTests}/{job.TotalTests} (play mode exited without RunFinished), auto-failing");
+                        job.Status = TestJobStatus.Failed;
+                        job.Error = "Test runner died mid-run (play mode exited without delivering RunFinished)";
+                        job.FinishedUnixMs = now;
+                        job.LastUpdateUnixMs = now;
+                        if (_currentJobId == jobId)
+                        {
+                            _currentJobId = null;
+                            TestRunStatus.MarkFinished();
+                        }
+                        shouldPersist = true;
+                        shouldAbortRunner = true;
                     }
                 }
 
@@ -528,7 +585,31 @@ namespace MCPForUnity.Editor.Services
             {
                 PersistToSessionState(force: true);
             }
+            if (shouldAbortRunner)
+            {
+                AbortWedgedRunnerSafely($"job {jobId} wedged mid-run");
+            }
             return jobToReturn;
+        }
+
+        /// <summary>
+        /// Best-effort cancellation of the runner service's pending run task. Without this, a
+        /// runner that died mid-run leaves TestRunnerService's completion source incomplete, which
+        /// keeps its operation lock held — every later RunTestsAsync would wait forever (surfacing
+        /// as init-timeout failures) until a domain reload happens to recreate the service.
+        /// Called OUTSIDE the job lock: cancelling resumes the awaiting RunTestsAsync and fires
+        /// FinalizeFromTask, which re-enters this class.
+        /// </summary>
+        private static void AbortWedgedRunnerSafely(string reason)
+        {
+            try
+            {
+                MCPServiceLocator.Tests.TryAbortWedgedRun(reason);
+            }
+            catch (Exception ex)
+            {
+                McpLog.Warn($"[TestJobManager] Failed to abort wedged runner: {ex.Message}");
+            }
         }
 
         internal static object ToSerializable(TestJob job, bool includeDetails, bool includeFailedTests)
