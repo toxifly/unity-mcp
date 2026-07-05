@@ -48,5 +48,13 @@ namespace MCPForUnity.Editor.Services
         /// <param name="mode">The test mode (EditMode or PlayMode).</param>
         /// <param name="filterOptions">Optional filter options to run specific tests. Pass null to run all tests.</param>
         Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null);
+
+        /// <summary>
+        /// Cancels a pending test run whose runner died without delivering RunFinished (e.g. a
+        /// Unity Test Framework exception mid-run that kicked the editor out of play mode).
+        /// No-op (returns false) when no run is pending or the editor is in/entering play mode.
+        /// </summary>
+        /// <param name="reason">Human-readable reason recorded in the log.</param>
+        bool TryAbortWedgedRun(string reason);
     }
 }

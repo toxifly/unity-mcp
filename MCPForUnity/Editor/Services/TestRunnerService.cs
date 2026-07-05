@@ -278,6 +278,33 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
+        /// <summary>
+        /// Cancels a test run whose runner died without delivering RunFinished (e.g. a Unity Test
+        /// Framework NullReference mid-run that kicked the editor out of play mode). Cancelling the
+        /// pending completion source unwinds the whole pipeline: the awaiting
+        /// <see cref="RunTestsAsync"/> resumes (restoring play-mode options and releasing the
+        /// operation lock) and StartJob's continuation finalizes the job record. Refuses while the
+        /// editor is in or entering play mode — a live run keeps updating its job record and must
+        /// not be aborted from a staleness heuristic.
+        /// </summary>
+        public bool TryAbortWedgedRun(string reason)
+        {
+            if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return false;
+            }
+
+            var tcs = _runCompletionSource;
+            if (tcs == null || tcs.Task.IsCompleted)
+            {
+                return false;
+            }
+
+            McpLog.Warn($"[TestRunnerService] Aborting wedged test run: {reason}");
+            TestRunStatus.MarkFinished();
+            return tcs.TrySetCanceled();
+        }
+
         public void Dispose()
         {
             try
