@@ -73,3 +73,6 @@ tools/.unity-check-logs/
 # Superpowers skill working artifacts (specs, plans, SDD ledger)
 docs/superpowers/
 .superpowers/
+
+# This fork intentionally does not carry GitHub Actions workflows.
+/.github/workflows/
