@@ -41,6 +41,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] First-class `inspect_serialized` with property whitelists, missing-reference findings, stable identity, and prefab property provenance.
 - [x] Compact, always-registered `inspect_provenance` for scene identity, prefab roots/sources, property overrides, and component override state.
 - [x] Compact capability discovery resource with versioned, registration-aware tool availability.
+- [x] Shared mutation transaction service with dirty-state preflight, serialized change previews, scoped saves, and rollback.
 
 Implemented on 2026-07-10:
 
@@ -105,6 +106,13 @@ Implemented on 2026-07-10:
 - Added the always-registered `mcpforunity://capabilities` resource with a compact, versioned schema for `measure_ui`, `inspect_serialized`, and `inspect_provenance`.
 - Derived advertised availability from the live server tool registry so disabled, missing, or unfinished capabilities are not falsely claimed. Mutation transactions will appear only when their backing tools are implemented.
 - Added focused tests for resource registration, the compact manifest contract, and omission of an unavailable tool. Validation: all 13 focused capability/measurement/inspection tests passed; a real server construction registered all 50 tools and 26 resources successfully. The full Server suite reached 1,353 passed and 3 skipped; its 6 failures remain the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures.
+
+Implemented on 2026-07-10:
+
+- Added the shared Unity-side `MutationTransaction` service. It resolves declared targets to stable identities, captures the loaded/active scene and prefab-stage setup, rejects pre-dirty target scenes by default and pre-dirty authored assets, and opens one complete-object Undo group.
+- Added normalized `SerializedObject` fingerprints across every object and component in each target scene/asset. Transactions expose exact added, removed, and modified property records with before/after values, while byte snapshots provide a save-time rollback safety net.
+- Added validator-gated commits, scoped scene/asset saves, detection of save-time serialization changes, restoration of newly created or modified asset bytes, and stable `SCENE_ALREADY_DIRTY`, `ASSET_ALREADY_DIRTY`, `UNEXPECTED_SERIALIZED_CHANGES`, `SAVE_FAILED`, and `ROLLBACK_FAILED` errors.
+- Added five focused EditMode tests for dirty-scene rejection, normalized change detection, automatic disposal rollback, created-object rollback, commit, and validator rejection. Unity 6.5 compiled the new service and test files without diagnostics. The focused run could not execute because the existing fixture has 28 unrelated Unity 6.5 compile errors, primarily obsolete-as-error `GetInstanceID` calls plus one pre-existing `Resources.UnloadAsset` namespace collision.
 
 ---
 
@@ -489,6 +497,8 @@ This should be available without dumping the whole component.
 ### Stage 3 — Transactional scene and prefab mutations
 
 #### 6.10 Add a mutation transaction layer
+
+**Implementation status:** Complete (2026-07-10) for the shared transaction foundation. Change-guard request integration, dry-run tools, atomic prefab replacement, and public scoped-save tools remain the separate steps in 6.11-6.14.
 
 All scoped asset mutations should run through a shared transaction service:
 
