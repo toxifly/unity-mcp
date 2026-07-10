@@ -1,3 +1,4 @@
+using System.Linq;
 using MCPForUnity.Editor.Tools;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -62,6 +63,23 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual(1, findings.Count, result.ToString());
             Assert.AreEqual("label", findings[0].Value<string>("property"));
             Assert.AreEqual("fixture", findings[0].Value<string>("value"));
+        }
+
+        [Test]
+        public void UnfilteredGameObjectTarget_InspectsGameObjectProperties()
+        {
+            string globalId = GlobalObjectId.GetGlobalObjectIdSlow(_owner).ToString();
+            JObject result = ToJObject(InspectSerialized.HandleCommand(new JObject
+            {
+                ["targets"] = new JArray(globalId),
+                ["properties"] = new JArray("m_Name")
+            }));
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            JToken finding = result["data"]["findings"].Single(item =>
+                item.Value<string>("component") == typeof(GameObject).FullName);
+            Assert.AreEqual("m_Name", finding.Value<string>("property"));
+            Assert.AreEqual(_owner.name, finding.Value<string>("value"));
         }
 
         [Test]
@@ -137,7 +155,7 @@ namespace MCPForUnityTests.Editor.Tools
             string holderId = GlobalObjectId.GetGlobalObjectIdSlow(holder).ToString();
 
             AssetDatabase.DeleteAsset(referencedPath);
-            Resources.UnloadAsset(holder);
+            UnityEngine.Resources.UnloadAsset(holder);
             holder = AssetDatabase.LoadAssetAtPath<SerializedMissingReferenceFixture>(holderPath);
             try
             {

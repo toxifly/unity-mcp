@@ -178,7 +178,11 @@ namespace MCPForUnity.Editor.Tools
 
             Component[] components = go.GetComponents<Component>().Where(item => item != null).ToArray();
             if (string.IsNullOrWhiteSpace(componentType))
-                return components.Cast<UnityEngine.Object>().ToList();
+            {
+                var result = new List<UnityEngine.Object> { go };
+                result.AddRange(components.Cast<UnityEngine.Object>());
+                return result;
+            }
 
             Type type = GameObjectLookup.FindComponentType(componentType);
             if (type == null)
@@ -209,8 +213,8 @@ namespace MCPForUnity.Editor.Tools
             var matches = new List<UnityEngine.Object>();
             foreach (UnityEngine.Object target in serializedTargets)
             {
-                if (!(target is Component component)) continue;
-                Type type = component.GetType();
+                if (target == null) continue;
+                Type type = target.GetType();
                 string fullPrefix = type.FullName + ".";
                 string shortPrefix = type.Name + ".";
                 if (requestedProperty.StartsWith(fullPrefix, StringComparison.Ordinal))

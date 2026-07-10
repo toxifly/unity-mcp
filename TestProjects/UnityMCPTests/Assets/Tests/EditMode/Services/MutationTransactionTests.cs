@@ -229,6 +229,75 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void ManageGameObject_ChangeGuardRejectsUnexpectedPropertyOnExpectedObject()
+        {
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["setActive"] = false,
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray(root.name),
+                    ["expected_properties"] = new JArray("m_Name")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsTrue(root.activeSelf);
+        }
+
+        [Test]
+        public void ManageGameObject_ChangeGuardRejectsExpectedPropertyOnUnexpectedObject()
+        {
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["setActive"] = false,
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray("SomeOtherObject"),
+                    ["expected_properties"] = new JArray(root.name + ".GameObject.m_IsActive")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsTrue(root.activeSelf);
+        }
+
+        [Test]
+        public void BeginAssets_FingerprintsPrefabChildComponents()
+        {
+            var prefabSource = new GameObject("FingerprintPrefabRoot");
+            var child = new GameObject("FingerprintPrefabChild");
+            child.transform.SetParent(prefabSource.transform, false);
+            child.AddComponent<BoxCollider>();
+            PrefabUtility.SaveAsPrefabAsset(prefabSource, PrefabPath);
+            Object.DestroyImmediate(prefabSource);
+
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath);
+            BoxCollider collider = prefab.transform.GetChild(0).GetComponent<BoxCollider>();
+            using (MutationTransaction transaction = MutationTransaction.BeginAssets(new[] { PrefabPath }))
+            {
+                collider.enabled = false;
+
+                SerializedChange change = transaction.Changes.Single(item =>
+                    item.ComponentType == typeof(BoxCollider).FullName && item.Property == "m_Enabled");
+                Assert.AreEqual("true", change.Before);
+                Assert.AreEqual("false", change.After);
+            }
+
+            Assert.IsTrue(collider.enabled, "Rolling back must restore child component properties.");
+        }
+
+        [Test]
         public void ManageGameObject_DryRunReturnsChangesAndRollsBack()
         {
             JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject

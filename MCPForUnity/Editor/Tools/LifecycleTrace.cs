@@ -22,6 +22,7 @@ namespace MCPForUnity.Editor.Tools
         private const int MaxTargets = 50;
         private const int MaxProperties = 100;
         private const int MaxEvents = 5000;
+        private const int MaxTerminalSessions = 20;
         private static readonly Dictionary<string, TraceSession> Sessions = new();
         private static readonly Dictionary<int, string> PendingProbes = new();
         private static readonly MethodInfo ClearSceneDirtiness = typeof(EditorSceneManager).GetMethod(
@@ -355,6 +356,18 @@ namespace MCPForUnity.Editor.Tools
             session.Status = reason == "timed_out" ? "timed_out" : "stopped";
             session.StopReason = reason;
             session.StoppedUtc = DateTime.UtcNow;
+            PruneTerminalSessions();
+        }
+
+        private static void PruneTerminalSessions()
+        {
+            TraceSession[] terminal = Sessions.Values
+                .Where(item => item.Status != "running")
+                .OrderBy(item => item.StoppedUtc ?? item.StartedUtc)
+                .ThenBy(item => item.Id, StringComparer.Ordinal)
+                .ToArray();
+            foreach (TraceSession session in terminal.Take(Math.Max(0, terminal.Length - MaxTerminalSessions)))
+                Sessions.Remove(session.Id);
         }
 
         private static void PlayModeChanged(PlayModeStateChange state)
@@ -368,6 +381,7 @@ namespace MCPForUnity.Editor.Tools
         {
             foreach (TraceSession session in Sessions.Values.Where(item => item.Status == "running").ToArray())
                 Cleanup(session, "domain_reload", true);
+            PruneTerminalSessions();
             try { SessionState.SetString(ReloadStateKey, JsonConvert.SerializeObject(Sessions.Values)); }
             catch { SessionState.EraseString(ReloadStateKey); }
         }
@@ -385,6 +399,7 @@ namespace MCPForUnity.Editor.Tools
                     session.Probes = new List<LifecycleTraceProbe>();
                     Sessions[session.Id] = session;
                 }
+                PruneTerminalSessions();
             }
             catch { }
         }

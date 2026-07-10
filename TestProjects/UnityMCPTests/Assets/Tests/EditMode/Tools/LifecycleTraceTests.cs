@@ -1,5 +1,6 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Tools;
@@ -110,6 +111,54 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsNull(_target.GetComponent<LifecycleTraceProbe>());
         }
 
+        [Test]
+        public void CompletedSessions_AreEvictedAtRetentionLimit()
+        {
+            _target = new GameObject("LifecycleTraceRetentionTarget");
+            const int sessionsToCreate = 21;
+            var sessionIds = new string[sessionsToCreate];
+            try
+            {
+                for (int i = 0; i < sessionsToCreate; i++)
+                {
+                    JObject started = ToJObject(LifecycleTrace.HandleCommand(new JObject
+                    {
+                        ["action"] = "start",
+                        ["targets"] = new JArray(_target.name),
+                        ["events"] = new JArray("selection_change"),
+                        ["maxEvents"] = 1,
+                        ["timeoutSeconds"] = 60
+                    }));
+                    Assert.IsTrue(started.Value<bool>("success"), started.ToString());
+                    sessionIds[i] = started["data"].Value<string>("session_id");
+
+                    JObject stopped = ToJObject(LifecycleTrace.HandleCommand(new JObject
+                    {
+                        ["action"] = "stop",
+                        ["sessionId"] = sessionIds[i]
+                    }));
+                    Assert.IsTrue(stopped.Value<bool>("success"), stopped.ToString());
+                }
+
+                int evictedCount = sessionIds.Count(sessionId =>
+                {
+                    JObject status = ToJObject(LifecycleTrace.HandleCommand(new JObject
+                    {
+                        ["action"] = "status",
+                        ["sessionId"] = sessionId
+                    }));
+                    return !status.Value<bool>("success")
+                        && status.Value<string>("code") == "TRACE_SESSION_NOT_FOUND";
+                });
+                Assert.GreaterOrEqual(evictedCount, 1);
+                Assert.LessOrEqual(TerminalSessionCount(), 20);
+            }
+            finally
+            {
+                RemoveSessions(sessionIds);
+            }
+        }
+
         private JObject Start(int maxEvents, params string[] events)
         {
             return ToJObject(LifecycleTrace.HandleCommand(new JObject
@@ -147,12 +196,7 @@ namespace MCPForUnityTests.Editor.Tools
 
         private static void ExpireSession(string sessionId)
         {
-            FieldInfo sessionsField = typeof(LifecycleTrace).GetField(
-                "Sessions",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            Assert.IsNotNull(sessionsField, "LifecycleTrace session store was not found.");
-            var sessions = sessionsField.GetValue(null) as IDictionary;
-            Assert.IsNotNull(sessions, "LifecycleTrace session store is not dictionary-compatible.");
+            IDictionary sessions = GetSessions();
             object session = sessions[sessionId];
             Assert.IsNotNull(session, $"LifecycleTrace session '{sessionId}' was not found.");
             FieldInfo expiresField = session.GetType().GetField(
@@ -160,6 +204,30 @@ namespace MCPForUnityTests.Editor.Tools
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
             Assert.IsNotNull(expiresField, "LifecycleTrace expiry field was not found.");
             expiresField.SetValue(session, DateTime.UtcNow.AddSeconds(-1));
+        }
+
+        private static int TerminalSessionCount()
+        {
+            return GetSessions().Values.Cast<object>().Count(session =>
+                (string)session.GetType().GetField("Status").GetValue(session) != "running");
+        }
+
+        private static void RemoveSessions(IEnumerable<string> sessionIds)
+        {
+            IDictionary sessions = GetSessions();
+            foreach (string sessionId in sessionIds.Where(item => !string.IsNullOrEmpty(item)))
+                sessions.Remove(sessionId);
+        }
+
+        private static IDictionary GetSessions()
+        {
+            FieldInfo sessionsField = typeof(LifecycleTrace).GetField(
+                "Sessions",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(sessionsField, "LifecycleTrace session store was not found.");
+            var sessions = sessionsField.GetValue(null) as IDictionary;
+            Assert.IsNotNull(sessions, "LifecycleTrace session store is not dictionary-compatible.");
+            return sessions;
         }
 
         private static void InvokeLifecycleMethod(string methodName)
