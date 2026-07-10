@@ -40,6 +40,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] First-class, always-registered `measure_ui` with explicit coordinate spaces and geometry assertions.
 - [x] First-class `inspect_serialized` with property whitelists, missing-reference findings, stable identity, and prefab property provenance.
 - [x] Compact, always-registered `inspect_provenance` for scene identity, prefab roots/sources, property overrides, and component override state.
+- [x] Compact capability discovery resource with versioned, registration-aware tool availability.
 
 Implemented on 2026-07-10:
 
@@ -98,6 +99,12 @@ Implemented on 2026-07-10:
 - Added compact scene/asset identity plus nearest and outermost prefab instance roots, corresponding source object and asset, prefab instance status, and whether the instance has any overrides.
 - Scoped property override paths and added/removed component records to the queried object. Target paging and a combined 500-record nested-provenance limit keep response payloads bounded, with per-target counts and truncation markers.
 - Added four server registration/request/bounds tests and four Unity EditMode tests covering scene identity, prefab roots/source/property paths, component overrides, and asset-path targets. Validation: all 7 focused Server provenance/serialized-inspection tests passed. The full Server suite reached 1,350 passed and 3 skipped; its 6 failures remain the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures. The new Unity package and focused EditMode test assemblies both compiled cleanly with Unity 6.5 compiler responses. The fixture was locked by a running editor, so the four EditMode tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added the always-registered `mcpforunity://capabilities` resource with a compact, versioned schema for `measure_ui`, `inspect_serialized`, and `inspect_provenance`.
+- Derived advertised availability from the live server tool registry so disabled, missing, or unfinished capabilities are not falsely claimed. Mutation transactions will appear only when their backing tools are implemented.
+- Added focused tests for resource registration, the compact manifest contract, and omission of an unavailable tool. Validation: all 13 focused capability/measurement/inspection tests passed; a real server construction registered all 50 tools and 26 resources successfully. The full Server suite reached 1,353 passed and 3 skipped; its 6 failures remain the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures.
 
 ---
 
@@ -736,6 +743,8 @@ Ignore known volatile/editor-only properties through an explicit allowlist, not 
 - Never embed screenshots or previews unless requested.
 
 ### 7.4 Capability discovery
+
+**Implementation status:** Complete (2026-07-10). `mcpforunity://capabilities` advertises versioned capabilities only when all backing server tools are registered.
 
 Expose a compact capability resource:
 
