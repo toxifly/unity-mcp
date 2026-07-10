@@ -77,16 +77,9 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse($"refresh_failed: {ex.Message}");
             }
 
-            // Unity 6+ fix: Skip wait_for_ready when compile was requested.
-            // The EditorApplication.update polling in WaitForUnityReadyAsync doesn't survive
-            // domain reloads properly in Unity 6+, causing infinite compilation loops.
-            // When compilation is requested, return immediately and let client poll editor_state.
-            // Earlier Unity versions retain the original behavior.
-#if UNITY_6000_0_OR_NEWER
+            // A Task continuation cannot survive an assembly reload. The server polls the
+            // persisted editor-state record when compilation was requested.
             bool shouldWaitForReady = waitForReady && !compileRequested;
-#else
-            bool shouldWaitForReady = waitForReady;
-#endif
             if (shouldWaitForReady)
             {
                 try

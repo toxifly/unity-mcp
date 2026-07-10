@@ -19,6 +19,7 @@ namespace MCPForUnity.Editor.Services
     {
         private static readonly object LockObj = new();
         private static long _sequence;
+        private static long _updateTick;
         private static long _observedUnixMs;
 
         private static bool _lastIsCompiling;
@@ -54,6 +55,9 @@ namespace MCPForUnity.Editor.Services
 
             [JsonProperty("sequence")]
             public long Sequence { get; set; }
+
+            [JsonProperty("update_tick")]
+            public long UpdateTick { get; set; }
 
             [JsonProperty("unity")]
             public EditorStateUnity Unity { get; set; }
@@ -165,6 +169,15 @@ namespace MCPForUnity.Editor.Services
 
             [JsonProperty("last_domain_reload_after_unix_ms")]
             public long? LastDomainReloadAfterUnixMs { get; set; }
+
+            [JsonProperty("last_compile_errors")]
+            public int LastCompileErrors { get; set; }
+
+            [JsonProperty("last_compile_warnings")]
+            public int LastCompileWarnings { get; set; }
+
+            [JsonProperty("last_compile_duration_seconds")]
+            public double LastCompileDurationSeconds { get; set; }
         }
 
         private sealed class EditorStateAssets
@@ -280,6 +293,7 @@ namespace MCPForUnity.Editor.Services
 
         private static void OnUpdate()
         {
+            _updateTick++;
             // Throttle to reduce overhead while keeping the snapshot fresh enough for polling clients.
             double now = EditorApplication.timeSinceStartup;
             // Use GetActualIsCompiling() to avoid Play mode false positives (issue #582)
@@ -418,6 +432,7 @@ namespace MCPForUnity.Editor.Services
                 SchemaVersion = "unity-mcp/editor_state@2",
                 ObservedAtUnixMs = _observedUnixMs,
                 Sequence = _sequence,
+                UpdateTick = _updateTick,
                 Unity = new EditorStateUnity
                 {
                     InstanceId = null,
@@ -452,10 +467,13 @@ namespace MCPForUnity.Editor.Services
                 {
                     IsCompiling = isCompiling,
                     IsDomainReloadPending = _domainReloadPending,
-                    LastCompileStartedUnixMs = _lastCompileStartedUnixMs,
-                    LastCompileFinishedUnixMs = _lastCompileFinishedUnixMs,
+                    LastCompileStartedUnixMs = _lastCompileStartedUnixMs ?? CompilationStateTracker.LastStartedUnixMs,
+                    LastCompileFinishedUnixMs = _lastCompileFinishedUnixMs ?? CompilationStateTracker.LastFinishedUnixMs,
                     LastDomainReloadBeforeUnixMs = _domainReloadBeforeUnixMs,
-                    LastDomainReloadAfterUnixMs = _domainReloadAfterUnixMs
+                    LastDomainReloadAfterUnixMs = _domainReloadAfterUnixMs,
+                    LastCompileErrors = CompilationStateTracker.LastErrors,
+                    LastCompileWarnings = CompilationStateTracker.LastWarnings,
+                    LastCompileDurationSeconds = CompilationStateTracker.LastDurationSeconds
                 },
                 Assets = new EditorStateAssets
                 {
@@ -515,6 +533,7 @@ namespace MCPForUnity.Editor.Services
                 // The main GC optimization comes from state-change detection (OnUpdate)
                 // which prevents unnecessary _cached rebuilds, not from caching the clone.
                 var clone = (JObject)_cached.DeepClone();
+                clone["update_tick"] = _updateTick;
 
                 // When Unity is backgrounded, OnUpdate is throttled and the
                 // cached timestamp grows stale even though the data is current.
