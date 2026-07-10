@@ -78,8 +78,10 @@ class _DummyMiddlewareContext:
 
 class _DummyToolResult:
     """Stub for fastmcp.server.server.ToolResult"""
-    def __init__(self, content=None, is_error=False):
+    def __init__(self, content=None, structured_content=None, meta=None, is_error=False):
         self.content = content or []
+        self.structured_content = structured_content
+        self.meta = meta
         self.is_error = is_error
 
 
