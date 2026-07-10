@@ -247,12 +247,15 @@ namespace MCPForUnity.Editor.Tools.Prefabs
 
                     if (dryRun)
                     {
+                        int? previewInstanceId = linkSceneInstance
+                            ? linkedInstance.GetInstanceIDCompat()
+                            : (int?)null;
                         transaction.Rollback();
                         return new SuccessResponse("Atomic prefab creation preview completed and rolled back.", new
                         {
                             prefabPath = sanitizedPath,
                             linkedSceneInstance = linkSceneInstance,
-                            instanceId = linkSceneInstance ? linkedInstance.GetInstanceIDCompat() : (int?)null,
+                            instanceId = previewInstanceId,
                             change_preview = new { dry_run = true, committed = false, rolled_back = true, changes }
                         });
                     }

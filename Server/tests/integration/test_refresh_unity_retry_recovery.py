@@ -97,6 +97,29 @@ async def test_compile_refresh_returns_terminal_summary_after_stable_ready(monke
 
 
 @pytest.mark.asyncio
+async def test_acknowledged_no_wait_compile_returns_resumable_job(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        return {"success": True, "message": "Refresh requested.",
+                "data": {"resulting_state": "compiling"}}
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send)
+
+    response = await refresh_mod.refresh_unity(
+        DummyContext(), compile="request", wait_for_ready=False,
+    )
+    payload = response.model_dump()
+    job_id = payload["data"]["job_id"]
+
+    assert payload["data"]["status"] == "running"
+    assert payload["data"]["recovered_from_disconnect"] is False
+    assert job_id in refresh_mod._REFRESH_JOBS
+
+
+@pytest.mark.asyncio
 async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeypatch):
     import services.tools.refresh_unity as refresh_mod
 

@@ -417,14 +417,15 @@ async def refresh_unity(
     except Exception:
         pass
 
-    if not wait_for_ready and recovered_from_disconnect:
-        # The request was sent but the domain reload consumed its response. Keep
-        # the job so callers can resume it without triggering another compile.
+    if not wait_for_ready and compile == "request":
+        # Keep every acknowledged no-wait compile resumable. Unity does not echo
+        # the server-generated job ID, so returning the transport response would
+        # otherwise discard the only handle callers can use to obtain the summary.
         return MCPResponse(
             success=True,
-            message="Refresh requested; Unity is reloading.",
+            message="Refresh requested; Unity compilation is running.",
             data={"job_id": refresh_job_id, "status": "running", "resulting_state": "compiling",
-                  "recovered_from_disconnect": True},
+                  "recovered_from_disconnect": recovered_from_disconnect},
         )
 
     if wait_for_ready and ready_result is not None:

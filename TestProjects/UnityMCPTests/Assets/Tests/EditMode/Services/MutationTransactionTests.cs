@@ -208,6 +208,49 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void ManageGameObject_DeleteDryRunRestoresDeletedObject()
+        {
+            int instanceId = root.GetInstanceIDCompat();
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "delete",
+                ["target"] = instanceId,
+                ["searchMethod"] = "by_id",
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsTrue(response["data"]["change_preview"]["rolled_back"].Value<bool>());
+            Assert.IsNotNull(GameObject.Find("MutationTransactionRoot"));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_DeleteGuardRejectionRestoresDeletedObject()
+        {
+            int instanceId = root.GetInstanceIDCompat();
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "delete",
+                ["target"] = instanceId,
+                ["searchMethod"] = "by_id",
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray("SomeOtherObject")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsTrue(response["data"]["rolled_back"].Value<bool>());
+            Assert.IsNotNull(GameObject.Find("MutationTransactionRoot"));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
         public void ManageGameObject_PropertyScopeAcceptsExpectedProperty()
         {
             JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
@@ -386,6 +429,7 @@ namespace MCPForUnityTests.Editor.Services
 
             Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
             Assert.IsTrue(response["data"]["change_preview"]["rolled_back"].Value<bool>());
+            Assert.AreNotEqual(0, response["data"]["instanceId"].Value<int>());
             Assert.IsNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
             Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(root));
             Assert.IsFalse(testScene.isDirty);
