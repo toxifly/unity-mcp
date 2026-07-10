@@ -1,6 +1,6 @@
 # Unity MCP efficiency and safety implementation plan
 
-**Status:** In progress  
+**Status:** Complete
 **Last updated:** 2026-07-10  
 **Audience:** Unity MCP maintainers  
 **Package used by this project:** `../../unity-mcp/MCPForUnity`  
@@ -47,6 +47,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Atomic prefab creation and optional scene replacement with guarded, two-asset rollback.
 - [x] Transaction-backed scoped scene, prefab, and asset saves plus read-only dirty-change previews.
 - [x] Opt-in, bounded lifecycle and serialized-property trace sessions with temporary instrumentation cleanup.
+- [x] Lifecycle trace domain-reload persistence and timeout cleanup integration coverage.
 
 Implemented on 2026-07-10:
 
@@ -155,6 +156,12 @@ Implemented on 2026-07-10:
 - Added hidden temporary callback proxies for `Awake`, `OnEnable`, `OnDisable`, and `OnDestroy`, plus editor hooks for selection changes and normalized `SerializedProperty` snapshots. Timeline records use monotonic sequence numbers, frame/time metadata, stable object identity, exact before/after property values, and explicit `callback_source`/`observation` fields so proxy observations are not presented as inferred causality.
 - Preserved scene dirty state around proxy attachment and removal. Sessions automatically remove instrumentation on stop, timeout, Play Mode exit, start failure, and domain reload; reload persists the already-recorded terminal timeline through `SessionState` so ordering and diagnostics are not lost.
 - Advertised `lifecycle_tracing` version 1 through `mcpforunity://capabilities`. Added four focused server contract/registration/bounds tests and two Unity EditMode behavioral tests for inactive-to-active tracing, serialized changes, sequence ordering, event truncation, and cleanup. Validation: all 7 focused server lifecycle/capability tests passed. The full Server suite reached 1,371 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. Unity 6000.5 compiled the new package files without diagnostics, but 28 unrelated obsolete-as-error calls plus one existing `Resources.UnloadAsset` namespace collision prevented the fixture EditMode test assembly from compiling, so the two Unity tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added dedicated EditMode integration tests that round-trip a running trace through the real assembly-reload persistence and restoration handlers, then verify the terminal timeline remains ordered and instrumentation is detached.
+- Added deterministic timeout integration coverage that expires a live session through the real editor update path and verifies the `timed_out` state, stop reason, and probe cleanup.
+- Validation: all 7 focused server lifecycle/capability tests passed and `git diff --check` passed. No Unity editor executable is installed locally, so the two new EditMode cases are checked in but not claimed as executed in this environment.
 
 ---
 
@@ -762,7 +769,7 @@ The trace should return a compact ordered timeline:
 
 #### 6.18 Stage 4 acceptance tests
 
-**Implementation status:** Partial (2026-07-10). Focused tests cover inactive-to-active callbacks, ordered serialized-property changes, cleanup, and explicit event-cap truncation. Domain-reload and timeout behavior are implemented, but fixture-wide Unity 6.5 compilation failures prevented execution and dedicated reload/timeout integration coverage remains for the next step.
+**Implementation status:** Complete (2026-07-10). Focused tests cover inactive-to-active callbacks, ordered serialized-property changes, cleanup, explicit event-cap truncation, domain-reload persistence, and timeout cleanup. The reload test exercises the same persistence and restoration handlers deterministically because a real compilation reload interrupts the EditMode test runner.
 
 - Trace inactive-to-active prefab instances across `Awake` and `OnEnable`.
 - Maintain ordering across one domain reload where supported.
