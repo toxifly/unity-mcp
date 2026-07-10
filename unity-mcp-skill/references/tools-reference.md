@@ -194,6 +194,28 @@ find_gameobjects(
 # Returns: {"ids": [12345, 67890], "next_cursor": 50, ...}
 ```
 
+### measure_ui
+
+Measure uGUI RectTransform bounds without a screenshot (read-only). Returns each target's
+rectangle in canvas-local space (origin = reference centre, y up) and/or screen pixels
+(y up from bottom). Use for numeric UI-layout verification — clearances, overlaps, clipping,
+off-screen checks — during iteration: it is deterministic and ~cheap where a Game View capture
+is large and returns white when the view is unfocused. Leave the "does it look right" judgement
+to a human viewing the live Game View.
+
+```python
+measure_ui(
+    targets=["Btn_Draft", "Canvas/Panel/Title"],  # list[str]|str — names or hierarchy paths
+    container="RosterTiles",     # str — measure this GO + all its immediate RectTransform children
+    reference="Canvas",          # str — GO defining canvas-local origin (default: first target's root Canvas)
+    include_children=False,      # bool — also measure each target's immediate RectTransform children
+    include_inactive=True,       # bool — include hidden/gated objects (default true)
+    space="both"                 # "canvas"|"screen"|"both"
+)
+# Returns: {"success": true, "data": {"reference": {...}, "referenceSize": {"width":1920,"height":1080},
+#           "elements": [{"name","path","active","canvas":{xMin,yMin,xMax,yMax,width,height,cx,cy},"screen":{...}}]}}
+```
+
 ---
 
 ## GameObject Tools
