@@ -108,6 +108,25 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void CommitWithSave_AllowsCreatedObjectIdentityToStabilize()
+        {
+            GameObject child;
+            using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
+            {
+                child = new GameObject("PersistentTransactionalChild");
+                Undo.RegisterCreatedObjectUndo(child, "Create persistent child");
+                child.transform.SetParent(root.transform, false);
+
+                Assert.DoesNotThrow(() => transaction.Commit(save: true));
+            }
+
+            Assert.IsNotNull(child);
+            Assert.AreEqual(root.transform, child.transform.parent);
+            Assert.IsFalse(root.scene.isDirty);
+            Assert.IsFalse(GlobalObjectId.GetGlobalObjectIdSlow(child).ToString().EndsWith("-0-0"));
+        }
+
+        [Test]
         public void Commit_WhenValidatorRejects_RollsBackWithStableCode()
         {
             using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))

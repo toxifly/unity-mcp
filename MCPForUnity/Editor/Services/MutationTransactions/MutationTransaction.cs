@@ -187,9 +187,12 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                         throw new MutationTransactionException(
                             "SCENE_ALREADY_DIRTY",
                             "A preserved pre-dirty scene cannot be saved by this transaction.");
+                    Dictionary<int, string> identitiesBeforeSave = CaptureObjectIdentities();
                     SaveTargetsOnly();
+                    IReadOnlyDictionary<string, string> stabilizedIdentities =
+                        CaptureStabilizedIdentityAliases(identitiesBeforeSave);
                     IReadOnlyList<SerializedChange> savedChanges = Changes;
-                    if (!SameChanges(changes, savedChanges))
+                    if (!SameChanges(changes, savedChanges, stabilizedIdentities))
                     {
                         RollbackInternal();
                         throw new MutationTransactionException(
@@ -522,18 +525,93 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
 
         private static bool SameChanges(
             IReadOnlyList<SerializedChange> left,
-            IReadOnlyList<SerializedChange> right)
+            IReadOnlyList<SerializedChange> right,
+            IReadOnlyDictionary<string, string> identityAliases = null)
         {
             if (left.Count != right.Count) return false;
+
+            SerializedChange[] orderedLeft = left
+                .OrderBy(change => change.Kind, StringComparer.Ordinal)
+                .ThenBy(change => change.ObjectId, StringComparer.Ordinal)
+                .ThenBy(change => change.ObjectPath, StringComparer.Ordinal)
+                .ThenBy(change => change.AssetPath, StringComparer.Ordinal)
+                .ThenBy(change => change.ComponentType, StringComparer.Ordinal)
+                .ThenBy(change => change.Property, StringComparer.Ordinal)
+                .ThenBy(change => change.Before, StringComparer.Ordinal)
+                .ThenBy(change => change.After, StringComparer.Ordinal)
+                .ToArray();
+            SerializedChange[] orderedRight = right
+                .Select(change => NormalizeIdentityAliases(change, identityAliases))
+                .OrderBy(change => change.Kind, StringComparer.Ordinal)
+                .ThenBy(change => change.ObjectId, StringComparer.Ordinal)
+                .ThenBy(change => change.ObjectPath, StringComparer.Ordinal)
+                .ThenBy(change => change.AssetPath, StringComparer.Ordinal)
+                .ThenBy(change => change.ComponentType, StringComparer.Ordinal)
+                .ThenBy(change => change.Property, StringComparer.Ordinal)
+                .ThenBy(change => change.Before, StringComparer.Ordinal)
+                .ThenBy(change => change.After, StringComparer.Ordinal)
+                .ToArray();
+
             for (int i = 0; i < left.Count; i++)
             {
-                SerializedChange a = left[i];
-                SerializedChange b = right[i];
-                if (a.Kind != b.Kind || a.ObjectId != b.ObjectId || a.AssetPath != b.AssetPath || a.ComponentType != b.ComponentType
+                SerializedChange a = orderedLeft[i];
+                SerializedChange b = orderedRight[i];
+                if (a.Kind != b.Kind || a.ObjectId != b.ObjectId || a.ObjectPath != b.ObjectPath
+                    || a.AssetPath != b.AssetPath || a.ComponentType != b.ComponentType
                     || a.Property != b.Property || a.Before != b.Before || a.After != b.After)
                     return false;
             }
             return true;
+        }
+
+        private Dictionary<int, string> CaptureObjectIdentities()
+        {
+            return EnumerateSnapshotObjects(targets, targetScenes, targetAssetPaths)
+                .Where(target => target != null)
+                .ToDictionary(target => target.GetInstanceIDCompat(), ObjectIdentity);
+        }
+
+        private IReadOnlyDictionary<string, string> CaptureStabilizedIdentityAliases(
+            IReadOnlyDictionary<int, string> identitiesBeforeSave)
+        {
+            var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (Object target in EnumerateSnapshotObjects(targets, targetScenes, targetAssetPaths))
+            {
+                if (target == null || !identitiesBeforeSave.TryGetValue(target.GetInstanceIDCompat(), out string beforeId)
+                    || !beforeId.StartsWith("temporary:", StringComparison.Ordinal))
+                    continue;
+
+                string afterId = ObjectIdentity(target);
+                if (afterId != beforeId)
+                    aliases[afterId] = beforeId;
+            }
+            return aliases;
+        }
+
+        private static SerializedChange NormalizeIdentityAliases(
+            SerializedChange change,
+            IReadOnlyDictionary<string, string> identityAliases)
+        {
+            if (identityAliases == null || identityAliases.Count == 0)
+                return change;
+            return new SerializedChange
+            {
+                Kind = change.Kind,
+                ObjectId = NormalizeIdentityAlias(change.ObjectId, identityAliases),
+                ObjectPath = change.ObjectPath,
+                AssetPath = change.AssetPath,
+                ComponentType = change.ComponentType,
+                Property = change.Property,
+                Before = NormalizeIdentityAlias(change.Before, identityAliases),
+                After = NormalizeIdentityAlias(change.After, identityAliases)
+            };
+        }
+
+        private static string NormalizeIdentityAlias(
+            string value,
+            IReadOnlyDictionary<string, string> identityAliases)
+        {
+            return value != null && identityAliases.TryGetValue(value, out string alias) ? alias : value;
         }
 
         private static string ObjectIdentity(Object target)

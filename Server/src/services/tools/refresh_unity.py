@@ -49,6 +49,26 @@ class EditorReadyResult:
         yield self.elapsed_seconds
 
 
+class _UnityInstanceBoundContext:
+    """Context proxy that keeps a resumable job routed to its originating editor."""
+
+    def __init__(self, ctx: Context, unity_instance: str | None):
+        self._ctx = ctx
+        self._unity_instance = unity_instance
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._ctx, name)
+
+    async def get_state(self, key: str, default: Any = None) -> Any:
+        if key == "unity_instance":
+            return self._unity_instance
+        get_state = getattr(self._ctx, "get_state")
+        try:
+            return await get_state(key, default)
+        except TypeError:
+            return await get_state(key)
+
+
 def _response_data(response: Any) -> dict[str, Any] | None:
     value = response.model_dump() if hasattr(response, "model_dump") else response
     if not isinstance(value, dict):
@@ -260,8 +280,9 @@ async def refresh_unity(
         job = _REFRESH_JOBS.get(job_id)
         if job is None:
             return MCPResponse(success=False, error="REFRESH_JOB_NOT_FOUND", message="Refresh job was not found.")
+        job_ctx = _UnityInstanceBoundContext(ctx, job.get("unity_instance"))
         result = await wait_for_editor_ready(
-            ctx,
+            job_ctx,
             timeout_s=60.0,
             baseline_compile_started_ms=job.get("baseline_compile_started_ms"),
             require_compile_observation=bool(job.get("compile_requested")),
@@ -298,6 +319,7 @@ async def refresh_unity(
         baseline_compile_started_ms = int(time.time() * 1000) - 1000
     refresh_job_id = str(uuid.uuid4())
     _REFRESH_JOBS[refresh_job_id] = {
+        "unity_instance": unity_instance,
         "baseline_compile_started_ms": baseline_compile_started_ms,
         "compile_requested": compile == "request",
     }
