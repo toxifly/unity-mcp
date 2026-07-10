@@ -78,17 +78,38 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         public object Execute(
             IEnumerable<Object> targets,
             Func<object> mutation,
+            MutationTransactionOptions options = null,
+            bool dryRun = false)
+        {
+            return ExecuteTransaction(MutationTransaction.Begin(targets, options), mutation, this, dryRun);
+        }
+
+        public object Execute(Scene scene, MutationTransactionOptions options, Func<object> mutation, bool dryRun = false)
+        {
+            return ExecuteTransaction(MutationTransaction.BeginScene(scene, options), mutation, this, dryRun);
+        }
+
+        public static object ExecutePreview(
+            IEnumerable<Object> targets,
+            Func<object> mutation,
             MutationTransactionOptions options = null)
         {
-            return Execute(MutationTransaction.Begin(targets, options), mutation);
+            return ExecuteTransaction(MutationTransaction.Begin(targets, options), mutation, null, true);
         }
 
-        public object Execute(Scene scene, MutationTransactionOptions options, Func<object> mutation)
+        public static object ExecutePreview(
+            Scene scene,
+            MutationTransactionOptions options,
+            Func<object> mutation)
         {
-            return Execute(MutationTransaction.BeginScene(scene, options), mutation);
+            return ExecuteTransaction(MutationTransaction.BeginScene(scene, options), mutation, null, true);
         }
 
-        private object Execute(MutationTransaction transaction, Func<object> mutation)
+        private static object ExecuteTransaction(
+            MutationTransaction transaction,
+            Func<object> mutation,
+            MutationChangeGuard guard,
+            bool dryRun)
         {
             using (transaction)
             {
@@ -101,7 +122,8 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 }
 
                 IReadOnlyList<SerializedChange> changes = transaction.Changes;
-                IReadOnlyList<SerializedChange> unexpected = Unexpected(changes);
+                IReadOnlyList<SerializedChange> unexpected = guard?.Unexpected(changes)
+                    ?? Array.Empty<SerializedChange>();
                 if (unexpected.Count > 0)
                 {
                     transaction.Rollback();
@@ -109,9 +131,26 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     {
                         committed = false,
                         rolled_back = true,
+                        dry_run = dryRun,
                         changes,
                         unexpected_changes = unexpected
                     });
+                }
+
+                if (dryRun)
+                {
+                    transaction.Rollback();
+                    JObject previewData = response["data"] as JObject ?? new JObject();
+                    previewData["change_preview"] = JObject.FromObject(new
+                    {
+                        dry_run = true,
+                        committed = false,
+                        rolled_back = true,
+                        changed_objects = changes.Select(change => change.ObjectId).Distinct().Count(),
+                        changes
+                    });
+                    response["data"] = previewData;
+                    return response;
                 }
 
                 transaction.Commit(save: false);

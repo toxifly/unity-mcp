@@ -120,6 +120,10 @@ async def manage_gameobject(
         dict[str, Any] | str,
         "Reject and roll back mutations outside expected_objects/expected_properties or max_changed_objects."
     ] | None = None,
+    dry_run: Annotated[
+        bool | str,
+        "Preview the exact serialized changes, then roll them back without saving or changing dirty state."
+    ] | None = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -154,6 +158,7 @@ async def manage_gameobject(
     set_active = coerce_bool(set_active)
     is_static = coerce_bool(is_static)
     world_space = coerce_bool(world_space, default=True)
+    dry_run = coerce_bool(dry_run, default=False)
 
     # --- Normalize component_properties with detailed error handling ---
     component_properties, comp_props_error = _normalize_component_properties(
@@ -208,6 +213,7 @@ async def manage_gameobject(
             "look_at_target": look_at_target,
             "look_at_up": look_at_up,
             "changeGuard": change_guard,
+            "dryRun": dry_run,
         }
         params = {k: v for k, v in params.items() if v is not None}
 

@@ -43,6 +43,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Compact capability discovery resource with versioned, registration-aware tool availability.
 - [x] Shared mutation transaction service with dirty-state preflight, serialized change previews, scoped saves, and rollback.
 - [x] Transaction-backed `change_guard` enforcement for core GameObject and component mutations.
+- [x] Transaction-backed dry-run previews for core GameObject and component mutations.
 
 Implemented on 2026-07-10:
 
@@ -122,6 +123,13 @@ Implemented on 2026-07-10:
 - Successful guarded mutations retain the edit and return a compact commit summary and exact change list. Guarded root-object creation uses an explicit scene transaction, including empty scenes, while failed tool operations are also rolled back.
 - Advertised `mutation_transactions` version 1 through `mcpforunity://capabilities` only when both guarded mutation tools are registered.
 - Added focused server request/validation tests and Unity EditMode coverage for accepted object/property scopes, rejected component changes, and rejected root-object creation. Validation: 6 focused server change-guard/capability tests passed; Python syntax parsing passed. The full Server suite reached 1,356 passed and 3 skipped; its 6 failures are the previously documented screenshot parameters, object-target normalization, and sandboxed telemetry-file failure. The configured Unity compile matrix skipped because none of its four editor versions are installed locally; a direct Unity 6.5 Roslyn compile reported no diagnostics in the new or modified transaction files and stopped on two pre-existing inaccessible `UnityEngineObjectConverter` errors elsewhere. The Unity tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added `dry_run` to the server and Unity implementations of `manage_gameobject` and `manage_components`. Previews run through the same complete-scene fingerprint transaction as guarded mutations, return exact added/removed/modified serialized changes, and always roll back without saving.
+- Unified guarded mutations and previews behind one transaction execution path. A dry run can also include `change_guard`; unexpected changes retain the stable `UNEXPECTED_SERIALIZED_CHANGES` result while still reporting the complete preview and rollback state.
+- Made dry runs use the explicit preserve policy for pre-dirty scenes and taught rollback to restore the original scene and asset dirty flags after Undo and byte restoration. This keeps clean scenes clean and pre-dirty scenes dirty while removing the previewed edit.
+- Added server forwarding/coercion tests and Unity EditMode coverage for exact property previews, created-component rollback, clean-scene restoration, and pre-dirty-scene preservation. Validation: 12 focused server dry-run, capability, signature, and GameObject tests passed across two runs; Python syntax parsing passed. The full Server suite reached 1,358 passed and 3 skipped; its 6 failures are the same documented screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. No Unity editor is installed locally, so the two new EditMode tests are checked in but not claimed as executed here.
 
 ---
 
@@ -594,6 +602,8 @@ Response:
 ```
 
 #### 6.12 Implement dry-run change previews
+
+**Implementation status:** Complete (2026-07-10) for the transaction-backed core mutation entrypoints, `manage_gameobject` and `manage_components`. The later scoped-save and atomic-prefab tools will use the same preview execution path when implemented in 6.13-6.14.
 
 Every mutation tool should accept `dry_run: true`.
 

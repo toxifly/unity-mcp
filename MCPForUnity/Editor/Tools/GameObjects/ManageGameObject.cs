@@ -90,10 +90,16 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             {
                 if (!MutationChangeGuard.TryParse(@params, out MutationChangeGuard guard, out ErrorResponse guardError))
                     return guardError;
-                if (guard == null)
+                bool dryRun = @params["dryRun"]?.ToObject<bool?>()
+                    ?? @params["dry_run"]?.ToObject<bool?>()
+                    ?? false;
+                if (guard == null && !dryRun)
                     return ExecuteAction(action, @params, targetToken, searchMethod);
 
-                var options = new MutationTransactionOptions();
+                var options = new MutationTransactionOptions
+                {
+                    DirtyScenePolicy = dryRun ? DirtyScenePolicy.Preserve : DirtyScenePolicy.Reject
+                };
                 string prefabPath = @params["prefabPath"]?.ToString() ?? @params["prefab_path"]?.ToString();
                 if (action == "create" && @params["saveAsPrefab"]?.ToObject<bool?>() == true && !string.IsNullOrEmpty(prefabPath))
                     options.AdditionalAssetPaths = new[] { prefabPath };
@@ -103,7 +109,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     Scene scene = SceneManager.GetActiveScene();
                     if (!scene.IsValid() || !scene.isLoaded)
                         return new ErrorResponse("TARGET_NOT_FOUND", new { message = "No loaded active scene is available for guarded creation." });
-                    return guard.Execute(scene, options, () => ExecuteAction(action, @params, targetToken, searchMethod));
+                    Func<object> mutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
+                    return guard != null
+                        ? guard.Execute(scene, options, mutation, dryRun)
+                        : MutationChangeGuard.ExecutePreview(scene, options, mutation);
                 }
 
                 GameObject target = ManageGameObjectCommon.FindObjectInternal(
@@ -112,7 +121,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     new JObject { ["searchInactive"] = true });
                 if (target == null)
                     return new ErrorResponse($"Target GameObject ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
-                return guard.Execute(new UnityEngine.Object[] { target }, () => ExecuteAction(action, @params, targetToken, searchMethod), options);
+                Func<object> targetMutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
+                return guard != null
+                    ? guard.Execute(new UnityEngine.Object[] { target }, targetMutation, options, dryRun)
+                    : MutationChangeGuard.ExecutePreview(new UnityEngine.Object[] { target }, targetMutation, options);
             }
             catch (MutationTransactionException e)
             {

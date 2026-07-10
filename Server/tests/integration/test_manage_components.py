@@ -51,6 +51,28 @@ async def test_manage_components_rejects_non_object_change_guard(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_manage_components_forwards_dry_run(monkeypatch):
+    captured = {}
+
+    async def fake_send(cmd, params, **kwargs):
+        captured["params"] = params
+        return {"success": True, "data": {}}
+
+    monkeypatch.setattr(manage_comp_mod, "async_send_command_with_retry", fake_send)
+
+    response = await manage_comp_mod.manage_components(
+        ctx=DummyContext(),
+        action="add",
+        target="Player",
+        component_type="BoxCollider",
+        dry_run="true",
+    )
+
+    assert response["success"] is True
+    assert captured["params"]["dryRun"] is True
+
+
+@pytest.mark.asyncio
 async def test_manage_components_add_single(monkeypatch):
     """Test adding a single component."""
     captured = {}
