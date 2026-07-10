@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -50,19 +51,37 @@ namespace MCPForUnity.Editor.Tools
 
             try
             {
-                return action switch
+                if (!MutationChangeGuard.TryParse(@params, out MutationChangeGuard guard, out ErrorResponse guardError))
+                    return guardError;
+                if (guard != null)
                 {
-                    "add" => AddComponent(@params, targetToken, searchMethod),
-                    "remove" => RemoveComponent(@params, targetToken, searchMethod),
-                    "set_property" => SetProperty(@params, targetToken, searchMethod),
-                    _ => new ErrorResponse($"Unknown action: '{action}'. Supported actions: add, remove, set_property")
-                };
+                    GameObject target = FindTarget(targetToken, searchMethod);
+                    if (target == null)
+                        return new ErrorResponse($"Target GameObject ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
+                    return guard.Execute(new UnityEngine.Object[] { target }, () => ExecuteAction(action, @params, targetToken, searchMethod));
+                }
+                return ExecuteAction(action, @params, targetToken, searchMethod);
+            }
+            catch (MutationTransactionException e)
+            {
+                return new ErrorResponse(e.Code, new { message = e.Message, committed = false, rolled_back = true });
             }
             catch (Exception e)
             {
                 McpLog.Error($"[ManageComponents] Action '{action}' failed: {e}");
                 return new ErrorResponse($"Internal error processing action '{action}': {e.Message}");
             }
+        }
+
+        private static object ExecuteAction(string action, JObject @params, JToken targetToken, string searchMethod)
+        {
+            return action switch
+            {
+                "add" => AddComponent(@params, targetToken, searchMethod),
+                "remove" => RemoveComponent(@params, targetToken, searchMethod),
+                "set_property" => SetProperty(@params, targetToken, searchMethod),
+                _ => new ErrorResponse($"Unknown action: '{action}'. Supported actions: add, remove, set_property")
+            };
         }
 
         #region Action Implementations

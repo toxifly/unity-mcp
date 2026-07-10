@@ -20,6 +20,10 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "version": 1,
         "tools": ("inspect_provenance",),
     },
+    "mutation_transactions": {
+        "version": 1,
+        "tools": ("manage_gameobject", "manage_components"),
+    },
 }
 
 

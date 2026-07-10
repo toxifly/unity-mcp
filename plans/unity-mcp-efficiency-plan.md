@@ -42,6 +42,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Compact, always-registered `inspect_provenance` for scene identity, prefab roots/sources, property overrides, and component override state.
 - [x] Compact capability discovery resource with versioned, registration-aware tool availability.
 - [x] Shared mutation transaction service with dirty-state preflight, serialized change previews, scoped saves, and rollback.
+- [x] Transaction-backed `change_guard` enforcement for core GameObject and component mutations.
 
 Implemented on 2026-07-10:
 
@@ -113,6 +114,14 @@ Implemented on 2026-07-10:
 - Added normalized `SerializedObject` fingerprints across every object and component in each target scene/asset. Transactions expose exact added, removed, and modified property records with before/after values, while byte snapshots provide a save-time rollback safety net.
 - Added validator-gated commits, scoped scene/asset saves, detection of save-time serialization changes, restoration of newly created or modified asset bytes, and stable `SCENE_ALREADY_DIRTY`, `ASSET_ALREADY_DIRTY`, `UNEXPECTED_SERIALIZED_CHANGES`, `SAVE_FAILED`, and `ROLLBACK_FAILED` errors.
 - Added five focused EditMode tests for dirty-scene rejection, normalized change detection, automatic disposal rollback, created-object rollback, commit, and validator rejection. Unity 6.5 compiled the new service and test files without diagnostics. The focused run could not execute because the existing fixture has 28 unrelated Unity 6.5 compile errors, primarily obsolete-as-error `GetInstanceID` calls plus one pre-existing `Resources.UnloadAsset` namespace collision.
+
+Implemented on 2026-07-10:
+
+- Added the shared `MutationChangeGuard` contract and wired `change_guard` through the server and Unity implementations of `manage_gameobject` and `manage_components`, covering the core authored scene-object mutation entrypoints.
+- Guarded operations now snapshot the complete owning scene, compare normalized serialized changes against `expected_objects`, `expected_properties`, and `max_changed_objects`, and automatically roll back with `UNEXPECTED_SERIALIZED_CHANGES` plus exact `changes` and `unexpected_changes` records.
+- Successful guarded mutations retain the edit and return a compact commit summary and exact change list. Guarded root-object creation uses an explicit scene transaction, including empty scenes, while failed tool operations are also rolled back.
+- Advertised `mutation_transactions` version 1 through `mcpforunity://capabilities` only when both guarded mutation tools are registered.
+- Added focused server request/validation tests and Unity EditMode coverage for accepted object/property scopes, rejected component changes, and rejected root-object creation. Validation: 6 focused server change-guard/capability tests passed; Python syntax parsing passed. The full Server suite reached 1,356 passed and 3 skipped; its 6 failures are the previously documented screenshot parameters, object-target normalization, and sandboxed telemetry-file failure. The configured Unity compile matrix skipped because none of its four editor versions are installed locally; a direct Unity 6.5 Roslyn compile reported no diagnostics in the new or modified transaction files and stopped on two pre-existing inaccessible `UnityEngineObjectConverter` errors elsewhere. The Unity tests are checked in but not claimed as executed here.
 
 ---
 
@@ -548,6 +557,8 @@ The byte snapshot is a rollback safety net, not the normal editing mechanism.
 - Restore the original scene/prefab-stage setup in either case.
 
 #### 6.11 Add `change_guard` options to mutation tools
+
+**Implementation status:** Complete (2026-07-10) for the core authored scene mutation entrypoints, `manage_gameobject` and `manage_components`. Asset-specific guarded saving remains part of the scoped-save and atomic-prefab steps in 6.13-6.14.
 
 Example:
 

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Helpers; // For Response class
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -87,30 +88,54 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
             try
             {
-                switch (action)
-                {
-                    // --- Primary lifecycle actions (kept in manage_gameobject) ---
-                    case "create":
-                        return GameObjectCreate.Handle(@params);
-                    case "modify":
-                        return GameObjectModify.Handle(@params, targetToken, searchMethod);
-                    case "delete":
-                        return GameObjectDelete.Handle(targetToken, searchMethod);
-                    case "duplicate":
-                        return GameObjectDuplicate.Handle(@params, targetToken, searchMethod);
-                    case "move_relative":
-                        return GameObjectMoveRelative.Handle(@params, targetToken, searchMethod);
-                    case "look_at":
-                        return GameObjectLookAt.Handle(@params, targetToken, searchMethod);
+                if (!MutationChangeGuard.TryParse(@params, out MutationChangeGuard guard, out ErrorResponse guardError))
+                    return guardError;
+                if (guard == null)
+                    return ExecuteAction(action, @params, targetToken, searchMethod);
 
-                    default:
-                        return new ErrorResponse($"Unknown action: '{action}'.");
+                var options = new MutationTransactionOptions();
+                string prefabPath = @params["prefabPath"]?.ToString() ?? @params["prefab_path"]?.ToString();
+                if (action == "create" && @params["saveAsPrefab"]?.ToObject<bool?>() == true && !string.IsNullOrEmpty(prefabPath))
+                    options.AdditionalAssetPaths = new[] { prefabPath };
+
+                if (action == "create")
+                {
+                    Scene scene = SceneManager.GetActiveScene();
+                    if (!scene.IsValid() || !scene.isLoaded)
+                        return new ErrorResponse("TARGET_NOT_FOUND", new { message = "No loaded active scene is available for guarded creation." });
+                    return guard.Execute(scene, options, () => ExecuteAction(action, @params, targetToken, searchMethod));
                 }
+
+                GameObject target = ManageGameObjectCommon.FindObjectInternal(
+                    targetToken,
+                    searchMethod,
+                    new JObject { ["searchInactive"] = true });
+                if (target == null)
+                    return new ErrorResponse($"Target GameObject ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
+                return guard.Execute(new UnityEngine.Object[] { target }, () => ExecuteAction(action, @params, targetToken, searchMethod), options);
+            }
+            catch (MutationTransactionException e)
+            {
+                return new ErrorResponse(e.Code, new { message = e.Message, committed = false, rolled_back = true });
             }
             catch (Exception e)
             {
                 McpLog.Error($"[ManageGameObject] Action '{action}' failed: {e}");
                 return new ErrorResponse($"Internal error processing action '{action}': {e.Message}");
+            }
+        }
+
+        private static object ExecuteAction(string action, JObject @params, JToken targetToken, string searchMethod)
+        {
+            switch (action)
+            {
+                case "create": return GameObjectCreate.Handle(@params);
+                case "modify": return GameObjectModify.Handle(@params, targetToken, searchMethod);
+                case "delete": return GameObjectDelete.Handle(targetToken, searchMethod);
+                case "duplicate": return GameObjectDuplicate.Handle(@params, targetToken, searchMethod);
+                case "move_relative": return GameObjectMoveRelative.Handle(@params, targetToken, searchMethod);
+                case "look_at": return GameObjectLookAt.Handle(@params, targetToken, searchMethod);
+                default: return new ErrorResponse($"Unknown action: '{action}'.");
             }
         }
     }

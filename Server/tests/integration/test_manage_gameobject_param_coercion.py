@@ -5,6 +5,30 @@ import services.tools.manage_gameobject as manage_go_mod
 
 
 @pytest.mark.asyncio
+async def test_manage_gameobject_forwards_json_change_guard(monkeypatch):
+    captured = {}
+
+    async def fake_send(cmd, params, **kwargs):
+        captured["params"] = params
+        return {"success": True, "data": {}}
+
+    monkeypatch.setattr(manage_go_mod, "async_send_command_with_retry", fake_send)
+
+    response = await manage_go_mod.manage_gameobject(
+        ctx=DummyContext(),
+        action="modify",
+        target="Player",
+        set_active=False,
+        change_guard='{"expected_properties":["Player.m_IsActive"]}',
+    )
+
+    assert response["success"] is True
+    assert captured["params"]["changeGuard"] == {
+        "expected_properties": ["Player.m_IsActive"]
+    }
+
+
+@pytest.mark.asyncio
 async def test_manage_gameobject_boolean_coercion(monkeypatch):
     """Test that string boolean values are properly coerced for valid actions."""
     captured = {}

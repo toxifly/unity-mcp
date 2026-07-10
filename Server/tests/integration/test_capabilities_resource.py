@@ -11,6 +11,8 @@ from services.resources.capabilities import get_capabilities
 import services.tools.inspect_provenance  # noqa: F401,E402
 import services.tools.inspect_serialized  # noqa: F401,E402
 import services.tools.measure_ui  # noqa: F401,E402
+import services.tools.manage_components  # noqa: F401,E402
+import services.tools.manage_gameobject  # noqa: F401,E402
 
 
 def run(coro):
@@ -34,6 +36,7 @@ def test_capabilities_manifest_is_compact_and_matches_registered_tools():
         "measure_ui": {"version": 1},
         "inspect_serialized": {"version": 1},
         "inspect_provenance": {"version": 1},
+        "mutation_transactions": {"version": 1},
     }
     assert set(result) == {"schema_version", "tools"}
 

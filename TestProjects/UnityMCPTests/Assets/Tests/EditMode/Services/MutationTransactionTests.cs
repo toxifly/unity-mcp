@@ -1,10 +1,14 @@
 using System.Linq;
 using MCPForUnity.Editor.Services.MutationTransactions;
+using MCPForUnity.Editor.Tools;
+using MCPForUnity.Editor.Tools.GameObjects;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using MCPForUnity.Runtime.Helpers;
 
 namespace MCPForUnityTests.Editor.Services
 {
@@ -114,6 +118,92 @@ namespace MCPForUnityTests.Editor.Services
 
             Assert.IsTrue(root.activeSelf);
             Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageComponents_ChangeGuardAcceptsExpectedObject()
+        {
+            JObject response = JObject.FromObject(ManageComponents.HandleCommand(new JObject
+            {
+                ["action"] = "add",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentType"] = "BoxCollider",
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray(root.name),
+                    ["max_changed_objects"] = 2
+                }
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>());
+            Assert.IsNotNull(root.GetComponent<BoxCollider>());
+            Assert.IsTrue(response["data"]["change_guard"]["committed"].Value<bool>());
+        }
+
+        [Test]
+        public void ManageComponents_ChangeGuardRejectsAndRollsBackUnexpectedObject()
+        {
+            JObject response = JObject.FromObject(ManageComponents.HandleCommand(new JObject
+            {
+                ["action"] = "add",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentType"] = "BoxCollider",
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray("SomeOtherObject")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsNull(root.GetComponent<BoxCollider>());
+            Assert.IsTrue(response["data"]["rolled_back"].Value<bool>());
+            Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_CreateGuardRejectsAndRemovesCreatedObject()
+        {
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "create",
+                ["name"] = "GuardedCreatedObject",
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray("A different object")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsNull(GameObject.Find("GuardedCreatedObject"));
+            Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_PropertyScopeAcceptsExpectedProperty()
+        {
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["setActive"] = false,
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_properties"] = new JArray(root.name + ".GameObject.m_IsActive")
+                }
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>());
+            Assert.IsFalse(root.activeSelf);
+            Assert.AreEqual(1, response["data"]["change_guard"]["changed_objects"].Value<int>());
         }
     }
 }
