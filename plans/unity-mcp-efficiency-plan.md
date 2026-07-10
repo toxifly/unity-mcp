@@ -46,6 +46,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Transaction-backed dry-run previews for core GameObject and component mutations.
 - [x] Atomic prefab creation and optional scene replacement with guarded, two-asset rollback.
 - [x] Transaction-backed scoped scene, prefab, and asset saves plus read-only dirty-change previews.
+- [x] Opt-in, bounded lifecycle and serialized-property trace sessions with temporary instrumentation cleanup.
 
 Implemented on 2026-07-10:
 
@@ -147,6 +148,13 @@ Implemented on 2026-07-10:
 - Extended `MutationTransaction` with path-only asset transactions and an explicit dirty-asset admission option. Scoped saves snapshot only the declared files, save each dirty main asset or subasset with `SaveAssetIfDirty`, compare normalized serialized fingerprints after saving, and restore the byte snapshot if save-time serialization changes the declared state.
 - Scene saves require a loaded, authored scene and support `dirty_scene_policy`; asset saves reject folders, missing assets, traversal, and non-`Assets/` paths. `preview_asset_changes` is read-only and reports dirty serialized objects without saving, while unrelated dirty scenes/assets are bounded and reported rather than committed.
 - Advertised `scoped_saves` version 1 only when all four backing tools are registered. Added four focused server contract/registration tests and two Unity EditMode behavioral tests for a scoped dirty-scene save and a non-saving preview. Validation: 12 focused server scoped-save/prefab/capability tests passed, Python syntax compilation and `git diff --check` passed. The full Server suite reached 1,366 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. A direct Unity 6000.5 Roslyn compile reported no diagnostics in the new or modified scoped-save/transaction files and stopped only on the two pre-existing inaccessible `UnityEngineObjectConverter` errors. An isolated EditMode run could not start because the local licensing client repeatedly timed out during first import; the temporary fixture was removed, so the two behavioral tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added the always-registered `lifecycle_trace` tool with bounded `start`, `poll`, `status`, and `stop` operations. Sessions accept explicit hierarchy names/paths or GlobalObjectIds, event filters, serialized-property whitelists, event caps, timeouts, and paged cursors.
+- Added hidden temporary callback proxies for `Awake`, `OnEnable`, `OnDisable`, and `OnDestroy`, plus editor hooks for selection changes and normalized `SerializedProperty` snapshots. Timeline records use monotonic sequence numbers, frame/time metadata, stable object identity, exact before/after property values, and explicit `callback_source`/`observation` fields so proxy observations are not presented as inferred causality.
+- Preserved scene dirty state around proxy attachment and removal. Sessions automatically remove instrumentation on stop, timeout, Play Mode exit, start failure, and domain reload; reload persists the already-recorded terminal timeline through `SessionState` so ordering and diagnostics are not lost.
+- Advertised `lifecycle_tracing` version 1 through `mcpforunity://capabilities`. Added four focused server contract/registration/bounds tests and two Unity EditMode behavioral tests for inactive-to-active tracing, serialized changes, sequence ordering, event truncation, and cleanup. Validation: all 7 focused server lifecycle/capability tests passed. The full Server suite reached 1,371 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. Unity 6000.5 compiled the new package files without diagnostics, but 28 unrelated obsolete-as-error calls plus one existing `Resources.UnloadAsset` namespace collision prevented the fixture EditMode test assembly from compiling, so the two Unity tests are checked in but not claimed as executed here.
 
 ---
 
@@ -702,6 +710,8 @@ Each should report:
 
 #### 6.16 Add opt-in lifecycle tracing
 
+**Implementation status:** Complete (2026-07-10). The core `lifecycle_trace` tool provides bounded start/poll/status/stop sessions, temporary callback proxies, editor-hook events, whitelisted serialized-property diffs, and compact ordered paging.
+
 Proposed request:
 
 ```json
@@ -741,6 +751,8 @@ The trace should return a compact ordered timeline:
 
 #### 6.17 Implementation constraints
 
+**Implementation status:** Complete (2026-07-10). Instrumentation is temporary and dirty-state-preserving, payloads are capped and paged, observed proxy callbacks are identified explicitly, and sessions detach on stop, timeout, Play Mode exit, domain reload, or failed startup.
+
 - Opt-in only; no permanent instrumentation in user scripts.
 - Prefer editor hooks, temporary proxy components, and existing Unity callbacks.
 - Cap events and payload size.
@@ -749,6 +761,8 @@ The trace should return a compact ordered timeline:
 - Automatically detach instrumentation on stop, domain reload, or timeout.
 
 #### 6.18 Stage 4 acceptance tests
+
+**Implementation status:** Partial (2026-07-10). Focused tests cover inactive-to-active callbacks, ordered serialized-property changes, cleanup, and explicit event-cap truncation. Domain-reload and timeout behavior are implemented, but fixture-wide Unity 6.5 compilation failures prevented execution and dedicated reload/timeout integration coverage remains for the next step.
 
 - Trace inactive-to-active prefab instances across `Awake` and `OnEnable`.
 - Maintain ordering across one domain reload where supported.
