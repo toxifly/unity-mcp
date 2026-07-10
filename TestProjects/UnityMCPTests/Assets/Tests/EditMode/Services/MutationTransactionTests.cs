@@ -76,6 +76,28 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void Changes_TreatsRenamedStringAsSingleScalarProperty()
+        {
+            string originalName = root.name;
+            using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
+            {
+                root.name = "RenamedMutationTransactionRoot";
+
+                SerializedChange[] changes = transaction.Changes
+                    .Where(item => item.ComponentType == typeof(GameObject).FullName)
+                    .ToArray();
+
+                Assert.AreEqual(1, changes.Length);
+                Assert.AreEqual("m_Name", changes[0].Property);
+                Assert.AreEqual(originalName, changes[0].Before);
+                Assert.AreEqual(root.name, changes[0].After);
+            }
+
+            Assert.AreEqual(originalName, root.name);
+            Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
         public void Rollback_RemovesUndoRegisteredCreatedObjects()
         {
             using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
@@ -359,6 +381,32 @@ namespace MCPForUnityTests.Editor.Services
                 change["Property"].Value<string>() == "m_IsActive"));
             Assert.IsTrue(root.activeSelf);
             Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_RenamePrefabInstanceDryRunRestoresCleanScene()
+        {
+            var prefabSource = new GameObject("SelectionManager");
+            GameObject prefab = PrefabUtility.SaveAsPrefabAsset(prefabSource, PrefabPath);
+            Object.DestroyImmediate(prefabSource);
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, testScene);
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            Assert.IsFalse(testScene.isDirty);
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = instance.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["name"] = "RenamedSelectionManager",
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("SelectionManager", instance.name);
+            Assert.IsFalse(
+                testScene.isDirty,
+                "Rolling back a prefab-instance override must restore the scene's initial clean state.");
         }
 
         [Test]

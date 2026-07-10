@@ -151,7 +151,13 @@ namespace MCPForUnity.Editor.Tools
             PropertyModification[] modifications = PrefabUtility.GetPropertyModifications(instanceRoot) ?? Array.Empty<PropertyModification>();
             foreach (PropertyModification modification in modifications)
             {
-                if (modification == null || modification.target == null || !BelongsToSourceObject(modification.target, sourceTarget))
+                // Keep this list consistent with HasPrefabInstanceAnyOverrides(instanceRoot, false):
+                // Unity reports name and root Transform bookkeeping as property modifications,
+                // but classifies them as default overrides and excludes them from that query.
+                if (modification == null
+                    || modification.target == null
+                    || PrefabUtility.IsDefaultOverride(modification)
+                    || !BelongsToSourceObject(modification.target, sourceTarget))
                     continue;
 
                 string key = modification.target.GetType().FullName + "\n" + modification.propertyPath;

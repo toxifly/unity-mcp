@@ -63,6 +63,23 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void PrefabInstance_DefaultOverridesAreExcludedFromPropertyOverridePaths()
+        {
+            GameObject instance = CreateInstance();
+            PropertyModification[] modifications = PrefabUtility.GetPropertyModifications(instance);
+
+            Assert.IsTrue(modifications.Any(PrefabUtility.IsDefaultOverride), "Fixture should contain Unity default overrides.");
+            Assert.IsFalse(PrefabUtility.HasPrefabInstanceAnyOverrides(instance, false));
+
+            JObject result = Inspect(instance.name);
+
+            JToken prefab = result["data"]["findings"][0]["prefab"];
+            Assert.IsFalse(prefab.Value<bool>("has_any_overrides"), result.ToString());
+            Assert.AreEqual(0, prefab.Value<int>("override_property_count"), result.ToString());
+            Assert.IsEmpty(prefab["override_property_paths"], result.ToString());
+        }
+
+        [Test]
         public void PrefabInstance_ReportsAddedAndRemovedComponents()
         {
             GameObject instance = CreateInstance();

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -56,6 +57,13 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
     /// </summary>
     public sealed class MutationTransaction : IDisposable
     {
+        private static readonly MethodInfo ClearSceneDirtiness = typeof(EditorSceneManager).GetMethod(
+            "ClearSceneDirtiness",
+            BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+            null,
+            new[] { typeof(Scene) },
+            null);
+
         private static readonly HashSet<string> IgnoredProperties = new HashSet<string>(StringComparer.Ordinal)
         {
             "m_ObjectHideFlags"
@@ -319,9 +327,17 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 bool wasDirty = initialDirtyScenes.TryGetValue(SceneKey(scene), out bool dirty) && dirty;
                 if (wasDirty)
                     EditorSceneManager.MarkSceneDirty(scene);
-                // Unity has no public API for clearing a scene's dirty flag. Undoing the
-                // complete transaction group restores a previously clean scene without
-                // writing it; only the pre-dirty case needs an explicit correction here.
+                else if (scene.isDirty)
+                {
+                    if (ClearSceneDirtiness == null)
+                        throw new MissingMethodException(
+                            typeof(EditorSceneManager).FullName,
+                            "ClearSceneDirtiness");
+                    ClearSceneDirtiness.Invoke(null, new object[] { scene });
+                    if (scene.isDirty)
+                        throw new InvalidOperationException(
+                            $"Unity did not restore scene '{SceneKey(scene)}' to its initial clean state.");
+                }
             }
 
             foreach (KeyValuePair<string, bool> pair in initialDirtyAssets)
@@ -453,7 +469,11 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     bool enterChildren = true;
                     while (property.Next(enterChildren))
                     {
-                        enterChildren = true;
+                        // Unity exposes strings through the iterator as array-like values with
+                        // synthetic Array.size and Character children. The string fingerprint
+                        // already captures the complete value, so those implementation details
+                        // must not become independently guarded changes.
+                        enterChildren = property.propertyType != SerializedPropertyType.String;
                         if (IgnoredProperties.Contains(property.propertyPath))
                             continue;
                         Fingerprint fingerprint = Fingerprint.Create(target, property);
