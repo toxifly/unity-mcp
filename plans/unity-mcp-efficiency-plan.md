@@ -37,6 +37,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Shared terminal job summaries.
 - [x] Correct `wait_for_ready` semantics.
 - [x] Correct console log typing.
+- [x] First-class, always-registered `measure_ui` with explicit coordinate spaces and geometry assertions.
 
 Implemented on 2026-07-10:
 
@@ -72,6 +73,14 @@ Implemented on 2026-07-10:
 - Added source classification for user, compiler, test runner, MCP, and Unity-internal records; compiler classification comes directly from compile-mode flags, while the remaining provenance labels use bounded package/marker checks.
 - Kept error filtering intentionally broad only within Unity's real severity: `Error`, `Assert`, and `Exception` match `types=["error"]`; normal `Log` and `Warning` entries do not.
 - Added Unity regression tests for all relevant mode mappings, provenance labels, and a normal log whose text contains `Exception`. Validation: all 11 focused Unity 6.5 EditMode tests passed in an isolated fixture, and all 13 focused Server console/domain-reload tests passed. The full Server suite reached 1,337 passed and 3 skipped; its 7 failures are the same previously documented out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues.
+
+Implemented on 2026-07-10:
+
+- Completed `measure_ui` as an always-enabled core tool on both the server and Unity sides instead of relying on project custom-tool discovery.
+- Made every request use one declared coordinate space: `canvas`, `local`, `world`, or `screen_pixels`. Every measurement now repeats its space and reference and reports hierarchy identity, active-self and active-in-hierarchy state, bounds, size, and clipping.
+- Kept inactive authored RectTransforms measurable by default, added container/immediate-child batching, and return stable error codes for missing targets, invalid spaces, non-RectTransform targets, and missing coordinate references.
+- Added in-call `inside`, `covers`, `matches_bounds`, `no_overlap`, `minimum_gap`, `on_screen`, `not_clipped`, `ordered_left_to_right`, and `ordered_top_to_bottom` assertions with a compact pass/fail summary. Coordinate-dependent assertions reject incompatible spaces rather than silently converting them.
+- Added three server registration/request-contract tests and five Unity EditMode geometry/validation tests, including full-screen overlay bounds, inactive authored objects, and multi-assertion evaluation. Validation: all 3 focused Server tests passed; the full Server suite reached 1,341 passed and 3 skipped, with its 6 failures confined to the previously documented screenshot parameters, object-reference coercion, and sandboxed telemetry file. Unity 6.5 compiled the package implementation without `MeasureUI` errors, but pre-existing Unity 6.5-obsolete `GetInstanceID`/`InstanceIDToObject` calls elsewhere in the fixture prevented the EditMode test assembly from compiling, so the five new tests are checked in but not claimed as executed here.
 
 ---
 
@@ -328,6 +337,8 @@ Filtering by `types=["error"]` must include only `Error`, `Assert`, and `Excepti
 ### Stage 2 — UI measurement and serialized inspection
 
 #### 6.6 Implement and always register `measure_ui`
+
+**Implementation status:** Complete (2026-07-10). The tool is a core built-in, reports one explicit coordinate space per request, measures inactive authored UI, and evaluates the planned geometry assertions in one editor invocation.
 
 Proposed request:
 

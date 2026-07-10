@@ -1,254 +1,394 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using MCPForUnity.Editor.Helpers;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 
 namespace MCPForUnity.Editor.Tools
 {
-    /// <summary>
-    /// Read-only measurement tool for uGUI (Canvas / RectTransform) layouts.
-    ///
-    /// Returns the bounds of named GameObjects (and, optionally, their immediate
-    /// RectTransform children) in two spaces:
-    ///   • canvas-local — relative to a reference RectTransform (defaults to the root
-    ///     Canvas, so origin is the canvas centre), matching the coordinates you get from
-    ///     RectTransform.GetWorldCorners + reference.InverseTransformPoint.
-    ///   • screen — pixel coordinates (bottom-left origin, Unity convention).
-    ///
-    /// This exists so layout work can be verified numerically (clearances, overlaps,
-    /// clipping) without capturing a screenshot: measuring a handful of rects costs a
-    /// couple hundred tokens and is deterministic, whereas a Game View capture is large
-    /// and returns white when the view is unfocused. Use it for the iteration loop; leave
-    /// the "does it look right" call to a human eyeballing the live Game View.
-    /// </summary>
-    [McpForUnityTool("measure_ui")]
+    /// <summary>Read-only, single-invocation geometry verification for uGUI RectTransforms.</summary>
+    [McpForUnityTool("measure_ui", AutoRegister = true, Group = "core")]
     public static class MeasureUI
     {
-        public static object HandleCommand(JObject @params)
+        private const float DefaultTolerance = 0.5f;
+
+        private sealed class Measurement
         {
-            if (@params == null)
+            public string RequestedTarget;
+            public GameObject GameObject;
+            public Rect Bounds;
+            public string Space;
+            public string Reference;
+            public bool Clipped;
+
+            public object ToResponse() => new
             {
-                return new ErrorResponse("Parameters cannot be null.");
-            }
-
-            var p = new ToolParams(@params);
-            bool includeInactive = p.GetBool("includeInactive", true);
-            bool includeChildren = p.GetBool("includeChildren", false);
-            string space = (p.Get("space", "both") ?? "both").ToLowerInvariant();
-            bool wantCanvas = space is "canvas" or "both";
-            bool wantScreen = space is "screen" or "both";
-
-            var targets = new List<string>();
-            var arr = p.GetStringArray("targets");
-            if (arr != null) targets.AddRange(arr);
-            string container = p.Get("container");
-            if (targets.Count == 0 && string.IsNullOrEmpty(container))
-            {
-                return new ErrorResponse("Provide 'targets' (names/paths) and/or 'container'.");
-            }
-
-            // Resolve the reference RectTransform that defines canvas-local space.
-            RectTransform reference = ResolveReference(p, targets, container, includeInactive, out GameObject referenceGo);
-
-            var elements = new List<object>();
-            var corners = new Vector3[4];
-
-            foreach (var t in targets)
-            {
-                var go = Resolve(t, includeInactive);
-                if (go == null)
-                {
-                    elements.Add(new { name = t, found = false });
-                    continue;
-                }
-                elements.Add(Measure(go, reference, corners, wantCanvas, wantScreen));
-                if (includeChildren)
-                {
-                    AddChildren(go.transform, reference, corners, wantCanvas, wantScreen, elements);
-                }
-            }
-
-            if (!string.IsNullOrEmpty(container))
-            {
-                var cgo = Resolve(container, includeInactive);
-                if (cgo == null)
-                {
-                    return new ErrorResponse($"Container '{container}' not found.");
-                }
-                elements.Add(Measure(cgo, reference, corners, wantCanvas, wantScreen));
-                AddChildren(cgo.transform, reference, corners, wantCanvas, wantScreen, elements);
-            }
-
-            object canvasSize = null;
-            if (reference != null)
-            {
-                canvasSize = new { width = reference.rect.width, height = reference.rect.height };
-            }
-
-            return new SuccessResponse($"Measured {elements.Count} element(s)", new
-            {
-                reference = referenceGo != null ? new { name = referenceGo.name, path = PathOf(referenceGo.transform) } : null,
-                referenceSize = canvasSize,
-                space,
-                note = "canvas: reference-local (origin = reference centre, y up). screen: pixels, y up from bottom.",
-                elements
-            });
-        }
-
-        private static void AddChildren(Transform parent, RectTransform reference, Vector3[] corners,
-            bool wantCanvas, bool wantScreen, List<object> elements)
-        {
-            foreach (Transform child in parent)
-            {
-                if (child is RectTransform)
-                {
-                    elements.Add(Measure(child.gameObject, reference, corners, wantCanvas, wantScreen));
-                }
-            }
-        }
-
-        private static object Measure(GameObject go, RectTransform reference, Vector3[] corners,
-            bool wantCanvas, bool wantScreen)
-        {
-            var rt = go.transform as RectTransform;
-            if (rt == null)
-            {
-                return new { name = go.name, path = PathOf(go.transform), found = true, active = go.activeInHierarchy, rectTransform = false };
-            }
-
-            object canvasRect = null;
-            if (wantCanvas && reference != null)
-            {
-                canvasRect = ToRect(LocalBounds(rt, reference, corners));
-            }
-
-            object screenRect = null;
-            if (wantScreen)
-            {
-                var cam = CameraFor(rt);
-                screenRect = ToRect(ScreenBounds(rt, cam, corners));
-            }
-
-            return new
-            {
-                name = go.name,
-                path = PathOf(rt),
-                found = true,
-                active = go.activeInHierarchy,
-                canvas = canvasRect,
-                screen = screenRect
+                target = RequestedTarget,
+                name = GameObject.name,
+                path = PathOf(GameObject.transform),
+                active_self = GameObject.activeSelf,
+                active_in_hierarchy = GameObject.activeInHierarchy,
+                space = Space,
+                reference = Reference,
+                bounds = ToBounds(Bounds),
+                size = new { width = Bounds.width, height = Bounds.height },
+                clipped = Clipped
             };
         }
 
-        private static object ToRect(Rect r) => new
+        private sealed class AssertionResult
         {
-            xMin = r.xMin,
-            yMin = r.yMin,
-            xMax = r.xMax,
-            yMax = r.yMax,
-            width = r.width,
-            height = r.height,
-            cx = r.center.x,
-            cy = r.center.y
-        };
-
-        private static Rect LocalBounds(RectTransform rt, Transform reference, Vector3[] corners)
-        {
-            rt.GetWorldCorners(corners);
-            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
-            for (int i = 0; i < 4; i++)
-            {
-                Vector3 local = reference.InverseTransformPoint(corners[i]);
-                minX = Mathf.Min(minX, local.x); maxX = Mathf.Max(maxX, local.x);
-                minY = Mathf.Min(minY, local.y); maxY = Mathf.Max(maxY, local.y);
-            }
-            return Rect.MinMaxRect(minX, minY, maxX, maxY);
+            [JsonProperty("type")] public string Type;
+            [JsonProperty("passed")] public bool Passed;
+            [JsonProperty("message")] public string Message;
+            [JsonProperty("targets", NullValueHandling = NullValueHandling.Ignore)] public string[] Targets;
+            [JsonProperty("actual", NullValueHandling = NullValueHandling.Ignore)] public object Actual;
         }
 
-        private static Rect ScreenBounds(RectTransform rt, Camera cam, Vector3[] corners)
+        public static object HandleCommand(JObject @params)
         {
-            rt.GetWorldCorners(corners);
-            float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
-            for (int i = 0; i < 4; i++)
-            {
-                Vector2 s = RectTransformUtility.WorldToScreenPoint(cam, corners[i]);
-                minX = Mathf.Min(minX, s.x); maxX = Mathf.Max(maxX, s.x);
-                minY = Mathf.Min(minY, s.y); maxY = Mathf.Max(maxY, s.y);
-            }
-            return Rect.MinMaxRect(minX, minY, maxX, maxY);
-        }
+            if (@params == null)
+                return Error("INVALID_PARAMS", "Parameters cannot be null.");
 
-        /// <summary>Camera a canvas renders through; null for Screen Space - Overlay.</summary>
-        private static Camera CameraFor(RectTransform rt)
-        {
-            var canvas = rt.GetComponentInParent<Canvas>();
-            if (canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay)
-            {
-                return null;
-            }
-            return canvas.worldCamera;
-        }
+            var p = new ToolParams(@params);
+            string space = NormalizeSpace(p.Get("space", "canvas"));
+            if (space == null)
+                return Error("INVALID_COORDINATE_SPACE", "'space' must be one of: canvas, local, world, screen_pixels.");
 
-        private static RectTransform ResolveReference(ToolParams p, List<string> targets, string container,
-            bool includeInactive, out GameObject referenceGo)
-        {
-            referenceGo = null;
-            string reference = p.Get("reference");
-            if (!string.IsNullOrEmpty(reference))
-            {
-                referenceGo = Resolve(reference, includeInactive);
-            }
+            bool includeInactive = p.GetBool("includeInactive", true);
+            bool includeChildren = p.GetBool("includeChildren", false);
+            var requestedTargets = (p.GetStringArray("targets") ?? Array.Empty<string>()).ToList();
+            string containerName = p.Get("container");
+            if (requestedTargets.Count == 0 && string.IsNullOrWhiteSpace(containerName))
+                return Error("INVALID_PARAMS", "Provide 'targets' and/or 'container'.");
 
-            // Default: the root Canvas of the first resolvable target/container.
-            if (referenceGo == null)
+            var assertionToken = p.GetRaw("assertions");
+            if (assertionToken != null && assertionToken.Type != JTokenType.Array)
+                return Error("INVALID_PARAMS", "'assertions' must be an array.");
+            foreach (var assertion in assertionToken as JArray ?? new JArray())
             {
-                GameObject anchor = null;
-                foreach (var t in targets)
+                if (!(assertion is JObject assertionObject))
+                    return Error("INVALID_PARAMS", "Each assertion must be an object.");
+                foreach (string assertionTarget in ReadAssertionTargets(assertionObject))
                 {
-                    anchor = Resolve(t, includeInactive);
-                    if (anchor != null) break;
-                }
-                if (anchor == null && !string.IsNullOrEmpty(container))
-                {
-                    anchor = Resolve(container, includeInactive);
-                }
-                if (anchor != null)
-                {
-                    var canvas = anchor.GetComponentInParent<Canvas>();
-                    if (canvas != null) referenceGo = canvas.rootCanvas.gameObject;
+                    if (!requestedTargets.Contains(assertionTarget)) requestedTargets.Add(assertionTarget);
                 }
             }
 
-            return referenceGo != null ? referenceGo.transform as RectTransform : null;
+            var resolved = new List<(string requested, GameObject go)>();
+            foreach (string target in requestedTargets)
+            {
+                var go = Resolve(target, includeInactive);
+                if (go == null)
+                    return Error("TARGET_NOT_FOUND", $"UI target '{target}' was not found.", new { target });
+                resolved.Add((target, go));
+            }
+
+            GameObject container = null;
+            if (!string.IsNullOrWhiteSpace(containerName))
+            {
+                container = Resolve(containerName, includeInactive);
+                if (container == null)
+                    return Error("TARGET_NOT_FOUND", $"UI container '{containerName}' was not found.", new { target = containerName });
+                if (resolved.All(item => item.go != container))
+                    resolved.Add((containerName, container));
+            }
+
+            foreach (var item in resolved.ToArray())
+            {
+                if (!includeChildren && item.go != container) continue;
+                foreach (Transform child in item.go.transform)
+                {
+                    if (child is RectTransform && resolved.All(existing => existing.go != child.gameObject))
+                        resolved.Add((PathOf(child), child.gameObject));
+                }
+            }
+
+            string referenceName = p.Get("reference");
+            GameObject referenceGo = string.IsNullOrWhiteSpace(referenceName)
+                ? DefaultReference(resolved.Select(item => item.go))
+                : Resolve(referenceName, includeInactive);
+
+            if (!string.IsNullOrWhiteSpace(referenceName) && referenceGo == null)
+                return Error("TARGET_NOT_FOUND", $"Coordinate reference '{referenceName}' was not found.", new { target = referenceName });
+            if (space == "local" && string.IsNullOrWhiteSpace(referenceName))
+                return Error("COORDINATE_REFERENCE_REQUIRED", "Local-space measurement requires an explicit RectTransform 'reference'.");
+            if (space == "canvas" && referenceGo == null)
+                return Error("COORDINATE_REFERENCE_REQUIRED", "Canvas-space measurement requires a RectTransform reference or a target under a Canvas.");
+
+            var referenceRect = referenceGo != null ? referenceGo.transform as RectTransform : null;
+            if ((space == "canvas" || space == "local") && referenceRect == null)
+                return Error("COORDINATE_REFERENCE_REQUIRED", $"Reference '{referenceGo?.name}' does not have a RectTransform.");
+
+            string referencePath = referenceGo != null ? PathOf(referenceGo.transform) : null;
+            var measurements = new List<Measurement>();
+            foreach (var item in resolved)
+            {
+                if (!(item.go.transform is RectTransform rt))
+                    return Error("TARGET_NOT_RECT_TRANSFORM", $"UI target '{item.requested}' does not have a RectTransform.", new { target = item.requested });
+                Rect bounds = MeasureBounds(rt, space, referenceRect);
+                measurements.Add(new Measurement
+                {
+                    RequestedTarget = item.requested,
+                    GameObject = item.go,
+                    Bounds = bounds,
+                    Space = space,
+                    Reference = referencePath,
+                    Clipped = IsClipped(rt, bounds, space, referenceRect)
+                });
+            }
+
+            var assertionResults = new List<AssertionResult>();
+            foreach (var assertion in assertionToken as JArray ?? new JArray())
+            {
+                if (!(assertion is JObject assertionObject))
+                    return Error("INVALID_PARAMS", "Each assertion must be an object.");
+                object assertionError = EvaluateAssertion(assertionObject, measurements, space, out AssertionResult result);
+                if (assertionError != null) return assertionError;
+                assertionResults.Add(result);
+            }
+
+            int failed = assertionResults.Count(result => !result.Passed);
+            return new SuccessResponse($"Measured {measurements.Count} UI element(s); {failed} assertion(s) failed.", new
+            {
+                space,
+                reference = referencePath,
+                measurements = measurements.Select(measurement => measurement.ToResponse()).ToArray(),
+                assertions = assertionResults,
+                summary = new
+                {
+                    measured = measurements.Count,
+                    assertions = assertionResults.Count,
+                    passed = assertionResults.Count - failed,
+                    failed
+                }
+            });
         }
 
-        /// <summary>Resolve by hierarchy path when the identifier contains '/', else by name.</summary>
+        private static object EvaluateAssertion(JObject assertion, List<Measurement> measurements, string space, out AssertionResult result)
+        {
+            result = null;
+            string type = assertion.Value<string>("type")?.Trim().ToLowerInvariant();
+            if (string.IsNullOrEmpty(type)) return Error("INVALID_PARAMS", "Every assertion requires a 'type'.");
+
+            string[] names = ReadAssertionTargets(assertion);
+            if (names.Length == 0) return Error("INVALID_PARAMS", $"Assertion '{type}' requires target(s).");
+            var selected = new List<Measurement>();
+            foreach (string name in names)
+            {
+                var measurement = FindMeasurement(measurements, name);
+                if (measurement == null) return Error("TARGET_NOT_FOUND", $"Assertion target '{name}' was not measured.", new { target = name });
+                selected.Add(measurement);
+            }
+
+            float tolerance = assertion.Value<float?>("tolerance") ?? DefaultTolerance;
+            bool passed;
+            object actual = null;
+            switch (type)
+            {
+                case "inside":
+                    RequireCount(type, selected, 2, out object countError);
+                    if (countError != null) return countError;
+                    passed = Contains(selected[1].Bounds, selected[0].Bounds, tolerance);
+                    break;
+                case "covers":
+                    RequireCount(type, selected, 2, out countError);
+                    if (countError != null) return countError;
+                    passed = Contains(selected[0].Bounds, selected[1].Bounds, tolerance);
+                    break;
+                case "matches_bounds":
+                    RequireCount(type, selected, 2, out countError);
+                    if (countError != null) return countError;
+                    passed = BoundsMatch(selected[0].Bounds, selected[1].Bounds, tolerance);
+                    break;
+                case "no_overlap":
+                    RequireCount(type, selected, 2, out countError);
+                    if (countError != null) return countError;
+                    passed = !Overlaps(selected[0].Bounds, selected[1].Bounds, tolerance);
+                    break;
+                case "minimum_gap":
+                    RequireCount(type, selected, 2, out countError);
+                    if (countError != null) return countError;
+                    float requiredGap = assertion.Value<float?>("minimum") ?? assertion.Value<float?>("gap") ?? 0f;
+                    float gap = Gap(selected[0].Bounds, selected[1].Bounds);
+                    actual = new { gap, minimum = requiredGap };
+                    passed = gap + tolerance >= requiredGap;
+                    break;
+                case "on_screen":
+                    if (space != "screen_pixels") return Error("COORDINATE_REFERENCE_REQUIRED", "'on_screen' assertions require space='screen_pixels'.");
+                    passed = selected.All(item => !item.Clipped);
+                    break;
+                case "not_clipped":
+                    passed = selected.All(item => !item.Clipped);
+                    break;
+                case "ordered_left_to_right":
+                    passed = IsOrdered(selected.Select(item => item.Bounds.center.x));
+                    break;
+                case "ordered_top_to_bottom":
+                    passed = IsOrdered(selected.Select(item => -item.Bounds.center.y));
+                    break;
+                default:
+                    return Error("INVALID_ASSERTION", $"Unsupported assertion type '{type}'.");
+            }
+
+            result = new AssertionResult
+            {
+                Type = type,
+                Passed = passed,
+                Targets = names,
+                Actual = actual,
+                Message = passed ? $"{type} passed." : $"{type} failed."
+            };
+            return null;
+        }
+
+        private static string[] ReadAssertionTargets(JObject assertion)
+        {
+            if (assertion["targets"] is JArray array) return array.Values<string>().Where(value => !string.IsNullOrWhiteSpace(value)).ToArray();
+            var values = new List<string>();
+            string target = assertion.Value<string>("target");
+            string container = assertion.Value<string>("container");
+            if (!string.IsNullOrWhiteSpace(target)) values.Add(target);
+            if (!string.IsNullOrWhiteSpace(container)) values.Add(container);
+            return values.ToArray();
+        }
+
+        private static void RequireCount(string type, List<Measurement> measurements, int count, out object error)
+        {
+            error = measurements.Count == count ? null : Error("INVALID_PARAMS", $"Assertion '{type}' requires exactly {count} targets.");
+        }
+
+        private static Measurement FindMeasurement(IEnumerable<Measurement> measurements, string target) =>
+            measurements.FirstOrDefault(item => string.Equals(item.RequestedTarget, target, StringComparison.Ordinal)
+                || string.Equals(item.GameObject.name, target, StringComparison.Ordinal)
+                || string.Equals(PathOf(item.GameObject.transform), target, StringComparison.Ordinal));
+
+        private static string NormalizeSpace(string value)
+        {
+            switch (value?.Trim().ToLowerInvariant())
+            {
+                case "canvas": return "canvas";
+                case "local": return "local";
+                case "world": return "world";
+                case "screen":
+                case "screen_pixels": return "screen_pixels";
+                default: return null;
+            }
+        }
+
+        private static Rect MeasureBounds(RectTransform target, string space, RectTransform reference)
+        {
+            var corners = new Vector3[4];
+            target.GetWorldCorners(corners);
+            var points = new Vector2[4];
+            for (int i = 0; i < corners.Length; i++)
+            {
+                switch (space)
+                {
+                    case "canvas":
+                    case "local":
+                        Vector3 local = reference.InverseTransformPoint(corners[i]);
+                        points[i] = new Vector2(local.x, local.y);
+                        break;
+                    case "screen_pixels":
+                        points[i] = RectTransformUtility.WorldToScreenPoint(CameraFor(target), corners[i]);
+                        break;
+                    default:
+                        points[i] = new Vector2(corners[i].x, corners[i].y);
+                        break;
+                }
+            }
+            return Rect.MinMaxRect(points.Min(point => point.x), points.Min(point => point.y), points.Max(point => point.x), points.Max(point => point.y));
+        }
+
+        private static bool IsClipped(RectTransform target, Rect bounds, string space, RectTransform reference)
+        {
+            Rect visible;
+            if (space == "canvas" || space == "local") visible = reference.rect;
+            else if (space == "screen_pixels")
+            {
+                var canvas = target.GetComponentInParent<Canvas>()?.rootCanvas;
+                visible = canvas != null ? canvas.pixelRect : new Rect(0, 0, Screen.width, Screen.height);
+            }
+            else return false;
+            return !Contains(visible, bounds, DefaultTolerance);
+        }
+
+        private static bool Contains(Rect outer, Rect inner, float tolerance) =>
+            inner.xMin >= outer.xMin - tolerance && inner.yMin >= outer.yMin - tolerance
+            && inner.xMax <= outer.xMax + tolerance && inner.yMax <= outer.yMax + tolerance;
+
+        private static bool BoundsMatch(Rect a, Rect b, float tolerance) =>
+            Mathf.Abs(a.xMin - b.xMin) <= tolerance && Mathf.Abs(a.yMin - b.yMin) <= tolerance
+            && Mathf.Abs(a.xMax - b.xMax) <= tolerance && Mathf.Abs(a.yMax - b.yMax) <= tolerance;
+
+        private static bool Overlaps(Rect a, Rect b, float tolerance) =>
+            a.xMin < b.xMax - tolerance && a.xMax > b.xMin + tolerance
+            && a.yMin < b.yMax - tolerance && a.yMax > b.yMin + tolerance;
+
+        private static float Gap(Rect a, Rect b)
+        {
+            float dx = Mathf.Max(0, Mathf.Max(a.xMin - b.xMax, b.xMin - a.xMax));
+            float dy = Mathf.Max(0, Mathf.Max(a.yMin - b.yMax, b.yMin - a.yMax));
+            return Mathf.Sqrt(dx * dx + dy * dy);
+        }
+
+        private static bool IsOrdered(IEnumerable<float> values)
+        {
+            bool first = true;
+            float previous = 0;
+            foreach (float value in values)
+            {
+                if (!first && value < previous) return false;
+                previous = value;
+                first = false;
+            }
+            return true;
+        }
+
+        private static Camera CameraFor(RectTransform target)
+        {
+            var canvas = target.GetComponentInParent<Canvas>();
+            return canvas == null || canvas.renderMode == RenderMode.ScreenSpaceOverlay ? null : canvas.worldCamera;
+        }
+
+        private static GameObject DefaultReference(IEnumerable<GameObject> targets)
+        {
+            foreach (var target in targets)
+            {
+                var canvas = target.GetComponentInParent<Canvas>();
+                if (canvas != null) return canvas.rootCanvas.gameObject;
+            }
+            return null;
+        }
+
         private static GameObject Resolve(string target, bool includeInactive)
         {
-            if (string.IsNullOrEmpty(target)) return null;
+            if (string.IsNullOrWhiteSpace(target)) return null;
             string method = target.Contains("/") ? "by_path" : "by_name";
-            var go = GameObjectLookup.FindByTarget(target, method, includeInactive);
-            if (go == null && method == "by_path")
-            {
-                // Fall back to the leaf name if the full path didn't resolve.
-                int slash = target.LastIndexOf('/');
-                string leaf = slash >= 0 ? target.Substring(slash + 1) : target;
-                go = GameObjectLookup.FindByTarget(leaf, "by_name", includeInactive);
-            }
-            return go;
+            return GameObjectLookup.FindByTarget(target, method, includeInactive);
         }
 
-        private static string PathOf(Transform t)
+        private static object ToBounds(Rect rect) => new
         {
-            var sb = new StringBuilder(t.name);
-            var cur = t.parent;
-            while (cur != null)
-            {
-                sb.Insert(0, cur.name + "/");
-                cur = cur.parent;
-            }
-            return sb.ToString();
+            x_min = rect.xMin,
+            y_min = rect.yMin,
+            x_max = rect.xMax,
+            y_max = rect.yMax
+        };
+
+        private static ErrorResponse Error(string code, string message, object details = null) =>
+            new ErrorResponse(code, new { message, details });
+
+        private static string PathOf(Transform transform)
+        {
+            var path = new StringBuilder(transform.name);
+            for (Transform parent = transform.parent; parent != null; parent = parent.parent)
+                path.Insert(0, parent.name + "/");
+            return path.ToString();
         }
     }
 }
