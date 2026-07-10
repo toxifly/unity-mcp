@@ -181,7 +181,7 @@ namespace MCPForUnity.Editor.Tools
 
         internal static void ProbeEvent(LifecycleTraceProbe probe, string eventName)
         {
-            if (_cleaningUp && eventName != "OnDestroy") return;
+            if (_cleaningUp) return;
             string sessionId = probe != null ? probe.SessionId : null;
             GameObject target = probe != null ? probe.gameObject : null;
             if (string.IsNullOrEmpty(sessionId) && target != null)

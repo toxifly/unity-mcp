@@ -93,6 +93,8 @@ namespace MCPForUnity.Editor.Tools
                 || path.Contains("../") || AssetDatabase.IsValidFolder(path));
             if (invalid != null)
                 return Error("INVALID_ASSET_PATH", $"'{invalid}' must identify an authored asset under Assets/.");
+            if (!prefabOnly && paths.Any(path => path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
+                return Error("INVALID_ASSET_PATH", "save_assets_scoped does not accept scene assets; use save_scene_scoped for a loaded scene.");
             string missing = paths.FirstOrDefault(path => AssetDatabase.LoadMainAssetAtPath(path) == null);
             if (missing != null)
                 return Error("TARGET_NOT_FOUND", $"Asset '{missing}' was not found.");

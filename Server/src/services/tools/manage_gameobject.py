@@ -7,7 +7,7 @@ from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
 from transport.unity_transport import send_with_unity_instance
 from transport.legacy.unity_connection import async_send_command_with_retry
-from services.tools.utils import coerce_bool, parse_json_payload, normalize_vector3, normalize_string_list
+from services.tools.utils import coerce_bool, coerce_int, parse_json_payload, normalize_vector3, normalize_string_list
 from services.tools.preflight import preflight
 
 
@@ -55,8 +55,8 @@ async def manage_gameobject(
     ctx: Context,
     action: Annotated[Literal["create", "modify", "delete", "duplicate",
                               "move_relative", "look_at"], "Action to perform on GameObject."] | None = None,
-    target: Annotated[str,
-                      "GameObject identifier by name, path, or instance ID for modify/delete/duplicate actions"] | None = None,
+    target: Annotated[str | int | dict[str, Any],
+                      "GameObject identifier by name, path, instance ID, or a reference object containing path, name, or instanceID"] | None = None,
     search_method: Annotated[
         Literal["by_id", "by_name", "by_path", "by_tag", "by_layer", "by_component"],
         "How to resolve 'target'. If omitted, Unity infers: instance ID -> by_id, "
@@ -138,6 +138,31 @@ async def manage_gameobject(
             "success": False,
             "message": "Missing required parameter 'action'. Valid actions: create, modify, delete, duplicate, move_relative, look_at. To SEARCH for GameObjects use the find_gameobjects tool. To manage COMPONENTS use the manage_components tool."
         }
+
+    # Normalize structured references used by MCP clients into the primitive
+    # target/searchMethod pair expected by the Unity handler.
+    target = parse_json_payload(target)
+    if isinstance(target, dict):
+        instance_id = next(
+            (target[key] for key in ("instanceID", "instance_id", "id") if key in target),
+            None,
+        )
+        if instance_id is not None:
+            target = coerce_int(instance_id, default=None)
+            if target is None:
+                return {"success": False, "message": f"Invalid instanceID in target: {instance_id!r}"}
+            search_method = "by_id"
+        elif isinstance(target.get("path"), str) and target["path"].strip():
+            target = target["path"].strip().lstrip("/")
+            search_method = "by_path"
+        elif isinstance(target.get("name"), str) and target["name"].strip():
+            target = target["name"].strip()
+            search_method = "by_name"
+        else:
+            return {
+                "success": False,
+                "message": "Invalid target object: expected one of {instanceID,name,path}.",
+            }
 
     # --- Normalize vector parameters with detailed error handling ---
     position, position_error = normalize_vector3(position, "position")

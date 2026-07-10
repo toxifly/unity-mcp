@@ -108,7 +108,17 @@ async def test_manage_gameobject_create_with_tag(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_manage_gameobject_target_object_reference_infers_search_method(monkeypatch):
+@pytest.mark.parametrize(
+    ("reference", "expected_target", "expected_method"),
+    [
+        ({"path": "/Canvas/Panel"}, "Canvas/Panel", "by_path"),
+        ({"name": "Player"}, "Player", "by_name"),
+        ({"instanceID": "123"}, 123, "by_id"),
+    ],
+)
+async def test_manage_gameobject_target_object_reference_infers_search_method(
+    monkeypatch, reference, expected_target, expected_method
+):
     """Test that {path|name|instanceID} target objects are normalized and inferred into searchMethod."""
     captured = {}
 
@@ -121,10 +131,10 @@ async def test_manage_gameobject_target_object_reference_infers_search_method(mo
     resp = await manage_go_mod.manage_gameobject(
         ctx=DummyContext(),
         action="modify",
-        target={"path": "/Canvas/Panel"},
+        target=reference,
         set_active=True,
     )
 
     assert resp.get("success") is True
-    assert captured["params"]["target"] == "Canvas/Panel"
-    assert captured["params"]["searchMethod"] == "by_path"
+    assert captured["params"]["target"] == expected_target
+    assert captured["params"]["searchMethod"] == expected_method
