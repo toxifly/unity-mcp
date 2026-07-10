@@ -77,9 +77,7 @@ namespace MCPForUnity.Editor.Tools
 
                         foundProperty = true;
                         object finding = BuildFinding(request.Requested, serializedTarget, property, includePrefab);
-                        bool brokenReference = property.propertyType == SerializedPropertyType.ObjectReference
-                            && property.objectReferenceValue == null
-                            && property.objectReferenceEntityIdValue != 0;
+                        bool brokenReference = IsMissingObjectReference(property);
                         if (!brokenReference || includeMissing)
                             findings.Add(finding);
                     }
@@ -236,7 +234,7 @@ namespace MCPForUnity.Editor.Tools
         {
             bool isObjectReference = property.propertyType == SerializedPropertyType.ObjectReference;
             UnityEngine.Object referenced = isObjectReference ? property.objectReferenceValue : null;
-            bool missing = isObjectReference && referenced == null && property.objectReferenceEntityIdValue != 0;
+            bool missing = IsMissingObjectReference(property);
             bool isNull = isObjectReference && referenced == null && !missing;
             GameObject owner = OwnerGameObject(serializedTarget);
 
@@ -295,6 +293,18 @@ namespace MCPForUnity.Editor.Tools
         {
             if (target is GameObject go) return go;
             return (target as Component)?.gameObject;
+        }
+
+        private static bool IsMissingObjectReference(SerializedProperty property)
+        {
+            if (property.propertyType != SerializedPropertyType.ObjectReference
+                || property.objectReferenceValue != null)
+                return false;
+#if UNITY_6000_5_OR_NEWER
+            return EntityId.ToULong(property.objectReferenceEntityIdValue) != 0;
+#else
+            return property.objectReferenceInstanceIDValue != 0;
+#endif
         }
 
         private static string GlobalIdOf(UnityEngine.Object target)

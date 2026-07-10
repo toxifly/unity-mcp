@@ -179,11 +179,13 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                 AdditionalAssetPaths = new[] { sanitizedPath }
             };
 
+            List<string> createdDirectories = new List<string>();
+            bool keepCreatedDirectories = false;
             try
             {
                 using (MutationTransaction transaction = MutationTransaction.Begin(new UnityEngine.Object[] { source }, options))
                 {
-                    EnsureAssetDirectoryExists(sanitizedPath);
+                    createdDirectories = EnsureAssetDirectoryExists(sanitizedPath);
                     bool saved;
                     GameObject prefab = PrefabUtility.SaveAsPrefabAsset(source, sanitizedPath, out saved);
                     if (!saved || prefab == null)
@@ -256,6 +258,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                     }
 
                     transaction.Commit(save: saveScene);
+                    keepCreatedDirectories = true;
                     return new SuccessResponse(
                         linkSceneInstance ? "Prefab created and scene instance linked atomically." : "Prefab created without changing the scene instance.",
                         new
@@ -278,6 +281,11 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             catch (Exception exception)
             {
                 return new ErrorResponse("SAVE_FAILED", new { message = exception.Message, committed = false, rolled_back = true });
+            }
+            finally
+            {
+                if (!keepCreatedDirectories)
+                    RemoveEmptyAssetDirectories(createdDirectories);
             }
         }
 
@@ -765,12 +773,13 @@ namespace MCPForUnity.Editor.Tools.Prefabs
         /// <summary>
         /// Ensures the directory for an asset path exists, creating it if necessary.
         /// </summary>
-        private static void EnsureAssetDirectoryExists(string assetPath)
+        private static List<string> EnsureAssetDirectoryExists(string assetPath)
         {
+            var createdDirectories = new List<string>();
             string directory = Path.GetDirectoryName(assetPath);
             if (string.IsNullOrEmpty(directory))
             {
-                return;
+                return createdDirectories;
             }
 
             // Use Application.dataPath for more reliable path resolution
@@ -781,9 +790,28 @@ namespace MCPForUnity.Editor.Tools.Prefabs
 
             if (!Directory.Exists(fullDirectory))
             {
+                string current = directory.Replace('\\', '/');
+                while (!string.IsNullOrEmpty(current) && !AssetDatabase.IsValidFolder(current))
+                {
+                    createdDirectories.Add(current);
+                    current = Path.GetDirectoryName(current)?.Replace('\\', '/');
+                }
                 Directory.CreateDirectory(fullDirectory);
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
                 McpLog.Info($"[ManagePrefabs] Created directory: {directory}");
+            }
+            return createdDirectories;
+        }
+
+        private static void RemoveEmptyAssetDirectories(IEnumerable<string> directories)
+        {
+            foreach (string directory in directories.OrderByDescending(path => path.Length))
+            {
+                string fullDirectory = Path.Combine(Path.GetDirectoryName(Application.dataPath), directory);
+                if (!Directory.Exists(fullDirectory) || Directory.EnumerateFileSystemEntries(fullDirectory).Any())
+                    continue;
+                if (AssetDatabase.DeleteAsset(directory))
+                    McpLog.Info($"[ManagePrefabs] Rolled back created directory: {directory}");
             }
         }
 
