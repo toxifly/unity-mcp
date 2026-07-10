@@ -278,6 +278,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             {
                 Undo.RevertAllDownToGroup(undoGroup);
                 RestoreAssetBytes();
+                RestoreDirtyStates();
                 RestoreEditorSetup();
             }
             catch (Exception exception)
@@ -291,6 +292,29 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
 
             if (failure != null)
                 throw new MutationTransactionException("ROLLBACK_FAILED", $"Mutation rollback failed: {failure.Message}", failure);
+        }
+
+        private void RestoreDirtyStates()
+        {
+            foreach (Scene scene in targetScenes)
+            {
+                if (!scene.IsValid() || !scene.isLoaded)
+                    continue;
+                bool wasDirty = initialDirtyScenes.TryGetValue(SceneKey(scene), out bool dirty) && dirty;
+                if (wasDirty)
+                    EditorSceneManager.MarkSceneDirty(scene);
+                else
+                    EditorSceneManager.ClearSceneDirtiness(scene);
+            }
+
+            foreach (KeyValuePair<string, bool> pair in initialDirtyAssets)
+            foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(pair.Key).Where(asset => asset != null))
+            {
+                if (pair.Value)
+                    EditorUtility.SetDirty(asset);
+                else
+                    EditorUtility.ClearDirty(asset);
+            }
         }
 
         private void RestoreAssetBytes()

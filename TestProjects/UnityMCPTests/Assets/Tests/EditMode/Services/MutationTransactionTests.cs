@@ -205,5 +205,46 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsFalse(root.activeSelf);
             Assert.AreEqual(1, response["data"]["change_guard"]["changed_objects"].Value<int>());
         }
+
+        [Test]
+        public void ManageGameObject_DryRunReturnsChangesAndRollsBack()
+        {
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["setActive"] = false,
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>());
+            Assert.IsTrue(response["data"]["change_preview"]["dry_run"].Value<bool>());
+            Assert.IsTrue(response["data"]["change_preview"]["rolled_back"].Value<bool>());
+            Assert.IsTrue(response["data"]["change_preview"]["changes"].Any(change =>
+                change["Property"].Value<string>() == "m_IsActive"));
+            Assert.IsTrue(root.activeSelf);
+            Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageComponents_DryRunPreservesPredirtyScene()
+        {
+            EditorSceneManager.MarkSceneDirty(root.scene);
+
+            JObject response = JObject.FromObject(ManageComponents.HandleCommand(new JObject
+            {
+                ["action"] = "add",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentType"] = "BoxCollider",
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>());
+            Assert.IsNull(root.GetComponent<BoxCollider>());
+            Assert.IsTrue(root.scene.isDirty);
+            Assert.IsTrue(response["data"]["change_preview"]["changes"].Any());
+        }
     }
 }

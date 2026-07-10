@@ -73,6 +73,10 @@ async def manage_components(
         dict[str, Any] | str,
         "Reject and roll back mutations outside expected_objects/expected_properties or max_changed_objects."
     ] | None = None,
+    dry_run: Annotated[
+        bool | str,
+        "Preview the exact serialized changes, then roll them back without saving or changing dirty state."
+    ] | None = None,
 ) -> dict[str, Any]:
     """
     Manage components on GameObjects.
@@ -122,6 +126,7 @@ async def manage_components(
     change_guard = parse_json_payload(change_guard)
     if change_guard is not None and not isinstance(change_guard, dict):
         return {"success": False, "code": "INVALID_CHANGE_GUARD", "message": "change_guard must be a JSON object."}
+    dry_run = coerce_bool(dry_run, default=False)
 
     # --- Validate value parameter for serialization issues ---
     if value is not None and isinstance(value, str) and value in ("[object Object]", "undefined"):
@@ -371,6 +376,8 @@ async def manage_components(
 
         if change_guard is not None:
             params["changeGuard"] = change_guard
+        if dry_run:
+            params["dryRun"] = True
 
         response = await send_with_unity_instance(
             async_send_command_with_retry,

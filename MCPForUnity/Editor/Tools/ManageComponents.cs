@@ -53,12 +53,22 @@ namespace MCPForUnity.Editor.Tools
             {
                 if (!MutationChangeGuard.TryParse(@params, out MutationChangeGuard guard, out ErrorResponse guardError))
                     return guardError;
-                if (guard != null)
+                bool dryRun = @params["dryRun"]?.ToObject<bool?>()
+                    ?? @params["dry_run"]?.ToObject<bool?>()
+                    ?? false;
+                if (guard != null || dryRun)
                 {
                     GameObject target = FindTarget(targetToken, searchMethod);
                     if (target == null)
                         return new ErrorResponse($"Target GameObject ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
-                    return guard.Execute(new UnityEngine.Object[] { target }, () => ExecuteAction(action, @params, targetToken, searchMethod));
+                    var options = new MutationTransactionOptions
+                    {
+                        DirtyScenePolicy = dryRun ? DirtyScenePolicy.Preserve : DirtyScenePolicy.Reject
+                    };
+                    Func<object> mutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
+                    return guard != null
+                        ? guard.Execute(new UnityEngine.Object[] { target }, mutation, options, dryRun)
+                        : MutationChangeGuard.ExecutePreview(new UnityEngine.Object[] { target }, mutation, options);
                 }
                 return ExecuteAction(action, @params, targetToken, searchMethod);
             }
