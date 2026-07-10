@@ -79,7 +79,7 @@ namespace MCPForUnity.Editor.Tools
                         object finding = BuildFinding(request.Requested, serializedTarget, property, includePrefab);
                         bool brokenReference = property.propertyType == SerializedPropertyType.ObjectReference
                             && property.objectReferenceValue == null
-                            && property.objectReferenceInstanceIDValue != 0;
+                            && property.objectReferenceEntityIdValue != 0;
                         if (!brokenReference || includeMissing)
                             findings.Add(finding);
                     }
@@ -236,7 +236,7 @@ namespace MCPForUnity.Editor.Tools
         {
             bool isObjectReference = property.propertyType == SerializedPropertyType.ObjectReference;
             UnityEngine.Object referenced = isObjectReference ? property.objectReferenceValue : null;
-            bool missing = isObjectReference && referenced == null && property.objectReferenceInstanceIDValue != 0;
+            bool missing = isObjectReference && referenced == null && property.objectReferenceEntityIdValue != 0;
             bool isNull = isObjectReference && referenced == null && !missing;
             GameObject owner = OwnerGameObject(serializedTarget);
 
