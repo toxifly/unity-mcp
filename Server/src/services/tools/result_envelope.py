@@ -91,6 +91,24 @@ def canonicalize_result(
 
     payload = result if isinstance(result, dict) else {"data": result}
 
+    # A ToolResult may already carry the canonical representation. Keep this
+    # conversion idempotent while refreshing per-call metadata.
+    if _ENVELOPE_KEYS.issubset(payload):
+        meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+        return {
+            "success": bool(payload["success"]),
+            "status": str(payload["status"]),
+            "message": None if payload["message"] is None else str(payload["message"]),
+            "data": payload["data"],
+            "warnings": _normalize_warnings(payload["warnings"]),
+            "error": payload["error"],
+            "meta": {
+                **meta,
+                "unity_instance": unity_instance,
+                "duration_ms": max(0, int(duration_ms)),
+            },
+        }
+
     # Unwrap the legacy Unity transport shape without leaking transport status into
     # the operation-level status field.
     transport_status = str(payload.get("status", "")).lower()
@@ -180,6 +198,38 @@ def _render_result(
     return ToolResult(content=blocks, structured_content=envelope)
 
 
+def _canonicalize_tool_result(
+    result: ToolResult,
+    *,
+    unity_instance: str | None,
+    duration_ms: int,
+) -> ToolResult:
+    """Add the advertised envelope without discarding rich MCP content blocks."""
+    payload = result.structured_content
+    if payload is None:
+        for block in result.content:
+            if getattr(block, "type", None) != "text":
+                continue
+            try:
+                candidate = json.loads(block.text)
+            except (AttributeError, TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(candidate, dict):
+                payload = candidate
+                break
+
+    envelope = canonicalize_result(
+        payload if payload is not None else {"success": True},
+        unity_instance=unity_instance,
+        duration_ms=duration_ms,
+    )
+    return ToolResult(
+        content=result.content,
+        structured_content=envelope,
+        meta=result.meta,
+    )
+
+
 def _signature_with_controls(func: Callable[..., Any]) -> inspect.Signature:
     signature = inspect.signature(func)
     params = list(signature.parameters.values())
@@ -220,12 +270,17 @@ def canonical_result(func: Callable[..., Any]) -> Callable[..., Any]:
         result = await func(*args, **kwargs)
         duration_ms = round((time.perf_counter() - start) * 1000)
 
-        # Content-bearing results (screenshots, audio, files) need their MCP content
-        # blocks and therefore remain untouched.
-        if isinstance(result, ToolResult):
-            return result
-
         unity_instance = await _unity_instance_from_call(args, kwargs)
+
+        # Content-bearing results (screenshots, audio, files) retain their MCP
+        # blocks and also receive the envelope promised by the output schema.
+        if isinstance(result, ToolResult):
+            return _canonicalize_tool_result(
+                result,
+                unity_instance=unity_instance,
+                duration_ms=duration_ms,
+            )
+
         envelope = canonicalize_result(
             result,
             unity_instance=unity_instance,

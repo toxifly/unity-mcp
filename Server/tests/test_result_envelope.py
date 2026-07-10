@@ -1,6 +1,8 @@
 import inspect
 
 import pytest
+from fastmcp.server.server import ToolResult
+from mcp.types import ImageContent, TextContent
 
 from services.tools.result_envelope import canonical_result, canonicalize_result
 
@@ -42,6 +44,20 @@ def test_canonicalize_failure_supplies_error_and_normalizes_warnings():
     assert result["warnings"] == ["Retry later"]
 
 
+def test_canonicalize_is_idempotent_for_existing_envelope():
+    existing = canonicalize_result(
+        {"success": True, "message": "Done", "data": {"value": 1}},
+        unity_instance="First@123",
+        duration_ms=2,
+    )
+
+    result = canonicalize_result(existing, unity_instance="Second@456", duration_ms=3)
+
+    assert result["data"] == {"value": 1}
+    assert result["status"] == "completed"
+    assert result["meta"] == {"unity_instance": "Second@456", "duration_ms": 3}
+
+
 @pytest.mark.asyncio
 async def test_structured_is_default_and_does_not_duplicate_json_as_text():
     async def tool(ctx, value: int) -> dict:
@@ -69,6 +85,26 @@ async def test_text_and_both_are_explicit_opt_ins():
     assert both.structured_content["success"] is True
     assert len(both.content) == 1
     assert "\n" in both.content[0].text
+
+
+@pytest.mark.asyncio
+async def test_content_bearing_result_retains_blocks_and_gets_structured_envelope():
+    blocks = [
+        TextContent(type="text", text='{"success":true,"message":"Captured","data":{"width":64}}'),
+        ImageContent(type="image", data="aW1hZ2U=", mimeType="image/png"),
+    ]
+
+    async def tool(ctx) -> ToolResult:
+        return ToolResult(content=blocks, meta={"trace_id": "abc"})
+
+    result = await canonical_result(tool)(_Context())
+
+    assert result.content == blocks
+    assert result.meta == {"trace_id": "abc"}
+    assert result.structured_content["success"] is True
+    assert result.structured_content["message"] == "Captured"
+    assert result.structured_content["data"] == {"width": 64}
+    assert result.structured_content["meta"]["unity_instance"] == "EnvelopeTests@abc123"
 
 
 def test_wrapper_advertises_standard_controls_and_tool_result_return():
