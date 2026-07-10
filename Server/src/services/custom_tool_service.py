@@ -21,6 +21,7 @@ from transport.legacy.unity_connection import (
 )
 from transport.plugin_hub import PluginHub
 from services.tools import get_unity_instance_from_context
+from services.tools.result_envelope import CANONICAL_RESULT_SCHEMA, canonical_result
 from services.registry import get_registered_tools
 
 logger = logging.getLogger("mcp-for-unity-server")
@@ -356,11 +357,13 @@ class CustomToolService:
         handler = self._build_global_tool_handler(definition)
         wrapped = log_execution(definition.name, "Tool")(handler)
         wrapped = telemetry_tool(definition.name)(wrapped)
+        wrapped = canonical_result(wrapped)
 
         try:
             wrapped = self._mcp.tool(
                 name=definition.name,
                 description=definition.description,
+                output_schema=CANONICAL_RESULT_SCHEMA,
             )(wrapped)
         except Exception as exc:  # pragma: no cover - defensive against tool conflicts
             logger.warning(

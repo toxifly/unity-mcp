@@ -10,6 +10,7 @@ from core.telemetry_decorator import telemetry_tool
 from core.logging_decorator import log_execution
 from utils.module_discovery import discover_modules
 from services.registry import get_registered_tools, TOOL_GROUPS, DEFAULT_ENABLED_GROUPS
+from services.tools.result_envelope import CANONICAL_RESULT_SCHEMA, canonical_result
 
 logger = logging.getLogger("mcp-for-unity-server")
 
@@ -61,8 +62,13 @@ def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
         # ParamNormalizerMiddleware before FastMCP validation
         wrapped = log_execution(tool_name, "Tool")(func)
         wrapped = telemetry_tool(tool_name)(wrapped)
+        wrapped = canonical_result(wrapped)
         wrapped = mcp.tool(
-            name=tool_name, description=description, **kwargs)(wrapped)
+            name=tool_name,
+            description=description,
+            output_schema=CANONICAL_RESULT_SCHEMA,
+            **kwargs,
+        )(wrapped)
         tool_info['func'] = wrapped
         logger.debug(f"Registered tool: {tool_name} - {description}")
 
