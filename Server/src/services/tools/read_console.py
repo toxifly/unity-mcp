@@ -16,8 +16,10 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 def _strip_stacktrace_from_list(items: list) -> None:
     """Remove stacktrace fields from a list of log entries."""
     for item in items:
-        if isinstance(item, dict) and "stacktrace" in item:
-            item.pop("stacktrace", None)
+        if isinstance(item, dict):
+            item.pop("stack_trace", None)
+            item.pop("stackTrace", None)  # Compatibility with older Unity packages.
+            item.pop("stacktrace", None)  # Compatibility with legacy bridge payloads.
 
 
 @mcp_for_unity_tool(
@@ -41,7 +43,7 @@ async def read_console(
     cursor: Annotated[int | str,
                       "Opaque cursor for paging (0-based offset). Defaults to 0."] | None = None,
     format: Annotated[Literal['plain', 'detailed',
-                              'json'], "Output format"] | None = None,
+                              'json'], "Output format; defaults to structured JSON records"] | None = None,
     include_stacktrace: Annotated[bool | str,
                                   "Include stack traces in output (accepts true/false or 'true'/'false')"] | None = None,
 ) -> dict[str, Any]:
@@ -86,7 +88,7 @@ async def read_console(
     else:
         types = ['error', 'warning', 'log']
     
-    format = format if format is not None else 'plain'
+    format = format if format is not None else 'json'
     # Coerce booleans defensively (strings like 'true'/'false')
 
     include_stacktrace = coerce_bool(include_stacktrace, default=False)

@@ -36,7 +36,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Standard `response_format` (`structured`, `text`, `both`) and `verbosity` (`compact`, `normal`, `detailed`) controls exposed on built-in and globally registered custom tools.
 - [x] Shared terminal job summaries.
 - [x] Correct `wait_for_ready` semantics.
-- [ ] Correct console log typing.
+- [x] Correct console log typing.
 
 Implemented on 2026-07-10:
 
@@ -64,6 +64,14 @@ Implemented on 2026-07-10:
 - Persisted compilation start/finish timestamps, error and warning totals, and duration through Unity `SessionState`, and returned the shared terminal compile summary (`compiled`, `errors`, `warnings`, `duration_seconds`). Compile errors now produce `COMPILE_FAILED`.
 - Added resumable refresh job IDs. A timeout returns `status: "timed_out"` plus the last observed editor state; passing the job ID back to `refresh_unity` resumes waiting without requesting a second refresh/compile.
 - Removed the pytest-wide readiness shortcut from the refresh path and added focused coverage for compile transition observation, two-update stability, disconnect recovery, and terminal summaries. Validation: 23 focused refresh/readiness tests passed; two mutation-helper regression tests also passed; Python compilation checks passed. The full Server suite reached 1,336 passed and 3 skipped; its 7 failures are the previously documented out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues. A running Unity 6.5 editor reported no C# compilation errors in its recent editor log.
+
+Implemented on 2026-07-10:
+
+- Replaced message-text severity guessing and incorrect shifted `LogEntry.mode` masks with Unity's actual console mode flags. Ordinary logs containing words such as `Exception` or compiler-looking text are no longer promoted to errors.
+- Made structured console records the default and exposed `unity_log_type`, `source`, `message`, `stack_trace`, `file`, and `line`. Explicit `plain` format remains available.
+- Added source classification for user, compiler, test runner, MCP, and Unity-internal records; compiler classification comes directly from compile-mode flags, while the remaining provenance labels use bounded package/marker checks.
+- Kept error filtering intentionally broad only within Unity's real severity: `Error`, `Assert`, and `Exception` match `types=["error"]`; normal `Log` and `Warning` entries do not.
+- Added Unity regression tests for all relevant mode mappings, provenance labels, and a normal log whose text contains `Exception`. Validation: all 11 focused Unity 6.5 EditMode tests passed in an isolated fixture, and all 13 focused Server console/domain-reload tests passed. The full Server suite reached 1,337 passed and 3 skipped; its 7 failures are the same previously documented out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues.
 
 ---
 
@@ -283,6 +291,8 @@ Implementation behavior:
 Do not treat “compile requested” as “compile completed.”
 
 #### 6.4 Fix console typing
+
+**Implementation status:** Complete (2026-07-10). Console severity now comes only from Unity's mode flags; structured records include actual Unity type and source provenance.
 
 Return Unity's actual log type separately from any MCP transport classification:
 

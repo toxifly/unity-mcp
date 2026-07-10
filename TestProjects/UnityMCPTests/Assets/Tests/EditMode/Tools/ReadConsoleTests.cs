@@ -75,5 +75,62 @@ namespace MCPForUnityTests.Editor.Tools
             }
             Assert.IsTrue(found, $"The unique log message '{uniqueMessage}' was not found in retrieved logs.");
         }
+
+        [Test]
+        public void HandleCommand_ErrorFilter_ExcludesNormalLogContainingExceptionText()
+        {
+            string uniqueMessage = $"Ordinary Exception status {Guid.NewGuid()}";
+            Debug.Log(uniqueMessage);
+
+            var errors = ToJObject(ReadConsole.HandleCommand(new JObject
+            {
+                ["action"] = "get",
+                ["types"] = new JArray { "error" },
+                ["filterText"] = uniqueMessage,
+                ["format"] = "detailed",
+                ["count"] = 1000
+            }));
+            var errorEntries = errors["data"] as JArray;
+            Assert.IsTrue(errors.Value<bool>("success"), errors.ToString());
+            Assert.IsNotNull(errorEntries);
+            Assert.AreEqual(0, errorEntries.Count, "A normal Debug.Log must not be promoted by message text.");
+
+            var logs = ToJObject(ReadConsole.HandleCommand(new JObject
+            {
+                ["action"] = "get",
+                ["types"] = new JArray { "log" },
+                ["filterText"] = uniqueMessage,
+                ["format"] = "detailed",
+                ["count"] = 1000
+            }));
+            var logEntries = logs["data"] as JArray;
+            Assert.IsTrue(logs.Value<bool>("success"), logs.ToString());
+            Assert.IsNotNull(logEntries);
+            Assert.AreEqual(1, logEntries.Count);
+            Assert.AreEqual("Log", logEntries[0]["unity_log_type"]?.ToString());
+            Assert.AreEqual("user", logEntries[0]["source"]?.ToString());
+        }
+
+        [TestCase(1 << 10, LogType.Log)]
+        [TestCase((1 << 9) | 1, LogType.Warning)]
+        [TestCase((1 << 8) | 1, LogType.Error)]
+        [TestCase((1 << 17) | 1 | (1 << 4), LogType.Exception)]
+        [TestCase((1 << 21) | (1 << 1), LogType.Assert)]
+        [TestCase(1 << 11, LogType.Error)]
+        [TestCase(1 << 12, LogType.Warning)]
+        public void GetLogTypeFromMode_MapsUnityConsoleFlags(int mode, LogType expected)
+        {
+            Assert.AreEqual(expected, ReadConsole.GetLogTypeFromMode(mode));
+        }
+
+        [Test]
+        public void GetLogSource_ClassifiesKnownSources()
+        {
+            Assert.AreEqual("compiler", ReadConsole.GetLogSource(1 << 11, "error CS1000", "Assets/Test.cs"));
+            Assert.AreEqual("test_runner", ReadConsole.GetLogSource(0, "Saving Test Runner results", ""));
+            Assert.AreEqual("mcp", ReadConsole.GetLogSource(0, "MCP-FOR-UNITY connected", ""));
+            Assert.AreEqual("unity_internal", ReadConsole.GetLogSource(0, "Imported", "Packages/com.unity.test/file.cs"));
+            Assert.AreEqual("user", ReadConsole.GetLogSource(0, "Selected roster unit", "Assets/Game.cs"));
+        }
     }
 }

@@ -168,7 +168,7 @@ namespace MCPForUnity.Editor.Tools
                     int? pageSize = p.GetInt("pageSize");
                     int? cursor = p.GetInt("cursor");
                     string filterText = p.Get("filterText");
-                    string format = p.Get("format", "plain").ToLower();
+                    string format = p.Get("format", "json").ToLower();
                     bool includeStacktrace = p.GetBool("includeStacktrace", false);
 
                     if (types.Contains("all"))
@@ -285,13 +285,10 @@ namespace MCPForUnity.Editor.Tools
                     // (Calibration removed)
 
                     // --- Filtering ---
-                    // Prefer classifying severity from message/stacktrace; fallback to mode bits if needed
-                    LogType unityType = InferTypeFromMessage(message);
-                    bool isExplicitDebug = IsExplicitDebugLog(message);
-                    if (!isExplicitDebug && unityType == LogType.Log)
-                    {
-                        unityType = GetLogTypeFromMode(mode);
-                    }
+                    // LogEntry.mode is Unity's source of truth. Message text is payload and must
+                    // never promote an ordinary log merely because it contains words such as
+                    // "Exception", "Assertion", or compiler-looking text.
+                    LogType unityType = GetLogTypeFromMode(mode);
 
                     bool want;
                     // Treat Exception/Assert as errors for filtering convenience
@@ -345,11 +342,12 @@ namespace MCPForUnity.Editor.Tools
                         default:
                             formattedEntry = new
                             {
-                                type = unityType.ToString(),
+                                unity_log_type = unityType.ToString(),
+                                source = GetLogSource(mode, message, file),
                                 message = messageOnly,
                                 file = file,
                                 line = line,
-                                stackTrace = stackTrace, // Will be null if includeStacktrace is false or no stack found
+                                stack_trace = stackTrace, // Null when omitted or unavailable.
                             };
                             break;
                     }
@@ -432,69 +430,74 @@ namespace MCPForUnity.Editor.Tools
 
         // --- Internal Helpers ---
 
-        // Mapping bits from LogEntry.mode. These may vary by Unity version.
+        // UnityEditor.ConsoleWindow.Mode flags. These values have remained stable across the
+        // supported Unity versions (2021.3+). Keep context flags separate from LogType: for
+        // example ScriptingLog identifies a normal log, not a warning or exception.
         private const int ModeBitError = 1 << 0;
         private const int ModeBitAssert = 1 << 1;
-        private const int ModeBitWarning = 1 << 2;
-        private const int ModeBitLog = 1 << 3;
-        private const int ModeBitException = 1 << 4; // often combined with Error bits
-        private const int ModeBitScriptingError = 1 << 9;
-        private const int ModeBitScriptingWarning = 1 << 10;
-        private const int ModeBitScriptingLog = 1 << 11;
-        private const int ModeBitScriptingException = 1 << 18;
-        private const int ModeBitScriptingAssertion = 1 << 22;
+        private const int ModeBitLog = 1 << 2;
+        private const int ModeBitFatal = 1 << 4;
+        private const int ModeBitAssetImportError = 1 << 6;
+        private const int ModeBitAssetImportWarning = 1 << 7;
+        private const int ModeBitScriptingError = 1 << 8;
+        private const int ModeBitScriptingWarning = 1 << 9;
+        private const int ModeBitScriptingLog = 1 << 10;
+        private const int ModeBitScriptCompileError = 1 << 11;
+        private const int ModeBitScriptCompileWarning = 1 << 12;
+        private const int ModeBitStickyError = 1 << 13;
+        private const int ModeBitScriptingException = 1 << 17;
+        private const int ModeBitGraphCompileError = 1 << 20;
+        private const int ModeBitScriptingAssertion = 1 << 21;
+        private const int ModeBitVisualScriptingError = 1 << 22;
 
-        private static LogType GetLogTypeFromMode(int mode)
+        private const int ErrorModeMask =
+            ModeBitError
+            | ModeBitFatal
+            | ModeBitAssetImportError
+            | ModeBitScriptingError
+            | ModeBitScriptCompileError
+            | ModeBitStickyError
+            | ModeBitGraphCompileError
+            | ModeBitVisualScriptingError;
+        private const int WarningModeMask =
+            ModeBitAssetImportWarning | ModeBitScriptingWarning | ModeBitScriptCompileWarning;
+        private const int CompilerModeMask = ModeBitScriptCompileError | ModeBitScriptCompileWarning;
+
+        internal static LogType GetLogTypeFromMode(int mode)
         {
-            // Preserve Unity's real type (no remapping); bits may vary by version
-            if ((mode & (ModeBitException | ModeBitScriptingException)) != 0) return LogType.Exception;
-            if ((mode & (ModeBitError | ModeBitScriptingError)) != 0) return LogType.Error;
+            // Specific scripting flags win over their accompanying generic Error/Assert bits.
+            if ((mode & ModeBitScriptingException) != 0) return LogType.Exception;
+            if ((mode & ModeBitScriptingAssertion) != 0) return LogType.Assert;
             if ((mode & (ModeBitAssert | ModeBitScriptingAssertion)) != 0) return LogType.Assert;
-            if ((mode & (ModeBitWarning | ModeBitScriptingWarning)) != 0) return LogType.Warning;
+            if ((mode & WarningModeMask) != 0) return LogType.Warning;
+            if ((mode & ErrorModeMask) != 0) return LogType.Error;
             return LogType.Log;
         }
 
-        // (Calibration helpers removed)
-
-        /// <summary>
-        /// Classifies severity using message/stacktrace content. Works across Unity versions.
-        /// </summary>
-        private static LogType InferTypeFromMessage(string fullMessage)
+        internal static string GetLogSource(int mode, string message, string file)
         {
-            if (string.IsNullOrEmpty(fullMessage)) return LogType.Log;
+            if ((mode & CompilerModeMask) != 0) return "compiler";
 
-            // Fast path: look for explicit Debug API names in the appended stack trace
-            // e.g., "UnityEngine.Debug:LogError (object)" or "LogWarning"
-            if (fullMessage.IndexOf("LogError", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Error;
-            if (fullMessage.IndexOf("LogWarning", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Warning;
-
-            // Compiler diagnostics (C#): "warning CSxxxx" / "error CSxxxx"
-            if (fullMessage.IndexOf(" warning CS", StringComparison.OrdinalIgnoreCase) >= 0
-                || fullMessage.IndexOf(": warning CS", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Warning;
-            if (fullMessage.IndexOf(" error CS", StringComparison.OrdinalIgnoreCase) >= 0
-                || fullMessage.IndexOf(": error CS", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Error;
-
-            // Exceptions (avoid misclassifying compiler diagnostics)
-            if (fullMessage.IndexOf("Exception", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Exception;
-
-            // Unity assertions
-            if (fullMessage.IndexOf("Assertion", StringComparison.OrdinalIgnoreCase) >= 0)
-                return LogType.Assert;
-
-            return LogType.Log;
-        }
-
-        private static bool IsExplicitDebugLog(string fullMessage)
-        {
-            if (string.IsNullOrEmpty(fullMessage)) return false;
-            if (fullMessage.IndexOf("Debug:Log (", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            if (fullMessage.IndexOf("UnityEngine.Debug:Log (", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            return false;
+            string searchable = $"{file}\n{message}";
+            if (
+                searchable.IndexOf("MCP-FOR-UNITY", StringComparison.OrdinalIgnoreCase) >= 0
+                || searchable.IndexOf("Packages/com.coplaydev.unity-mcp/", StringComparison.OrdinalIgnoreCase) >= 0
+            )
+                return "mcp";
+            if (
+                searchable.IndexOf("TestRunner", StringComparison.OrdinalIgnoreCase) >= 0
+                || searchable.IndexOf("Test Runner", StringComparison.OrdinalIgnoreCase) >= 0
+                || searchable.IndexOf("UnityEngine.TestTools", StringComparison.OrdinalIgnoreCase) >= 0
+                || searchable.IndexOf("UnityEditor.TestTools", StringComparison.OrdinalIgnoreCase) >= 0
+            )
+                return "test_runner";
+            if (
+                !string.IsNullOrEmpty(file)
+                && (file.StartsWith("Packages/com.unity.", StringComparison.OrdinalIgnoreCase)
+                    || file.StartsWith("Library/PackageCache/com.unity.", StringComparison.OrdinalIgnoreCase))
+            )
+                return "unity_internal";
+            return "user";
         }
 
         /// <summary>
@@ -560,41 +563,5 @@ namespace MCPForUnity.Editor.Tools
             return null;
         }
 
-        /* LogEntry.mode bits exploration (based on Unity decompilation/observation):
-           May change between versions.
-
-           Basic Types:
-           kError = 1 << 0 (1)
-           kAssert = 1 << 1 (2)
-           kWarning = 1 << 2 (4)
-           kLog = 1 << 3 (8)
-           kFatal = 1 << 4 (16) - Often treated as Exception/Error
-
-           Modifiers/Context:
-           kAssetImportError = 1 << 7 (128)
-           kAssetImportWarning = 1 << 8 (256)
-           kScriptingError = 1 << 9 (512)
-           kScriptingWarning = 1 << 10 (1024)
-           kScriptingLog = 1 << 11 (2048)
-           kScriptCompileError = 1 << 12 (4096)
-           kScriptCompileWarning = 1 << 13 (8192)
-           kStickyError = 1 << 14 (16384) - Stays visible even after Clear On Play
-           kMayIgnoreLineNumber = 1 << 15 (32768)
-           kReportBug = 1 << 16 (65536) - Shows the "Report Bug" button
-           kDisplayPreviousErrorInStatusBar = 1 << 17 (131072)
-           kScriptingException = 1 << 18 (262144)
-           kDontExtractStacktrace = 1 << 19 (524288) - Hint to the console UI
-           kShouldClearOnPlay = 1 << 20 (1048576) - Default behavior
-           kGraphCompileError = 1 << 21 (2097152)
-           kScriptingAssertion = 1 << 22 (4194304)
-           kVisualScriptingError = 1 << 23 (8388608)
-
-           Example observed values:
-           Log: 2048 (ScriptingLog) or 8 (Log)
-           Warning: 1028 (ScriptingWarning | Warning) or 4 (Warning)
-           Error: 513 (ScriptingError | Error) or 1 (Error)
-           Exception: 262161 (ScriptingException | Error | kFatal?) - Complex combination
-           Assertion: 4194306 (ScriptingAssertion | Assert) or 2 (Assert)
-        */
     }
 }
