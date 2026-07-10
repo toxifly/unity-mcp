@@ -116,3 +116,23 @@ def test_wrapper_advertises_standard_controls_and_tool_result_return():
     assert signature.parameters["required"].default is inspect.Parameter.empty
     assert signature.parameters["response_format"].default == "structured"
     assert signature.parameters["verbosity"].default == "compact"
+
+
+@pytest.mark.asyncio
+async def test_tool_parameters_named_like_rendering_controls_are_forwarded():
+    captured = {}
+
+    async def tool(ctx, response_format: str, verbosity: int) -> dict:
+        captured["response_format"] = response_format
+        captured["verbosity"] = verbosity
+        return {"success": True}
+
+    wrapped = canonical_result(tool)
+    signature = inspect.signature(wrapped)
+    result = await wrapped(_Context(), response_format="tool-format", verbosity=7)
+
+    assert signature.parameters["response_format"].default is inspect.Parameter.empty
+    assert signature.parameters["verbosity"].default is inspect.Parameter.empty
+    assert captured == {"response_format": "tool-format", "verbosity": 7}
+    assert result.content == []
+    assert result.structured_content["success"] is True

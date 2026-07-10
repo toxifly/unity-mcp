@@ -260,12 +260,22 @@ def _signature_with_controls(func: Callable[..., Any]) -> inspect.Signature:
 
 def canonical_result(func: Callable[..., Any]) -> Callable[..., Any]:
     """Wrap a registered tool with canonical envelope and rendering controls."""
+    tool_parameter_names = set(inspect.signature(func).parameters)
+    injected_controls = {"response_format", "verbosity"} - tool_parameter_names
     original_signature = _signature_with_controls(func)
 
     @functools.wraps(func)
     async def _async_wrapper(*args: Any, **kwargs: Any) -> ToolResult:
-        response_format = kwargs.pop("response_format", "structured")
-        verbosity = kwargs.pop("verbosity", "compact")
+        response_format = (
+            kwargs.pop("response_format", "structured")
+            if "response_format" in injected_controls
+            else "structured"
+        )
+        verbosity = (
+            kwargs.pop("verbosity", "compact")
+            if "verbosity" in injected_controls
+            else "compact"
+        )
         start = time.perf_counter()
         result = await func(*args, **kwargs)
         duration_ms = round((time.perf_counter() - start) * 1000)
@@ -289,10 +299,10 @@ def canonical_result(func: Callable[..., Any]) -> Callable[..., Any]:
         return _render_result(envelope, response_format, verbosity)
 
     _async_wrapper.__signature__ = original_signature
-    _async_wrapper.__annotations__ = {
-        **getattr(func, "__annotations__", {}),
-        "response_format": RESPONSE_FORMAT_ANNOTATION,
-        "verbosity": VERBOSITY_ANNOTATION,
-        "return": ToolResult,
-    }
+    _async_wrapper.__annotations__ = {**getattr(func, "__annotations__", {})}
+    if "response_format" in injected_controls:
+        _async_wrapper.__annotations__["response_format"] = RESPONSE_FORMAT_ANNOTATION
+    if "verbosity" in injected_controls:
+        _async_wrapper.__annotations__["verbosity"] = VERBOSITY_ANNOTATION
+    _async_wrapper.__annotations__["return"] = ToolResult
     return _async_wrapper

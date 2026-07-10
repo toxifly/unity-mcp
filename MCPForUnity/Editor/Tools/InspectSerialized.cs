@@ -206,6 +206,7 @@ namespace MCPForUnity.Editor.Tools
             out string propertyPath)
         {
             propertyPath = requestedProperty;
+            var matches = new List<UnityEngine.Object>();
             foreach (UnityEngine.Object target in serializedTargets)
             {
                 if (!(target is Component component)) continue;
@@ -215,15 +216,15 @@ namespace MCPForUnity.Editor.Tools
                 if (requestedProperty.StartsWith(fullPrefix, StringComparison.Ordinal))
                 {
                     propertyPath = requestedProperty.Substring(fullPrefix.Length);
-                    return new List<UnityEngine.Object> { target };
+                    matches.Add(target);
                 }
-                if (requestedProperty.StartsWith(shortPrefix, StringComparison.Ordinal))
+                else if (requestedProperty.StartsWith(shortPrefix, StringComparison.Ordinal))
                 {
                     propertyPath = requestedProperty.Substring(shortPrefix.Length);
-                    return new List<UnityEngine.Object> { target };
+                    matches.Add(target);
                 }
             }
-            return serializedTargets;
+            return matches.Count > 0 ? matches : serializedTargets;
         }
 
         private static object BuildFinding(
