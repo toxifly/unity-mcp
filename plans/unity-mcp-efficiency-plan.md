@@ -44,6 +44,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Shared mutation transaction service with dirty-state preflight, serialized change previews, scoped saves, and rollback.
 - [x] Transaction-backed `change_guard` enforcement for core GameObject and component mutations.
 - [x] Transaction-backed dry-run previews for core GameObject and component mutations.
+- [x] Atomic prefab creation and optional scene replacement with guarded, two-asset rollback.
 
 Implemented on 2026-07-10:
 
@@ -130,6 +131,14 @@ Implemented on 2026-07-10:
 - Unified guarded mutations and previews behind one transaction execution path. A dry run can also include `change_guard`; unexpected changes retain the stable `UNEXPECTED_SERIALIZED_CHANGES` result while still reporting the complete preview and rollback state.
 - Made dry runs use the explicit preserve policy for pre-dirty scenes and taught rollback to restore the original scene and asset dirty flags after Undo and byte restoration. This keeps clean scenes clean and pre-dirty scenes dirty while removing the previewed edit.
 - Added server forwarding/coercion tests and Unity EditMode coverage for exact property previews, created-component rollback, clean-scene restoration, and pre-dirty-scene preservation. Validation: 12 focused server dry-run, capability, signature, and GameObject tests passed across two runs; Python syntax parsing passed. The full Server suite reached 1,358 passed and 3 skipped; its 6 failures are the same documented screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. No Unity editor is installed locally, so the two new EditMode tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added `manage_prefabs(action="create_and_replace")` across the server and Unity package. It creates the prefab asset, optionally instantiates a connected replacement, preserves parent/sibling position and transform, explicitly remaps external serialized references by hierarchy indices and component indices, and Undo-destroys the original only after the replacement is ready.
+- Runs prefab creation, scene replacement, scoped scene saving, serialized change preview, and rollback through one `MutationTransaction` spanning the owning scene and prefab path. The built-in scope validator permits only the target hierarchy, the exact prefab asset, and captured external-reference properties; an optional `change_guard` can narrow that scope further.
+- Added `dry_run`, `dirty_scene_policy`, `preserve_world_transform`, `preserve_scene_references`, `save_scene`, `allow_overwrite`, and `link_scene_instance=false`. New and overwritten prefab bytes are restored if validation or scene saving fails, while unlinked mode creates only the prefab asset without dirtying the scene.
+- Added asset-path provenance to serialized change records so identically named scene and prefab objects are classified by stable asset scope. Replaced the unavailable Unity 6.5 `EditorSceneManager.ClearSceneDirtiness` call with Undo-based clean-scene restoration plus explicit pre-dirty preservation.
+- Added three server contract tests and four Unity EditMode tests covering successful reference/transform/order preservation, dry-run rollback, guard rollback of both assets, and unlinked creation. Validation: 26 focused server prefab/capability/registry tests passed; the full Server suite reached 1,361 passed and 3 skipped with the same 6 pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. The connected Unity 6000.5.0f1 editor compiled the final package with zero console errors. A live temporary-scene probe of an earlier `SaveAsPrefabAssetAndConnect` implementation caused a native Unity access violation during teardown; that implementation was removed in favor of the staged Undo-tracked replacement above, its temporary assets were deleted, and the revised behavioral tests remain checked in but are not claimed as executed in this environment.
 
 ---
 
@@ -615,6 +624,8 @@ Dry-run must:
 - leave dirty state unchanged.
 
 #### 6.13 Atomic prefab creation and scene replacement
+
+**Implementation status:** Complete (2026-07-10). `manage_prefabs(action="create_and_replace")` uses one scene/prefab transaction, explicit reference remapping, built-in and caller-provided change guards, dry-run rollback, scoped scene saving, and optional unlinked asset creation.
 
 Add a high-level operation:
 
