@@ -72,7 +72,7 @@ async def test_structured_is_default_and_does_not_duplicate_json_as_text():
 
 
 @pytest.mark.asyncio
-async def test_text_and_both_are_explicit_opt_ins():
+async def test_text_and_both_add_text_without_dropping_structured_content():
     async def tool(ctx) -> dict:
         return {"success": True, "message": "Done"}
 
@@ -80,7 +80,7 @@ async def test_text_and_both_are_explicit_opt_ins():
     text_only = await wrapped(_Context(), response_format="text")
     both = await wrapped(_Context(), response_format="both", verbosity="detailed")
 
-    assert text_only.structured_content is None
+    assert text_only.structured_content["success"] is True
     assert len(text_only.content) == 1
     assert both.structured_content["success"] is True
     assert len(both.content) == 1

@@ -1,3 +1,5 @@
+import time
+
 import pytest
 
 from models import MCPResponse
@@ -92,5 +94,54 @@ async def test_compile_refresh_returns_terminal_summary_after_stable_ready(monke
     assert payload["data"]["summary"] == {
         "compiled": True, "errors": 0, "warnings": 2, "duration_seconds": 1.25,
     }
+
+
+@pytest.mark.asyncio
+async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+    ctx = DummyContext()
+    await ctx.set_state("unity_instance", "ProjectA@111")
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        assert unity_instance == "ProjectA@111"
+        return {"success": False, "error": "disconnected"}
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send)
+    started = await refresh_mod.refresh_unity(ctx, compile="request", wait_for_ready=False)
+    job_id = started.model_dump()["data"]["job_id"]
+    assert refresh_mod._REFRESH_JOBS[job_id]["unity_instance"] == "ProjectA@111"
+
+    await ctx.set_state("unity_instance", "ProjectB@222")
+    observed_instances = []
+    tick = 0
+
+    async def fake_state(poll_ctx):
+        nonlocal tick
+        tick += 1
+        observed_instances.append(await poll_ctx.get_state("unity_instance"))
+        return {
+            "data": {
+                "update_tick": tick,
+                "compilation": {
+                    "last_compile_started_unix_ms": int(time.time() * 1000),
+                    "last_compile_errors": 0,
+                },
+                "advice": {"blocking_reasons": []},
+            }
+        }
+
+    async def no_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(refresh_mod.editor_state, "get_editor_state", fake_state)
+    monkeypatch.setattr(refresh_mod.asyncio, "sleep", no_sleep)
+
+    resumed = await refresh_mod.refresh_unity(ctx, job_id=job_id)
+
+    assert resumed.model_dump()["data"]["status"] == "succeeded"
+    assert observed_instances == ["ProjectA@111", "ProjectA@111"]
+    assert job_id not in refresh_mod._REFRESH_JOBS
 
 

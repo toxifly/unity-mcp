@@ -21,8 +21,8 @@ RESPONSE_FORMAT_ANNOTATION = Annotated[
     ResponseFormat,
     Field(
         description=(
-            "Result representation. 'structured' (default) omits text content; "
-            "'text' returns JSON text only; 'both' returns both representations."
+            "Result representation. The canonical structured result is always returned. "
+            "'structured' (default) omits text content; 'text' and 'both' also add JSON text."
         )
     ),
 ]
@@ -194,7 +194,7 @@ def _render_result(
     if response_format == "structured":
         return ToolResult(content=[], structured_content=envelope)
     if response_format == "text":
-        return ToolResult(content=blocks)
+        return ToolResult(content=blocks, structured_content=envelope)
     return ToolResult(content=blocks, structured_content=envelope)
 
 
