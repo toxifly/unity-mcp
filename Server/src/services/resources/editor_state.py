@@ -54,6 +54,9 @@ class EditorStateCompilation(BaseModel):
     last_compile_finished_unix_ms: int | None = None
     last_domain_reload_before_unix_ms: int | None = None
     last_domain_reload_after_unix_ms: int | None = None
+    last_compile_errors: int | None = None
+    last_compile_warnings: int | None = None
+    last_compile_duration_seconds: float | None = None
 
 
 class EditorStateRefresh(BaseModel):
@@ -111,6 +114,7 @@ class EditorStateData(BaseModel):
     schema_version: str
     observed_at_unix_ms: int
     sequence: int
+    update_tick: int | None = None
     unity: EditorStateUnity | None = None
     editor: EditorStateEditor | None = None
     activity: EditorStateActivity | None = None
@@ -188,6 +192,7 @@ def _enrich_advice_and_staleness(state_v2: dict[str, Any]) -> dict[str, Any]:
     is_stale = age_ms > 2000
 
     compilation = state_v2.get("compilation") or {}
+    editor = state_v2.get("editor") or {}
     tests = state_v2.get("tests") or {}
     assets = state_v2.get("assets") or {}
     refresh = (assets.get("refresh") or {}) if isinstance(assets, dict) else {}
@@ -199,6 +204,11 @@ def _enrich_advice_and_staleness(state_v2: dict[str, Any]) -> dict[str, Any]:
         blocking.append("domain_reload")
     if tests.get("is_running") is True:
         blocking.append("running_tests")
+    play_mode = editor.get("play_mode") if isinstance(editor, dict) else {}
+    if isinstance(play_mode, dict) and play_mode.get("is_changing") is True:
+        blocking.append("playmode_transition")
+    if assets.get("is_updating") is True:
+        blocking.append("asset_import")
     if refresh.get("is_refresh_in_progress") is True:
         blocking.append("asset_refresh")
     if is_stale:

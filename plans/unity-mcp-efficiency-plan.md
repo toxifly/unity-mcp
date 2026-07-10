@@ -35,7 +35,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Structured-only responses by default, without duplicated JSON text.
 - [x] Standard `response_format` (`structured`, `text`, `both`) and `verbosity` (`compact`, `normal`, `detailed`) controls exposed on built-in and globally registered custom tools.
 - [x] Shared terminal job summaries.
-- [ ] Correct `wait_for_ready` semantics.
+- [x] Correct `wait_for_ready` semantics.
 - [ ] Correct console log typing.
 
 Implemented on 2026-07-10:
@@ -55,6 +55,15 @@ Implemented on 2026-07-10:
 - Added migration behavior for jobs persisted by older package versions and a server-side compatibility normalizer for older Unity clients that return only `result.summary` or progress counters.
 - Standardized task cancellation as the terminal `cancelled` lifecycle state while retaining `failed` for faults and watchdog failures.
 - Added focused coverage for direct, legacy nested, and synthesized terminal summaries. Validation: all 9 async test-job integration tests passed. The full Server suite reached 1,334 passed and 3 skipped; its 7 failures remain the same pre-existing/out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues.
+
+Implemented on 2026-07-10:
+
+- Made the server the authority for cross-domain refresh readiness; the Unity-side command no longer tries to keep an async waiter alive across a compilation-triggered assembly reload.
+- Captured a pre-request compilation baseline and require evidence of the requested compilation before accepting idle state, preventing an initial idle snapshot from completing the call prematurely.
+- Required two distinct ready editor updates after compilation, import, domain reload, tests, and Play Mode transitions have cleared. Added a lightweight `update_tick` to distinguish updates without rebuilding the cached editor-state payload.
+- Persisted compilation start/finish timestamps, error and warning totals, and duration through Unity `SessionState`, and returned the shared terminal compile summary (`compiled`, `errors`, `warnings`, `duration_seconds`). Compile errors now produce `COMPILE_FAILED`.
+- Added resumable refresh job IDs. A timeout returns `status: "timed_out"` plus the last observed editor state; passing the job ID back to `refresh_unity` resumes waiting without requesting a second refresh/compile.
+- Removed the pytest-wide readiness shortcut from the refresh path and added focused coverage for compile transition observation, two-update stability, disconnect recovery, and terminal summaries. Validation: 23 focused refresh/readiness tests passed; two mutation-helper regression tests also passed; Python compilation checks passed. The full Server suite reached 1,336 passed and 3 skipped; its 7 failures are the previously documented out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues. A running Unity 6.5 editor reported no C# compilation errors in its recent editor log.
 
 ---
 
@@ -258,6 +267,8 @@ For compilation, use analogous fields:
 ```
 
 #### 6.3 Correct `wait_for_ready`
+
+**Implementation status:** Complete (2026-07-10). The server observes compilation across reconnects, requires two ready editor updates, returns a terminal summary, and supports resumable timeout job IDs.
 
 `refresh_unity(wait_for_ready=true)` must not return success while the editor is compiling, updating, entering Play Mode, or in domain reload.
 

@@ -6,16 +6,36 @@ from services.tools.refresh_unity import is_reloading_rejection
 from .test_helpers import DummyContext
 
 
-@pytest.mark.asyncio
-async def test_returns_immediately_in_pytest(monkeypatch):
-    """_in_pytest() detects PYTEST_CURRENT_TEST and returns (True, 0.0) immediately."""
-    # PYTEST_CURRENT_TEST is set by pytest automatically, so this should short-circuit.
-    from services.tools.refresh_unity import wait_for_editor_ready
+@pytest.fixture(autouse=True)
+def default_ready_editor_state(monkeypatch):
+    """Keep mutation-helper tests deterministic now that readiness is never bypassed under pytest."""
+    from services.tools import refresh_unity as mod
 
-    ctx = DummyContext()
-    ready, elapsed = await wait_for_editor_ready(ctx, timeout_s=5.0)
-    assert ready is True
-    assert elapsed == 0.0
+    tick = 0
+
+    async def ready_state(ctx):
+        nonlocal tick
+        tick += 1
+        return {"data": {"update_tick": tick, "advice": {"ready_for_tools": True}}}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", ready_state)
+
+
+@pytest.mark.asyncio
+async def test_requires_two_distinct_ready_editor_updates(monkeypatch):
+    from services.tools import refresh_unity as mod
+
+    call_count = 0
+
+    async def fake_get_editor_state(ctx):
+        nonlocal call_count
+        call_count += 1
+        return {"data": {"update_tick": call_count, "advice": {"ready_for_tools": True}}}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", fake_get_editor_state)
+    result = await mod.wait_for_editor_ready(DummyContext(), timeout_s=5.0)
+    assert result.ready is True
+    assert call_count == 2
 
 
 @pytest.mark.asyncio
@@ -59,6 +79,31 @@ async def test_timeout_returns_false(monkeypatch):
     ready, elapsed = await mod.wait_for_editor_ready(ctx, timeout_s=0.6)
     assert ready is False
     assert elapsed >= 0.5
+
+
+@pytest.mark.asyncio
+async def test_compile_wait_does_not_accept_idle_before_compile_starts(monkeypatch):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    from services.tools import refresh_unity as mod
+
+    states = [
+        {"update_tick": 1, "compilation": {"last_compile_started_unix_ms": 100}, "advice": {"blocking_reasons": []}},
+        {"update_tick": 2, "compilation": {"is_compiling": True, "last_compile_started_unix_ms": 200},
+         "advice": {"blocking_reasons": ["compiling"]}},
+        {"update_tick": 3, "compilation": {"last_compile_started_unix_ms": 200}, "advice": {"blocking_reasons": []}},
+        {"update_tick": 4, "compilation": {"last_compile_started_unix_ms": 200}, "advice": {"blocking_reasons": []}},
+    ]
+
+    async def fake_get_editor_state(ctx):
+        return {"data": states.pop(0)}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", fake_get_editor_state)
+    result = await mod.wait_for_editor_ready(
+        DummyContext(), timeout_s=5.0, baseline_compile_started_ms=100, require_compile_observation=True
+    )
+    assert result.ready is True
+    assert result.observed_compile is True
+    assert result.last_state["update_tick"] == 4
 
 
 @pytest.mark.asyncio
