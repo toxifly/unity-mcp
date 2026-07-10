@@ -344,6 +344,41 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsFalse(testScene.isDirty);
             Assert.IsFalse(response["data"]["linkedSceneInstance"].Value<bool>());
         }
+
+        [Test]
+        public void SaveSceneScoped_SavesOnlyRequestedDirtyScene()
+        {
+            root.SetActive(false);
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsFalse(testScene.isDirty);
+            Assert.AreEqual(ScenePath, response["data"]["assets_saved"][0].Value<string>());
+            Assert.IsFalse(response["data"]["rolled_back"].Value<bool>());
+        }
+
+        [Test]
+        public void PreviewAssetChanges_LeavesDirtySceneUnsaved()
+        {
+            root.SetActive(false);
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(PreviewAssetChanges.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsTrue(testScene.isDirty);
+            Assert.IsEmpty(response["data"]["assets_saved"]);
+            Assert.IsTrue(response["data"]["preview"].Value<bool>());
+            Assert.IsTrue(response["data"]["objects_changed"].Any());
+        }
     }
 
     public sealed class AtomicPrefabReferenceHolder : MonoBehaviour

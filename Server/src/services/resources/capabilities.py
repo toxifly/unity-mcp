@@ -24,6 +24,15 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
         "version": 1,
         "tools": ("manage_gameobject", "manage_components"),
     },
+    "scoped_saves": {
+        "version": 1,
+        "tools": (
+            "save_scene_scoped",
+            "save_prefab_scoped",
+            "save_assets_scoped",
+            "preview_asset_changes",
+        ),
+    },
 }
 
 

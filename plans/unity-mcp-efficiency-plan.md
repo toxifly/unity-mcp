@@ -45,6 +45,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Transaction-backed `change_guard` enforcement for core GameObject and component mutations.
 - [x] Transaction-backed dry-run previews for core GameObject and component mutations.
 - [x] Atomic prefab creation and optional scene replacement with guarded, two-asset rollback.
+- [x] Transaction-backed scoped scene, prefab, and asset saves plus read-only dirty-change previews.
 
 Implemented on 2026-07-10:
 
@@ -139,6 +140,13 @@ Implemented on 2026-07-10:
 - Added `dry_run`, `dirty_scene_policy`, `preserve_world_transform`, `preserve_scene_references`, `save_scene`, `allow_overwrite`, and `link_scene_instance=false`. New and overwritten prefab bytes are restored if validation or scene saving fails, while unlinked mode creates only the prefab asset without dirtying the scene.
 - Added asset-path provenance to serialized change records so identically named scene and prefab objects are classified by stable asset scope. Replaced the unavailable Unity 6.5 `EditorSceneManager.ClearSceneDirtiness` call with Undo-based clean-scene restoration plus explicit pre-dirty preservation.
 - Added three server contract tests and four Unity EditMode tests covering successful reference/transform/order preservation, dry-run rollback, guard rollback of both assets, and unlinked creation. Validation: 26 focused server prefab/capability/registry tests passed; the full Server suite reached 1,361 passed and 3 skipped with the same 6 pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. The connected Unity 6000.5.0f1 editor compiled the final package with zero console errors. A live temporary-scene probe of an earlier `SaveAsPrefabAssetAndConnect` implementation caused a native Unity access violation during teardown; that implementation was removed in favor of the staged Undo-tracked replacement above, its temporary assets were deleted, and the revised behavioral tests remain checked in but are not claimed as executed in this environment.
+
+Implemented on 2026-07-10:
+
+- Added the always-registered `save_scene_scoped`, `save_prefab_scoped`, `save_assets_scoped`, and `preview_asset_changes` tools on the server and Unity sides. Each accepts only explicit scene or asset paths and returns the shared `assets_saved`, `objects_changed`, `properties_changed`, `dirty_assets_left_unsaved`, and `rolled_back` report shape.
+- Extended `MutationTransaction` with path-only asset transactions and an explicit dirty-asset admission option. Scoped saves snapshot only the declared files, save each dirty main asset or subasset with `SaveAssetIfDirty`, compare normalized serialized fingerprints after saving, and restore the byte snapshot if save-time serialization changes the declared state.
+- Scene saves require a loaded, authored scene and support `dirty_scene_policy`; asset saves reject folders, missing assets, traversal, and non-`Assets/` paths. `preview_asset_changes` is read-only and reports dirty serialized objects without saving, while unrelated dirty scenes/assets are bounded and reported rather than committed.
+- Advertised `scoped_saves` version 1 only when all four backing tools are registered. Added four focused server contract/registration tests and two Unity EditMode behavioral tests for a scoped dirty-scene save and a non-saving preview. Validation: 12 focused server scoped-save/prefab/capability tests passed, Python syntax compilation and `git diff --check` passed. The full Server suite reached 1,366 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-target-normalization, and sandboxed telemetry-file failures. A direct Unity 6000.5 Roslyn compile reported no diagnostics in the new or modified scoped-save/transaction files and stopped only on the two pre-existing inaccessible `UnityEngineObjectConverter` errors. An isolated EditMode run could not start because the local licensing client repeatedly timed out during first import; the temporary fixture was removed, so the two behavioral tests are checked in but not claimed as executed here.
 
 ---
 
@@ -524,7 +532,7 @@ This should be available without dumping the whole component.
 
 #### 6.10 Add a mutation transaction layer
 
-**Implementation status:** Complete (2026-07-10) for the shared transaction foundation. Change-guard request integration, dry-run tools, atomic prefab replacement, and public scoped-save tools remain the separate steps in 6.11-6.14.
+**Implementation status:** Complete (2026-07-10), including the later change-guard, dry-run, atomic-prefab, and public scoped-save integrations in 6.11-6.14.
 
 All scoped asset mutations should run through a shared transaction service:
 
@@ -575,7 +583,7 @@ The byte snapshot is a rollback safety net, not the normal editing mechanism.
 
 #### 6.11 Add `change_guard` options to mutation tools
 
-**Implementation status:** Complete (2026-07-10) for the core authored scene mutation entrypoints, `manage_gameobject` and `manage_components`. Asset-specific guarded saving remains part of the scoped-save and atomic-prefab steps in 6.13-6.14.
+**Implementation status:** Complete (2026-07-10) for the core authored scene mutation entrypoints, `manage_gameobject` and `manage_components`; asset-specific transaction-backed saving is complete in 6.13-6.14.
 
 Example:
 
@@ -612,7 +620,7 @@ Response:
 
 #### 6.12 Implement dry-run change previews
 
-**Implementation status:** Complete (2026-07-10) for the transaction-backed core mutation entrypoints, `manage_gameobject` and `manage_components`. The later scoped-save and atomic-prefab tools will use the same preview execution path when implemented in 6.13-6.14.
+**Implementation status:** Complete (2026-07-10) for the transaction-backed core mutation entrypoints, `manage_gameobject` and `manage_components`; the atomic-prefab and scoped-save tools now use the same transaction foundation.
 
 Every mutation tool should accept `dry_run: true`.
 
@@ -660,6 +668,8 @@ Optional mode:
 This creates the prefab without dirtying or replacing the scene object.
 
 #### 6.14 Save-specific APIs
+
+**Implementation status:** Complete (2026-07-10). All four APIs are core tools backed by path-scoped transaction snapshots, save-time fingerprint validation, byte rollback, and bounded dirty-asset reporting.
 
 Avoid one broad `manage_scene(action="save")` path for every case. Provide:
 
