@@ -39,6 +39,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Correct console log typing.
 - [x] First-class, always-registered `measure_ui` with explicit coordinate spaces and geometry assertions.
 - [x] First-class `inspect_serialized` with property whitelists, missing-reference findings, stable identity, and prefab property provenance.
+- [x] Compact, always-registered `inspect_provenance` for scene identity, prefab roots/sources, property overrides, and component override state.
 
 Implemented on 2026-07-10:
 
@@ -90,6 +91,13 @@ Implemented on 2026-07-10:
 - Distinguished valid, null, and broken object references using Unity's serialized reference value and instance ID, with referenced object type, GlobalObjectId, and asset path when resolvable.
 - Added compact prefab property provenance (`is_instance`, source asset/object/GlobalObjectId, and `is_override`) and bounded cursor paging with a 200-finding ceiling.
 - Added three server registration/request-contract tests and six Unity EditMode tests covering whitelisting, valid/null/broken references, ambiguous names, and prefab source/override reporting. Validation: all 10 focused Server inspection/registration/registry tests passed. The full Server suite reached 1,345 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures. The configured Unity compile matrix could not run because none of its four editor versions are installed locally, so the six Unity tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added `inspect_provenance` as an always-enabled, read-only core tool on the server and Unity sides. It resolves hierarchy names/paths, asset paths, and GlobalObjectIds without reading whole serialized components.
+- Added compact scene/asset identity plus nearest and outermost prefab instance roots, corresponding source object and asset, prefab instance status, and whether the instance has any overrides.
+- Scoped property override paths and added/removed component records to the queried object. Target paging and a combined 500-record nested-provenance limit keep response payloads bounded, with per-target counts and truncation markers.
+- Added four server registration/request/bounds tests and four Unity EditMode tests covering scene identity, prefab roots/source/property paths, component overrides, and asset-path targets. Validation: all 7 focused Server provenance/serialized-inspection tests passed. The full Server suite reached 1,350 passed and 3 skipped; its 6 failures remain the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures. The new Unity package and focused EditMode test assemblies both compiled cleanly with Unity 6.5 compiler responses. The fixture was locked by a running editor, so the four EditMode tests are checked in but not claimed as executed here.
 
 ---
 
@@ -445,6 +453,8 @@ Implementation notes:
 - Report broken/missing object references distinctly from `null`.
 
 #### 6.8 Add compact prefab/scene provenance queries
+
+**Implementation status:** Complete (2026-07-10). The core `inspect_provenance` tool returns stable scene/asset identity, prefab roots and sources, and bounded property/component override summaries without component dumps.
 
 Expose:
 
