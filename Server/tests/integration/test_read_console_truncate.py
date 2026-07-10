@@ -43,7 +43,43 @@ async def test_read_console_full_default(monkeypatch):
         "data": {"lines": [{"level": "error", "message": "oops", "time": "t"}]},
     }
     assert captured["params"]["count"] == 10
+    assert captured["params"]["format"] == "json"
     assert captured["params"]["includeStacktrace"] is False
+
+
+@pytest.mark.asyncio
+async def test_read_console_strips_all_legacy_stacktrace_spellings(monkeypatch):
+    tools = setup_console_tools()
+    read_console = tools["read_console"]
+
+    async def fake_send(_cmd, _params, **_kwargs):
+        return {
+            "success": True,
+            "data": {
+                "items": [{
+                    "unity_log_type": "Log",
+                    "source": "user",
+                    "message": "hello",
+                    "stack_trace": "new",
+                    "stackTrace": "old",
+                    "stacktrace": "legacy",
+                }]
+            },
+        }
+
+    import services.tools.read_console
+    monkeypatch.setattr(
+        services.tools.read_console,
+        "async_send_command_with_retry",
+        fake_send,
+    )
+
+    resp = await read_console(ctx=DummyContext(), action="get")
+    assert resp["data"]["items"] == [{
+        "unity_log_type": "Log",
+        "source": "user",
+        "message": "hello",
+    }]
 
 
 @pytest.mark.asyncio
