@@ -33,6 +33,10 @@ _CAPABILITIES: dict[str, dict[str, Any]] = {
             "preview_asset_changes",
         ),
     },
+    "lifecycle_tracing": {
+        "version": 1,
+        "tools": ("lifecycle_trace",),
+    },
 }
 
 
