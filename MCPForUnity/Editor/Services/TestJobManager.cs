@@ -14,13 +14,35 @@ namespace MCPForUnity.Editor.Services
     {
         Running,
         Succeeded,
-        Failed
+        Failed,
+        Cancelled
     }
 
     internal sealed class TestJobFailure
     {
         public string FullName { get; set; }
         public string Message { get; set; }
+    }
+
+    internal sealed class TestJobSummary
+    {
+        public int Total { get; set; }
+        public int Passed { get; set; }
+        public int Failed { get; set; }
+        public int Skipped { get; set; }
+        public double DurationSeconds { get; set; }
+
+        public object ToSerializable()
+        {
+            return new
+            {
+                total = Total,
+                passed = Passed,
+                failed = Failed,
+                skipped = Skipped,
+                duration_seconds = DurationSeconds
+            };
+        }
     }
 
     internal sealed class TestJob
@@ -33,6 +55,9 @@ namespace MCPForUnity.Editor.Services
         public long LastUpdateUnixMs { get; set; }
         public int? TotalTests { get; set; }
         public int CompletedTests { get; set; }
+        public int PassedTests { get; set; }
+        public int FailedTests { get; set; }
+        public int SkippedTests { get; set; }
         public string CurrentTestFullName { get; set; }
         public long? CurrentTestStartedUnixMs { get; set; }
         public string LastFinishedTestFullName { get; set; }
@@ -40,6 +65,7 @@ namespace MCPForUnity.Editor.Services
         public List<TestJobFailure> FailuresSoFar { get; set; }
         public string Error { get; set; }
         public TestRunResult Result { get; set; }
+        public TestJobSummary Summary { get; set; }
         public long InitTimeoutMs { get; set; }
     }
 
@@ -109,6 +135,7 @@ namespace MCPForUnity.Editor.Services
                     job.Error = "Job cleared manually (stuck or orphaned)";
                     job.FinishedUnixMs = now;
                     job.LastUpdateUnixMs = now;
+                    job.Summary = BuildSummary(job, null, now);
                     McpLog.Warn($"[TestJobManager] Manually cleared stuck job {_currentJobId}");
                     cleared = true;
                 }
@@ -138,6 +165,9 @@ namespace MCPForUnity.Editor.Services
             public long last_update_unix_ms { get; set; }
             public int? total_tests { get; set; }
             public int completed_tests { get; set; }
+            public int passed_tests { get; set; }
+            public int failed_tests { get; set; }
+            public int skipped_tests { get; set; }
             public string current_test_full_name { get; set; }
             public long? current_test_started_unix_ms { get; set; }
             public string last_finished_test_full_name { get; set; }
@@ -145,6 +175,7 @@ namespace MCPForUnity.Editor.Services
             public List<TestJobFailure> failures_so_far { get; set; }
             public string error { get; set; }
             public long init_timeout_ms { get; set; }
+            public TestJobSummary summary { get; set; }
         }
 
         private static TestJobStatus ParseStatus(string status)
@@ -159,6 +190,7 @@ namespace MCPForUnity.Editor.Services
             {
                 "succeeded" => TestJobStatus.Succeeded,
                 "failed" => TestJobStatus.Failed,
+                "cancelled" => TestJobStatus.Cancelled,
                 _ => TestJobStatus.Running
             };
         }
@@ -201,6 +233,9 @@ namespace MCPForUnity.Editor.Services
                             LastUpdateUnixMs = pj.last_update_unix_ms,
                             TotalTests = pj.total_tests,
                             CompletedTests = pj.completed_tests,
+                            PassedTests = pj.passed_tests,
+                            FailedTests = pj.failed_tests,
+                            SkippedTests = pj.skipped_tests,
                             CurrentTestFullName = pj.current_test_full_name,
                             CurrentTestStartedUnixMs = pj.current_test_started_unix_ms,
                             LastFinishedTestFullName = pj.last_finished_test_full_name,
@@ -208,6 +243,7 @@ namespace MCPForUnity.Editor.Services
                             FailuresSoFar = pj.failures_so_far ?? new List<TestJobFailure>(),
                             Error = pj.error,
                             InitTimeoutMs = pj.init_timeout_ms,
+                            Summary = pj.summary,
                             // Intentionally not persisted to avoid ballooning SessionState.
                             Result = null
                         };
@@ -275,13 +311,17 @@ namespace MCPForUnity.Editor.Services
                             last_update_unix_ms = j.LastUpdateUnixMs,
                             total_tests = j.TotalTests,
                             completed_tests = j.CompletedTests,
+                            passed_tests = j.PassedTests,
+                            failed_tests = j.FailedTests,
+                            skipped_tests = j.SkippedTests,
                             current_test_full_name = j.CurrentTestFullName,
                             current_test_started_unix_ms = j.CurrentTestStartedUnixMs,
                             last_finished_test_full_name = j.LastFinishedTestFullName,
                             last_finished_unix_ms = j.LastFinishedUnixMs,
                             failures_so_far = (j.FailuresSoFar ?? new List<TestJobFailure>()).Take(FailureCap).ToList(),
                             error = j.Error,
-                            init_timeout_ms = j.InitTimeoutMs
+                            init_timeout_ms = j.InitTimeoutMs,
+                            summary = j.Summary
                         })
                         .ToList();
 
@@ -322,6 +362,9 @@ namespace MCPForUnity.Editor.Services
                 LastUpdateUnixMs = started,
                 TotalTests = null,
                 CompletedTests = 0,
+                PassedTests = 0,
+                FailedTests = 0,
+                SkippedTests = 0,
                 CurrentTestFullName = null,
                 CurrentTestStartedUnixMs = null,
                 LastFinishedTestFullName = null,
@@ -329,6 +372,7 @@ namespace MCPForUnity.Editor.Services
                 FailuresSoFar = new List<TestJobFailure>(),
                 Error = null,
                 Result = null,
+                Summary = null,
                 InitTimeoutMs = initTimeoutMs
             };
 
@@ -384,6 +428,7 @@ namespace MCPForUnity.Editor.Services
                     : TestJobStatus.Succeeded;
                 job.Error = null;
                 job.Result = resultPayload;
+                job.Summary = BuildSummary(job, resultPayload, now);
                 job.CurrentTestFullName = null;
                 _currentJobId = null;
             }
@@ -403,6 +448,9 @@ namespace MCPForUnity.Editor.Services
                 job.LastUpdateUnixMs = now;
                 job.TotalTests = totalTests;
                 job.CompletedTests = 0;
+                job.PassedTests = 0;
+                job.FailedTests = 0;
+                job.SkippedTests = 0;
                 job.CurrentTestFullName = null;
                 job.CurrentTestStartedUnixMs = null;
                 job.LastFinishedTestFullName = null;
@@ -435,7 +483,7 @@ namespace MCPForUnity.Editor.Services
             PersistToSessionState();
         }
 
-        public static void OnLeafTestFinished(string testFullName, bool isFailure, string message)
+        public static void OnLeafTestFinished(string testFullName, string outcome, string message)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             lock (LockObj)
@@ -450,8 +498,14 @@ namespace MCPForUnity.Editor.Services
                 job.LastFinishedTestFullName = testFullName;
                 job.LastFinishedUnixMs = now;
 
+                string normalizedOutcome = outcome?.Trim().ToLowerInvariant() ?? string.Empty;
+                bool isFailure = normalizedOutcome.Contains("failed") || normalizedOutcome.Contains("error");
+                bool isSkipped = normalizedOutcome.Contains("skipped")
+                    || normalizedOutcome.Contains("ignored")
+                    || normalizedOutcome.Contains("inconclusive");
                 if (isFailure)
                 {
+                    job.FailedTests++;
                     job.FailuresSoFar ??= new List<TestJobFailure>();
                     if (job.FailuresSoFar.Count < FailureCap)
                     {
@@ -461,6 +515,14 @@ namespace MCPForUnity.Editor.Services
                             Message = string.IsNullOrWhiteSpace(message) ? "Test failed" : message
                         });
                     }
+                }
+                else if (isSkipped)
+                {
+                    job.SkippedTests++;
+                }
+                else
+                {
+                    job.PassedTests++;
                 }
             }
             PersistToSessionState();
@@ -526,6 +588,7 @@ namespace MCPForUnity.Editor.Services
                         job.Status = TestJobStatus.Failed;
                         job.Error = "Test job failed to initialize (tests did not start within timeout)";
                         job.FinishedUnixMs = now;
+                        job.Summary = BuildSummary(job, null, now);
                         job.LastUpdateUnixMs = now;
                         if (_currentJobId == jobId)
                         {
@@ -567,6 +630,7 @@ namespace MCPForUnity.Editor.Services
                         job.Status = TestJobStatus.Failed;
                         job.Error = "Test runner died mid-run (play mode exited without delivering RunFinished)";
                         job.FinishedUnixMs = now;
+                        job.Summary = BuildSummary(job, null, now);
                         job.LastUpdateUnixMs = now;
                         if (_currentJobId == jobId)
                         {
@@ -647,6 +711,9 @@ namespace MCPForUnity.Editor.Services
                     failures_so_far = BuildFailuresPayload(job.FailuresSoFar),
                     failures_capped = (job.FailuresSoFar != null && job.FailuresSoFar.Count >= FailureCap)
                 },
+                summary = job.Status == TestJobStatus.Running
+                    ? null
+                    : (job.Summary ?? BuildSummary(job, job.Result, job.FinishedUnixMs ?? job.LastUpdateUnixMs)).ToSerializable(),
                 error = job.Error,
                 result = resultPayload
             };
@@ -715,6 +782,42 @@ namespace MCPForUnity.Editor.Services
             return list;
         }
 
+        private static TestJobSummary BuildSummary(TestJob job, TestRunResult result, long finishedUnixMs)
+        {
+            if (result != null)
+            {
+                return new TestJobSummary
+                {
+                    Total = result.Total,
+                    Passed = result.Passed,
+                    Failed = result.Failed,
+                    Skipped = result.Skipped,
+                    DurationSeconds = Math.Max(0, result.Summary.DurationSeconds)
+                };
+            }
+
+            int failed = Math.Max(0, job.FailedTests);
+            int skipped = Math.Max(0, job.SkippedTests);
+            int passed = Math.Max(0, job.PassedTests);
+            if (passed + failed + skipped < job.CompletedTests)
+            {
+                // Jobs saved by versions before outcome counters were persisted still retain
+                // completed/failure progress. Treat unclassified completed tests as passed so
+                // their terminal summary remains useful after a domain reload.
+                failed = Math.Max(failed, job.FailuresSoFar?.Count ?? 0);
+                passed = Math.Max(0, job.CompletedTests - failed - skipped);
+            }
+
+            return new TestJobSummary
+            {
+                Total = Math.Max(job.TotalTests ?? job.CompletedTests, job.CompletedTests),
+                Passed = passed,
+                Failed = failed,
+                Skipped = skipped,
+                DurationSeconds = Math.Max(0, finishedUnixMs - job.StartedUnixMs) / 1000.0
+            };
+        }
+
         private static void FinalizeFromTask(string jobId, Task<TestRunResult> task)
         {
             lock (LockObj)
@@ -740,12 +843,14 @@ namespace MCPForUnity.Editor.Services
                     existing.Status = TestJobStatus.Failed;
                     existing.Error = task.Exception?.GetBaseException()?.Message ?? "Unknown test job failure";
                     existing.Result = null;
+                    existing.Summary = BuildSummary(existing, null, existing.FinishedUnixMs.Value);
                 }
                 else if (task.IsCanceled)
                 {
-                    existing.Status = TestJobStatus.Failed;
+                    existing.Status = TestJobStatus.Cancelled;
                     existing.Error = "Test job canceled";
                     existing.Result = null;
+                    existing.Summary = BuildSummary(existing, null, existing.FinishedUnixMs.Value);
                 }
                 else
                 {
@@ -755,6 +860,7 @@ namespace MCPForUnity.Editor.Services
                         : TestJobStatus.Succeeded;
                     existing.Error = null;
                     existing.Result = result;
+                    existing.Summary = BuildSummary(existing, result, existing.FinishedUnixMs.Value);
                 }
 
                 if (_currentJobId == jobId)

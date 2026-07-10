@@ -411,17 +411,12 @@ namespace MCPForUnity.Editor.Services
                         fullName = result.Test?.Name;
                     }
 
-                    bool isFailure = false;
+                    string outcome = null;
                     string message = null;
                     try
                     {
                         // NUnit outcomes are strings in the adaptor; keep it simple.
-                        string outcome = result.ResultState;
-                        if (!string.IsNullOrWhiteSpace(outcome))
-                        {
-                            var o = outcome.Trim().ToLowerInvariant();
-                            isFailure = o.Contains("failed") || o.Contains("error");
-                        }
+                        outcome = result.ResultState;
                         message = result.Message;
                     }
                     catch
@@ -429,7 +424,7 @@ namespace MCPForUnity.Editor.Services
                         // ignore adaptor quirks
                     }
 
-                    TestJobManager.OnLeafTestFinished(fullName, isFailure, message);
+                    TestJobManager.OnLeafTestFinished(fullName, outcome, message);
                 }
                 catch
                 {

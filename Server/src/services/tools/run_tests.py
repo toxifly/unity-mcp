@@ -14,6 +14,7 @@ from models import MCPResponse
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
 from services.tools.preflight import preflight
+from services.tools.job_contract import ensure_test_job_summary
 import transport.unity_transport as unity_transport
 from transport.legacy.unity_connection import async_send_command_with_retry
 from transport.plugin_hub import PluginHub
@@ -80,6 +81,14 @@ class RunTestsSummary(BaseModel):
     resultState: str
 
 
+class TestJobSummary(BaseModel):
+    total: int
+    passed: int
+    failed: int
+    skipped: int
+    duration_seconds: float
+
+
 class RunTestsTestResult(BaseModel):
     name: str
     fullName: str
@@ -135,6 +144,7 @@ class GetTestJobData(BaseModel):
     finished_unix_ms: int | None = None
     last_update_unix_ms: int | None = None
     progress: TestJobProgress | None = None
+    summary: TestJobSummary | None = None
     error: str | None = None
     result: RunTestsResult | None = None
 
@@ -266,12 +276,13 @@ async def get_test_job(
         params["includeDetails"] = True
 
     async def _fetch_status() -> dict[str, Any]:
-        return await unity_transport.send_with_unity_instance(
+        response = await unity_transport.send_with_unity_instance(
             async_send_command_with_retry,
             unity_instance,
             "get_test_job",
             params,
         )
+        return ensure_test_job_summary(response) if isinstance(response, dict) else response
 
     # If wait_timeout is specified, poll server-side until complete or timeout
     if wait_timeout and wait_timeout > 0:
