@@ -72,7 +72,9 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 && changes.Select(change => change.ObjectId).Distinct().Count() > MaxChangedObjects.Value;
             if (overLimit)
                 return changes;
-            return changes.Where(change => !MatchesObject(change) && !MatchesProperty(change)).ToArray();
+            return changes.Where(change =>
+                (expectedObjects.Count > 0 && !MatchesObject(change))
+                || (expectedProperties.Count > 0 && !MatchesProperty(change))).ToArray();
         }
 
         public object Execute(

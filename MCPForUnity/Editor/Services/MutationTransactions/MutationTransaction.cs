@@ -481,19 +481,30 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             {
                 if (!scene.IsValid() || !scene.isLoaded) continue;
                 foreach (GameObject root in scene.GetRootGameObjects())
-                foreach (Transform transform in root.GetComponentsInChildren<Transform>(true))
-                {
-                    found.Add(transform.gameObject);
-                    foreach (Component component in transform.GetComponents<Component>())
-                        if (component != null) found.Add(component);
-                }
+                    AddGameObjectHierarchy(found, root);
             }
 
             foreach (string path in assetPaths.Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
             foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path))
-                if (asset != null) found.Add(asset);
+            {
+                if (asset is GameObject root)
+                    AddGameObjectHierarchy(found, root);
+                else if (asset != null)
+                    found.Add(asset);
+            }
 
             return found.OrderBy(ObjectIdentity, StringComparer.Ordinal).ToArray();
+        }
+
+        private static void AddGameObjectHierarchy(HashSet<Object> found, GameObject root)
+        {
+            if (root == null) return;
+            foreach (Transform transform in root.GetComponentsInChildren<Transform>(true))
+            {
+                found.Add(transform.gameObject);
+                foreach (Component component in transform.GetComponents<Component>())
+                    if (component != null) found.Add(component);
+            }
         }
 
         private static IReadOnlyList<SerializedChange> Diff(
