@@ -34,7 +34,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Canonical result envelope for built-in and globally registered custom tools.
 - [x] Structured-only responses by default, without duplicated JSON text.
 - [x] Standard `response_format` (`structured`, `text`, `both`) and `verbosity` (`compact`, `normal`, `detailed`) controls exposed on built-in and globally registered custom tools.
-- [ ] Shared terminal job summaries.
+- [x] Shared terminal job summaries.
 - [ ] Correct `wait_for_ready` semantics.
 - [ ] Correct console log typing.
 
@@ -47,6 +47,14 @@ Implemented on 2026-07-10:
 - Preserved content-bearing `ToolResult` responses such as screenshots so image/audio/file blocks are not discarded.
 - Registered the canonical output schema for built-in tools and globally exposed Unity custom tools.
 - Added focused envelope, formatting, signature, and compatibility tests. Validation: 16 focused tests passed across the new envelope, tool registration, refresh registration, custom-tool scope, and request-context suites; a real server construction registered all 48 built-in tools successfully. The full Server suite reached 1,331 passed and 3 skipped; its 7 failures are pre-existing/out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues.
+
+Implemented on 2026-07-10:
+
+- Added a canonical terminal test-job summary (`total`, `passed`, `failed`, `skipped`, and `duration_seconds`) independently of the optional detailed result payload.
+- Persisted summary and per-outcome counters in Unity `SessionState`, so domain reload can discard detailed test results without losing the terminal summary.
+- Added migration behavior for jobs persisted by older package versions and a server-side compatibility normalizer for older Unity clients that return only `result.summary` or progress counters.
+- Standardized task cancellation as the terminal `cancelled` lifecycle state while retaining `failed` for faults and watchdog failures.
+- Added focused coverage for direct, legacy nested, and synthesized terminal summaries. Validation: all 9 async test-job integration tests passed. The full Server suite reached 1,334 passed and 3 skipped; its 7 failures remain the same pre-existing/out-of-scope screenshot-parameter, `measure_ui` coverage, object-reference coercion, and sandboxed telemetry-file issues.
 
 ---
 
@@ -213,6 +221,8 @@ Rules:
 - Put verbose diagnostics behind `verbosity: "compact" | "normal" | "detailed"`.
 
 #### 6.2 Shared job contract
+
+**Implementation status:** Complete (2026-07-10) for the shared contract and test jobs. Compilation will consume the same summary shape as part of the next `wait_for_ready` step.
 
 Compilation and tests should use the same lifecycle:
 
