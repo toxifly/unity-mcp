@@ -69,6 +69,10 @@ async def manage_components(
     include_properties: Annotated[bool | str, "For get_components: include serialized component properties (default false)."] | None = None,
     property_whitelist: Annotated[list[str], "For get_components: only return these property names (requires include_properties=true)."] | None = None,
     property_blacklist: Annotated[list[str], "For get_components: exclude these property names from results."] | None = None,
+    change_guard: Annotated[
+        dict[str, Any] | str,
+        "Reject and roll back mutations outside expected_objects/expected_properties or max_changed_objects."
+    ] | None = None,
 ) -> dict[str, Any]:
     """
     Manage components on GameObjects.
@@ -114,6 +118,10 @@ async def manage_components(
     properties, props_error = normalize_properties(properties)
     if props_error:
         return {"success": False, "message": props_error}
+
+    change_guard = parse_json_payload(change_guard)
+    if change_guard is not None and not isinstance(change_guard, dict):
+        return {"success": False, "code": "INVALID_CHANGE_GUARD", "message": "change_guard must be a JSON object."}
 
     # --- Validate value parameter for serialization issues ---
     if value is not None and isinstance(value, str) and value in ("[object Object]", "undefined"):
@@ -360,6 +368,9 @@ async def manage_components(
 
         if action == "add" and properties:
             params["properties"] = properties
+
+        if change_guard is not None:
+            params["changeGuard"] = change_guard
 
         response = await send_with_unity_instance(
             async_send_command_with_retry,

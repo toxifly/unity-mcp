@@ -116,6 +116,10 @@ async def manage_gameobject(
                               "World position [x,y,z] or GameObject name/path/ID to look at (for look_at action)."] | None = None,
     look_at_up: Annotated[list[float] | str,
                           "Optional up vector [x,y,z] for look_at. Defaults to [0,1,0]."] | None = None,
+    change_guard: Annotated[
+        dict[str, Any] | str,
+        "Reject and roll back mutations outside expected_objects/expected_properties or max_changed_objects."
+    ] | None = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -156,6 +160,10 @@ async def manage_gameobject(
         component_properties)
     if comp_props_error:
         return {"success": False, "message": comp_props_error}
+
+    change_guard = parse_json_payload(change_guard)
+    if change_guard is not None and not isinstance(change_guard, dict):
+        return {"success": False, "code": "INVALID_CHANGE_GUARD", "message": "change_guard must be a JSON object."}
 
     # --- Normalize components_to_add and components_to_remove ---
     components_to_add, add_error = normalize_string_list(components_to_add, "components_to_add")
@@ -199,6 +207,7 @@ async def manage_gameobject(
             # Parameters for 'look_at'
             "look_at_target": look_at_target,
             "look_at_up": look_at_up,
+            "changeGuard": change_guard,
         }
         params = {k: v for k, v in params.items() if v is not None}
 

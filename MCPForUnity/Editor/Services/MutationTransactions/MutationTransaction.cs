@@ -73,18 +73,26 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         private readonly int undoGroup;
         private bool finished;
 
-        private MutationTransaction(IEnumerable<Object> requestedTargets, MutationTransactionOptions requestedOptions)
+        private MutationTransaction(
+            IEnumerable<Object> requestedTargets,
+            MutationTransactionOptions requestedOptions,
+            IEnumerable<Scene> requestedScenes = null)
         {
             options = requestedOptions ?? new MutationTransactionOptions();
             targets = requestedTargets?.Where(item => item != null).Distinct().ToList()
                 ?? new List<Object>();
-            if (targets.Count == 0)
+            targetScenes = ResolveTargetScenes(targets)
+                .Concat(requestedScenes ?? Array.Empty<Scene>())
+                .Where(scene => scene.IsValid() && scene.isLoaded)
+                .GroupBy(SceneKey)
+                .Select(group => group.First())
+                .ToList();
+            if (targets.Count == 0 && targetScenes.Count == 0)
                 throw new MutationTransactionException("TARGET_NOT_FOUND", "A mutation transaction requires at least one resolved target.");
 
             sceneSetup = EditorSceneManager.GetSceneManagerSetup();
             activeScene = SceneManager.GetActiveScene();
             prefabStageAssetPath = PrefabStageUtility.GetCurrentPrefabStage()?.assetPath;
-            targetScenes = ResolveTargetScenes(targets);
             targetAssetPaths = ResolveTargetAssetPaths(targets, targetScenes, options.AdditionalAssetPaths);
             initialDirtyScenes = targetScenes.ToDictionary(SceneKey, scene => scene.isDirty, StringComparer.Ordinal);
             initialDirtyAssets = targetAssetPaths
@@ -112,6 +120,13 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             MutationTransactionOptions options = null)
         {
             return new MutationTransaction(targets, options);
+        }
+
+        public static MutationTransaction BeginScene(
+            Scene scene,
+            MutationTransactionOptions options = null)
+        {
+            return new MutationTransaction(Array.Empty<Object>(), options, new[] { scene });
         }
 
         public IReadOnlyList<string> TargetGlobalObjectIds =>
