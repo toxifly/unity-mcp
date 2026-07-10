@@ -598,6 +598,12 @@ manage_camera(action="screenshot")
 
 Unity has two UI systems: **UI Toolkit** (modern, recommended) and **uGUI** (Canvas-based, legacy). Use `manage_ui` for UI Toolkit workflows, and `batch_execute` with `manage_gameobject` + `manage_components` for uGUI.
 
+> **Verifying uGUI layout:** prefer `measure_ui` (read-only RectTransform bounds — clearances,
+> overlaps, clipping, off-screen) over screenshots for the *geometry* loop. It is deterministic and
+> cheap, whereas a Game View capture is large and returns white when the view is unfocused. Reserve
+> screenshots (`manage_camera`/`manage_scene`) for a human's "does it look right" pass or an explicit
+> before/after artifact — not the iteration loop.
+
 > **Template warning:** This section is a skill template library, not a guaranteed source of truth. Examples may be inaccurate for your Unity version, package setup, or project conventions.
 > **Use safely:**
 > 1. **Always read `mcpforunity://project/info` first** to detect installed packages and input system.
