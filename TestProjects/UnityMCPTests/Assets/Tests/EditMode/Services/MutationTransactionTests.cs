@@ -2,6 +2,7 @@ using System.Linq;
 using MCPForUnity.Editor.Services.MutationTransactions;
 using MCPForUnity.Editor.Tools;
 using MCPForUnity.Editor.Tools.GameObjects;
+using MCPForUnity.Editor.Tools.Prefabs;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
@@ -18,6 +19,7 @@ namespace MCPForUnityTests.Editor.Services
         private Scene originalScene;
         private Scene testScene;
         private const string ScenePath = "Assets/Temp/MutationTransactionTests.unity";
+        private const string PrefabPath = "Assets/Temp/AtomicMutationTest.prefab";
 
         [SetUp]
         public void SetUp()
@@ -41,6 +43,7 @@ namespace MCPForUnityTests.Editor.Services
             if (testScene.IsValid() && testScene.isLoaded)
                 EditorSceneManager.CloseScene(testScene, true);
             AssetDatabase.DeleteAsset(ScenePath);
+            AssetDatabase.DeleteAsset(PrefabPath);
         }
 
         [Test]
@@ -246,5 +249,105 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsTrue(root.scene.isDirty);
             Assert.IsTrue(response["data"]["change_preview"]["changes"].Any());
         }
+
+        [Test]
+        public void ManagePrefabs_CreateAndReplacePreservesReferencesTransformAndOrder()
+        {
+            var before = new GameObject("BeforeAtomicTarget");
+            var owner = new GameObject("AtomicReferenceOwner");
+            var reference = owner.AddComponent<AtomicPrefabReferenceHolder>();
+            reference.Target = root;
+            root.transform.position = new Vector3(4f, 5f, 6f);
+            root.transform.SetSiblingIndex(1);
+            int siblingIndex = root.transform.GetSiblingIndex();
+            Vector3 position = root.transform.position;
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+
+            JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "create_and_replace",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["prefabPath"] = PrefabPath
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            root = GameObject.Find("MutationTransactionRoot");
+            Assert.IsNotNull(root);
+            Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
+            Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(root));
+            Assert.AreEqual(root, reference.Target);
+            Assert.AreEqual(siblingIndex, root.transform.GetSiblingIndex());
+            Assert.AreEqual(position, root.transform.position);
+            Assert.IsFalse(testScene.isDirty);
+            Object.DestroyImmediate(before);
+            Object.DestroyImmediate(owner);
+        }
+
+        [Test]
+        public void ManagePrefabs_CreateAndReplaceDryRunRemovesPrefabAndRestoresScene()
+        {
+            JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "create_and_replace",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["prefabPath"] = PrefabPath,
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsTrue(response["data"]["change_preview"]["rolled_back"].Value<bool>());
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
+            Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(root));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
+        public void ManagePrefabs_CreateAndReplaceGuardFailureRollsBackBothAssetAndScene()
+        {
+            JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "create_and_replace",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["prefabPath"] = PrefabPath,
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray("SomeOtherObject")
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>());
+            Assert.AreEqual("UNEXPECTED_SERIALIZED_CHANGES", response["code"].Value<string>());
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
+            Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(root));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
+        public void ManagePrefabs_CreateAndReplaceCanCreateUnlinkedAssetWithoutDirtyingScene()
+        {
+            JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "create_and_replace",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["prefabPath"] = PrefabPath,
+                ["linkSceneInstance"] = false
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
+            Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(root));
+            Assert.IsFalse(testScene.isDirty);
+            Assert.IsFalse(response["data"]["linkedSceneInstance"].Value<bool>());
+        }
+    }
+
+    public sealed class AtomicPrefabReferenceHolder : MonoBehaviour
+    {
+        public GameObject Target;
     }
 }

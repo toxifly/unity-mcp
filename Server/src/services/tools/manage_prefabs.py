@@ -17,6 +17,7 @@ REQUIRED_PARAMS = {
     "get_info": ["prefab_path"],
     "get_hierarchy": ["prefab_path"],
     "create_from_gameobject": ["target", "prefab_path"],
+    "create_and_replace": ["target", "prefab_path"],
     "modify_contents": ["prefab_path"],
     "open_prefab_stage": ["prefab_path"],
 }
@@ -25,12 +26,13 @@ REQUIRED_PARAMS = {
 @mcp_for_unity_tool(
     description=(
         "Manages Unity Prefab assets. "
-        "Actions: get_info, get_hierarchy, create_from_gameobject, modify_contents, "
+        "Actions: get_info, get_hierarchy, create_from_gameobject, create_and_replace, modify_contents, "
         "apply_instance_overrides, revert_instance_overrides, unpack_instance, "
         "open_prefab_stage, save_prefab_stage, close_prefab_stage. "
         "Two approaches to prefab editing: "
         "(1) Headless: use modify_contents for automated/scripted edits without opening the prefab in the editor. "
         "(2) Interactive: use open_prefab_stage to open a prefab, then manage_gameobject/manage_components to edit objects inside the prefab stage, then save_prefab_stage to save and close_prefab_stage to return to the main scene. "
+        "Use create_and_replace for an atomic, transaction-guarded prefab creation and optional scene replacement. "
         "Use apply_instance_overrides/revert_instance_overrides/unpack_instance to manage prefab instances in a scene. "
         "Use create_child parameter with modify_contents to add child GameObjects or nested prefab instances to a prefab "
         "(single object or array for batch creation in one save). "
@@ -54,6 +56,7 @@ async def manage_prefabs(
     action: Annotated[
         Literal[
             "create_from_gameobject",
+            "create_and_replace",
             "get_info",
             "get_hierarchy",
             "modify_contents",
@@ -74,6 +77,13 @@ async def manage_prefabs(
     allow_overwrite: Annotated[bool | str, "Allow replacing existing prefab."] | None = None,
     search_inactive: Annotated[bool | str, "Include inactive GameObjects in search."] | None = None,
     unlink_if_instance: Annotated[bool, "Unlink from existing prefab before creating new one."] | None = None,
+    preserve_world_transform: Annotated[bool | str, "For create_and_replace, preserve and validate the source hierarchy's world transform."] | None = None,
+    preserve_scene_references: Annotated[bool | str, "For create_and_replace, validate that external scene references into the hierarchy remain intact."] | None = None,
+    save_scene: Annotated[bool | str, "For create_and_replace, save the owning scene after linking the prefab instance."] | None = None,
+    link_scene_instance: Annotated[bool | str, "For create_and_replace, connect the source hierarchy to the new prefab; false creates only the asset."] | None = None,
+    dirty_scene_policy: Annotated[Literal["reject", "preserve", "allow"], "Dirty-scene policy for create_and_replace. Defaults to reject; dry runs preserve prior dirtiness."] | None = None,
+    change_guard: Annotated[dict[str, Any], "Expected serialized change scope for create_and_replace."] | None = None,
+    dry_run: Annotated[bool | str, "Preview create_and_replace changes and roll back the scene and prefab asset."] | None = None,
     unpack_mode: Annotated[str,
                            "For unpack_instance: unpack mode. Valid values: OutermostRoot, Completely."] | None = None,
     # modify_contents parameters
@@ -183,6 +193,22 @@ async def manage_prefabs(
         unlink_if_instance_val = coerce_bool(unlink_if_instance)
         if unlink_if_instance_val is not None:
             params["unlinkIfInstance"] = unlink_if_instance_val
+
+        if action == "create_and_replace":
+            for field_name, value in (
+                ("preserveWorldTransform", preserve_world_transform),
+                ("preserveSceneReferences", preserve_scene_references),
+                ("saveScene", save_scene),
+                ("linkSceneInstance", link_scene_instance),
+                ("dryRun", dry_run),
+            ):
+                coerced = coerce_bool(value)
+                if coerced is not None:
+                    params[field_name] = coerced
+            if dirty_scene_policy is not None:
+                params["dirtyScenePolicy"] = dirty_scene_policy
+            if change_guard is not None:
+                params["changeGuard"] = change_guard
 
         # modify_contents parameters
         if position is not None:

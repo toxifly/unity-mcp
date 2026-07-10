@@ -209,3 +209,64 @@ class TestManagePrefabsStageActions:
         assert result["success"] is True
         assert mock_unity["params"]["action"] == "close_prefab_stage"
         assert mock_unity["tool_name"] == "manage_prefabs"
+
+
+class TestManagePrefabsAtomicCreateAndReplace:
+    def test_requires_target_and_prefab_path(self, mock_unity):
+        result = asyncio.run(
+            manage_prefabs(SimpleNamespace(), action="create_and_replace", target="Root")
+        )
+        assert result["success"] is False
+        assert "prefab_path" in result["message"]
+
+    def test_forwards_atomic_options(self, mock_unity):
+        guard = {
+            "mode": "reject_unexpected",
+            "expected_objects": ["Root"],
+        }
+        result = asyncio.run(
+            manage_prefabs(
+                SimpleNamespace(),
+                action="create_and_replace",
+                target="/Canvas/Root",
+                prefab_path="Assets/Prefabs/Root.prefab",
+                preserve_world_transform="true",
+                preserve_scene_references=True,
+                save_scene="false",
+                link_scene_instance="true",
+                dirty_scene_policy="reject",
+                change_guard=guard,
+                dry_run="true",
+            )
+        )
+
+        assert result["success"] is True
+        assert mock_unity["params"] == {
+            "action": "create_and_replace",
+            "prefabPath": "Assets/Prefabs/Root.prefab",
+            "target": "Canvas/Root",
+            "searchMethod": "by_path",
+            "preserveWorldTransform": True,
+            "preserveSceneReferences": True,
+            "saveScene": False,
+            "linkSceneInstance": True,
+            "dryRun": True,
+            "dirtyScenePolicy": "reject",
+            "changeGuard": guard,
+        }
+
+    def test_omits_unspecified_optional_values(self, mock_unity):
+        asyncio.run(
+            manage_prefabs(
+                SimpleNamespace(),
+                action="create_and_replace",
+                target="Root",
+                prefab_path="Assets/Root.prefab",
+            )
+        )
+        assert mock_unity["params"] == {
+            "action": "create_and_replace",
+            "prefabPath": "Assets/Root.prefab",
+            "target": "Root",
+            "searchMethod": "by_name",
+        }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -21,6 +22,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
     {
         // Action constants
         private const string ACTION_CREATE_FROM_GAMEOBJECT = "create_from_gameobject";
+        private const string ACTION_CREATE_AND_REPLACE = "create_and_replace";
         private const string ACTION_GET_INFO = "get_info";
         private const string ACTION_GET_HIERARCHY = "get_hierarchy";
         private const string ACTION_MODIFY_CONTENTS = "modify_contents";
@@ -30,7 +32,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
         private const string ACTION_OPEN_PREFAB_STAGE = "open_prefab_stage";
         private const string ACTION_SAVE_PREFAB_STAGE = "save_prefab_stage";
         private const string ACTION_CLOSE_PREFAB_STAGE = "close_prefab_stage";
-        private const string SupportedActions = ACTION_CREATE_FROM_GAMEOBJECT + ", " + ACTION_GET_INFO + ", " + ACTION_GET_HIERARCHY + ", " + ACTION_MODIFY_CONTENTS + ", " + ACTION_APPLY_INSTANCE_OVERRIDES + ", " + ACTION_REVERT_INSTANCE_OVERRIDES + ", " + ACTION_UNPACK_INSTANCE + ", " + ACTION_OPEN_PREFAB_STAGE + ", " + ACTION_SAVE_PREFAB_STAGE + ", " + ACTION_CLOSE_PREFAB_STAGE;
+        private const string SupportedActions = ACTION_CREATE_FROM_GAMEOBJECT + ", " + ACTION_CREATE_AND_REPLACE + ", " + ACTION_GET_INFO + ", " + ACTION_GET_HIERARCHY + ", " + ACTION_MODIFY_CONTENTS + ", " + ACTION_APPLY_INSTANCE_OVERRIDES + ", " + ACTION_REVERT_INSTANCE_OVERRIDES + ", " + ACTION_UNPACK_INSTANCE + ", " + ACTION_OPEN_PREFAB_STAGE + ", " + ACTION_SAVE_PREFAB_STAGE + ", " + ACTION_CLOSE_PREFAB_STAGE;
 
         public static object HandleCommand(JObject @params)
         {
@@ -51,6 +53,8 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                 {
                     case ACTION_CREATE_FROM_GAMEOBJECT:
                         return CreatePrefabFromGameObject(@params);
+                    case ACTION_CREATE_AND_REPLACE:
+                        return CreateAndReplace(@params);
                     case ACTION_GET_INFO:
                         return GetInfo(@params);
                     case ACTION_GET_HIERARCHY:
@@ -87,6 +91,327 @@ namespace MCPForUnity.Editor.Tools.Prefabs
         }
 
         #region Create Prefab from GameObject
+
+        private sealed class AtomicTransformState
+        {
+            public Transform Parent;
+            public int SiblingIndex;
+            public Vector3 Position;
+            public Quaternion Rotation;
+            public Vector3 LocalScale;
+        }
+
+        private sealed class ExternalReferenceState
+        {
+            public string Key;
+            public UnityEngine.Object Owner;
+            public string PropertyPath;
+            public int[] ChildIndices;
+            public Type ReferencedType;
+            public int ComponentIndex;
+        }
+
+        /// <summary>
+        /// Creates a prefab and optionally connects the source hierarchy in one rollback-capable
+        /// scene/asset transaction. Unlike the legacy action, this never calls SaveAssets globally.
+        /// </summary>
+        private static object CreateAndReplace(JObject @params)
+        {
+            string requestedPath = @params["prefabPath"]?.ToString();
+            string sanitizedPath = AssetPathUtility.SanitizeAssetPath(requestedPath);
+            if (string.IsNullOrWhiteSpace(sanitizedPath) || !sanitizedPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return new ErrorResponse("INVALID_ASSET_PATH", new { message = "prefab_path must be a project-relative path under Assets/." });
+            if (!sanitizedPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                sanitizedPath += ".prefab";
+
+            GameObject source = ResolveTargetGameObject(@params, out string resolveError);
+            if (source == null)
+                return new ErrorResponse("TARGET_NOT_FOUND", new { message = resolveError });
+            if (!source.scene.IsValid() || !source.scene.isLoaded || PrefabUtility.IsPartOfPrefabAsset(source))
+                return new ErrorResponse("TARGET_NOT_FOUND", new { message = "create_and_replace requires an object in a loaded scene." });
+            if (PrefabUtility.IsPartOfPrefabInstance(source))
+                return new ErrorResponse("TARGET_ALREADY_PREFAB_INSTANCE", new { message = "The target is already a prefab instance; unpack it before creating a new prefab." });
+
+            bool allowOverwrite = @params["allowOverwrite"]?.ToObject<bool?>() ?? false;
+            bool assetExisted = AssetDatabase.LoadAssetAtPath<GameObject>(sanitizedPath) != null;
+            if (assetExisted && !allowOverwrite)
+                return new ErrorResponse("ASSET_ALREADY_EXISTS", new { message = $"A prefab already exists at '{sanitizedPath}'. Set allow_overwrite=true to replace it atomically." });
+
+            bool preserveWorldTransform = @params["preserveWorldTransform"]?.ToObject<bool?>() ?? true;
+            bool preserveSceneReferences = @params["preserveSceneReferences"]?.ToObject<bool?>() ?? true;
+            bool linkSceneInstance = @params["linkSceneInstance"]?.ToObject<bool?>() ?? true;
+            bool saveScene = @params["saveScene"]?.ToObject<bool?>() ?? true;
+            bool dryRun = @params["dryRun"]?.ToObject<bool?>() ?? false;
+            if (!linkSceneInstance)
+                saveScene = false;
+
+            if (!MutationChangeGuard.TryParse(@params, out MutationChangeGuard guard, out ErrorResponse guardError))
+                return guardError;
+
+            string policyName = @params["dirtyScenePolicy"]?.ToString()?.ToLowerInvariant() ?? "reject";
+            DirtyScenePolicy policy;
+            switch (policyName)
+            {
+                case "reject": policy = DirtyScenePolicy.Reject; break;
+                case "preserve": policy = DirtyScenePolicy.Preserve; break;
+                case "allow": policy = DirtyScenePolicy.Allow; break;
+                default: return new ErrorResponse("INVALID_DIRTY_SCENE_POLICY", new { message = "dirty_scene_policy must be reject, preserve, or allow." });
+            }
+            if (dryRun)
+                policy = DirtyScenePolicy.Preserve;
+
+            string sourcePath = GetHierarchyPath(source.transform);
+            var transformState = new AtomicTransformState
+            {
+                Parent = source.transform.parent,
+                SiblingIndex = source.transform.GetSiblingIndex(),
+                Position = source.transform.position,
+                Rotation = source.transform.rotation,
+                LocalScale = source.transform.localScale
+            };
+            List<ExternalReferenceState> references = preserveSceneReferences
+                ? CaptureExternalReferences(source)
+                : new List<ExternalReferenceState>();
+            var options = new MutationTransactionOptions
+            {
+                Name = "MCP atomic prefab create and replace",
+                DirtyScenePolicy = policy,
+                AdditionalAssetPaths = new[] { sanitizedPath }
+            };
+
+            try
+            {
+                using (MutationTransaction transaction = MutationTransaction.Begin(new UnityEngine.Object[] { source }, options))
+                {
+                    EnsureAssetDirectoryExists(sanitizedPath);
+                    bool saved;
+                    GameObject prefab = PrefabUtility.SaveAsPrefabAsset(source, sanitizedPath, out saved);
+                    if (!saved || prefab == null)
+                    {
+                        transaction.Rollback();
+                        return new ErrorResponse("SAVE_FAILED", new { message = $"Unity failed to create prefab '{sanitizedPath}'.", committed = false, rolled_back = true });
+                    }
+
+                    GameObject linkedInstance = source;
+                    if (linkSceneInstance)
+                    {
+                        linkedInstance = PrefabUtility.InstantiatePrefab(prefab, source.scene) as GameObject;
+                        if (linkedInstance == null)
+                        {
+                            transaction.Rollback();
+                            return new ErrorResponse("SAVE_FAILED", new { message = "Unity created the prefab but failed to instantiate its connected scene replacement.", committed = false, rolled_back = true });
+                        }
+                        Undo.RegisterCreatedObjectUndo(linkedInstance, options.Name);
+                        linkedInstance.transform.SetParent(transformState.Parent, true);
+                        linkedInstance.transform.SetSiblingIndex(transformState.SiblingIndex);
+                        linkedInstance.transform.position = transformState.Position;
+                        linkedInstance.transform.rotation = transformState.Rotation;
+                        linkedInstance.transform.localScale = transformState.LocalScale;
+                        if (preserveSceneReferences)
+                            RemapExternalReferences(references, linkedInstance);
+                        Undo.DestroyObjectImmediate(source);
+                        Selection.activeGameObject = linkedInstance;
+                    }
+
+                    if (linkSceneInstance && preserveWorldTransform && !TransformMatches(linkedInstance.transform, transformState))
+                    {
+                        transaction.Rollback();
+                        return new ErrorResponse("PREFAB_REPLACEMENT_VALIDATION_FAILED", new { message = "Prefab replacement changed the target transform or hierarchy order.", committed = false, rolled_back = true });
+                    }
+                    if (linkSceneInstance && preserveSceneReferences && !ReferencesMatch(references, linkedInstance))
+                    {
+                        transaction.Rollback();
+                        return new ErrorResponse("PREFAB_REPLACEMENT_VALIDATION_FAILED", new { message = "Prefab replacement did not preserve all external scene references.", committed = false, rolled_back = true });
+                    }
+
+                    IReadOnlyList<SerializedChange> changes = transaction.Changes;
+                    HashSet<string> referenceKeys = new HashSet<string>(references.Select(item => item.Key), StringComparer.Ordinal);
+                    IReadOnlyList<SerializedChange> unexpected = changes.Where(change =>
+                        !IsAtomicChangeInScope(change, sourcePath, sanitizedPath, referenceKeys)).ToArray();
+                    if (guard != null)
+                        unexpected = unexpected.Concat(guard.Unexpected(changes)).Distinct().ToArray();
+                    if (unexpected.Count > 0)
+                    {
+                        transaction.Rollback();
+                        return new ErrorResponse("UNEXPECTED_SERIALIZED_CHANGES", new
+                        {
+                            committed = false,
+                            rolled_back = true,
+                            dry_run = dryRun,
+                            changes,
+                            unexpected_changes = unexpected
+                        });
+                    }
+
+                    if (dryRun)
+                    {
+                        transaction.Rollback();
+                        return new SuccessResponse("Atomic prefab creation preview completed and rolled back.", new
+                        {
+                            prefabPath = sanitizedPath,
+                            linkedSceneInstance = linkSceneInstance,
+                            instanceId = linkSceneInstance ? linkedInstance.GetInstanceIDCompat() : (int?)null,
+                            change_preview = new { dry_run = true, committed = false, rolled_back = true, changes }
+                        });
+                    }
+
+                    transaction.Commit(save: saveScene);
+                    return new SuccessResponse(
+                        linkSceneInstance ? "Prefab created and scene instance linked atomically." : "Prefab created without changing the scene instance.",
+                        new
+                        {
+                            prefabPath = sanitizedPath,
+                            linkedSceneInstance = linkSceneInstance,
+                            instanceId = linkSceneInstance ? linkedInstance.GetInstanceIDCompat() : (int?)null,
+                            sceneSaved = saveScene,
+                            assetReplaced = assetExisted,
+                            committed = true,
+                            rolled_back = false,
+                            changes
+                        });
+                }
+            }
+            catch (MutationTransactionException exception)
+            {
+                return new ErrorResponse(exception.Code, new { message = exception.Message, committed = false, rolled_back = true });
+            }
+            catch (Exception exception)
+            {
+                return new ErrorResponse("SAVE_FAILED", new { message = exception.Message, committed = false, rolled_back = true });
+            }
+        }
+
+        private static bool IsAtomicChangeInScope(SerializedChange change, string sourcePath, string prefabPath, HashSet<string> referenceKeys)
+        {
+            bool inSceneHierarchy = string.Equals(change.ObjectPath, sourcePath, StringComparison.Ordinal)
+                || change.ObjectPath.StartsWith(sourcePath + "/", StringComparison.Ordinal);
+            bool inPrefabAsset = string.Equals(change.AssetPath, prefabPath, StringComparison.Ordinal);
+            string key = change.ObjectId + "|" + change.ComponentType + "|" + change.Property;
+            return inSceneHierarchy || inPrefabAsset || referenceKeys.Contains(key);
+        }
+
+        private static bool TransformMatches(Transform current, AtomicTransformState expected)
+        {
+            return current.parent == expected.Parent
+                && current.GetSiblingIndex() == expected.SiblingIndex
+                && Vector3.Distance(current.position, expected.Position) < 0.0001f
+                && Quaternion.Angle(current.rotation, expected.Rotation) < 0.001f
+                && Vector3.Distance(current.localScale, expected.LocalScale) < 0.0001f;
+        }
+
+        private static List<ExternalReferenceState> CaptureExternalReferences(GameObject root)
+        {
+            var hierarchy = new HashSet<UnityEngine.Object>(root.GetComponentsInChildren<Transform>(true)
+                .SelectMany(transform => new UnityEngine.Object[] { transform.gameObject }.Concat(transform.GetComponents<Component>())));
+            var result = new List<ExternalReferenceState>();
+            foreach (GameObject sceneRoot in root.scene.GetRootGameObjects())
+            foreach (Transform transform in sceneRoot.GetComponentsInChildren<Transform>(true))
+            foreach (UnityEngine.Object owner in new UnityEngine.Object[] { transform.gameObject }.Concat(transform.GetComponents<Component>()).Where(item => item != null && !hierarchy.Contains(item)))
+            {
+                try
+                {
+                    var serialized = new SerializedObject(owner);
+                    SerializedProperty property = serialized.GetIterator();
+                    bool enterChildren = true;
+                    while (property.Next(enterChildren))
+                    {
+                        enterChildren = true;
+                        if (property.propertyType != SerializedPropertyType.ObjectReference || property.objectReferenceValue == null || !hierarchy.Contains(property.objectReferenceValue))
+                            continue;
+                        result.Add(new ExternalReferenceState
+                        {
+                            Key = GlobalObjectId.GetGlobalObjectIdSlow(owner) + "|" + owner.GetType().FullName + "|" + property.propertyPath,
+                            Owner = owner,
+                            PropertyPath = property.propertyPath,
+                            ChildIndices = ChildIndexPath(root.transform, OwnerTransform(property.objectReferenceValue)),
+                            ReferencedType = property.objectReferenceValue.GetType(),
+                            ComponentIndex = ComponentIndex(property.objectReferenceValue)
+                        });
+                    }
+                }
+                catch (Exception) { }
+            }
+            return result;
+        }
+
+        private static void RemapExternalReferences(IEnumerable<ExternalReferenceState> references, GameObject replacementRoot)
+        {
+            foreach (ExternalReferenceState reference in references)
+            {
+                if (reference.Owner == null) continue;
+                UnityEngine.Object replacement = ResolveReplacementReference(reference, replacementRoot);
+                var serialized = new SerializedObject(reference.Owner);
+                SerializedProperty property = serialized.FindProperty(reference.PropertyPath);
+                if (property == null) continue;
+                property.objectReferenceValue = replacement;
+                serialized.ApplyModifiedProperties();
+            }
+        }
+
+        private static bool ReferencesMatch(IEnumerable<ExternalReferenceState> references, GameObject replacementRoot)
+        {
+            foreach (ExternalReferenceState reference in references)
+            {
+                if (reference.Owner == null) return false;
+                var serialized = new SerializedObject(reference.Owner);
+                SerializedProperty property = serialized.FindProperty(reference.PropertyPath);
+                if (property == null || property.objectReferenceValue != ResolveReplacementReference(reference, replacementRoot))
+                    return false;
+            }
+            return true;
+        }
+
+        private static UnityEngine.Object ResolveReplacementReference(ExternalReferenceState reference, GameObject replacementRoot)
+        {
+            Transform transform = replacementRoot.transform;
+            foreach (int childIndex in reference.ChildIndices ?? Array.Empty<int>())
+            {
+                if (childIndex < 0 || childIndex >= transform.childCount) return null;
+                transform = transform.GetChild(childIndex);
+            }
+            if (transform == null) return null;
+            if (reference.ReferencedType == typeof(GameObject)) return transform.gameObject;
+            Component[] matches = transform.GetComponents(reference.ReferencedType);
+            return reference.ComponentIndex >= 0 && reference.ComponentIndex < matches.Length
+                ? matches[reference.ComponentIndex]
+                : null;
+        }
+
+        private static Transform OwnerTransform(UnityEngine.Object value)
+        {
+            if (value is GameObject gameObject) return gameObject.transform;
+            return (value as Component)?.transform;
+        }
+
+        private static int[] ChildIndexPath(Transform root, Transform target)
+        {
+            if (target == root) return Array.Empty<int>();
+            var indices = new Stack<int>();
+            while (target != null && target != root)
+            {
+                indices.Push(target.GetSiblingIndex());
+                target = target.parent;
+            }
+            return target == root ? indices.ToArray() : null;
+        }
+
+        private static int ComponentIndex(UnityEngine.Object value)
+        {
+            if (!(value is Component component)) return -1;
+            Component[] matches = component.gameObject.GetComponents(component.GetType());
+            return Array.IndexOf(matches, component);
+        }
+
+        private static string GetHierarchyPath(Transform transform)
+        {
+            var names = new Stack<string>();
+            while (transform != null)
+            {
+                names.Push(transform.name);
+                transform = transform.parent;
+            }
+            return string.Join("/", names.ToArray());
+        }
 
         /// <summary>
         /// Creates a prefab asset from a GameObject in the scene.

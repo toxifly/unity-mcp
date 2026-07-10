@@ -42,6 +42,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         public string Kind { get; internal set; }
         public string ObjectId { get; internal set; }
         public string ObjectPath { get; internal set; }
+        public string AssetPath { get; internal set; }
         public string ComponentType { get; internal set; }
         public string Property { get; internal set; }
         public string Before { get; internal set; }
@@ -303,8 +304,9 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 bool wasDirty = initialDirtyScenes.TryGetValue(SceneKey(scene), out bool dirty) && dirty;
                 if (wasDirty)
                     EditorSceneManager.MarkSceneDirty(scene);
-                else
-                    EditorSceneManager.ClearSceneDirtiness(scene);
+                // Unity has no public API for clearing a scene's dirty flag. Undoing the
+                // complete transaction group restores a previously clean scene without
+                // writing it; only the pre-dirty case needs an explicit correction here.
             }
 
             foreach (KeyValuePair<string, bool> pair in initialDirtyAssets)
@@ -496,6 +498,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     Kind = hadBefore ? (hasAfter ? "modified" : "removed") : "added",
                     ObjectId = identity.ObjectId,
                     ObjectPath = identity.ObjectPath,
+                    AssetPath = identity.AssetPath,
                     ComponentType = identity.ComponentType,
                     Property = identity.Property,
                     Before = hadBefore ? oldValue.Value : null,
@@ -514,7 +517,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             {
                 SerializedChange a = left[i];
                 SerializedChange b = right[i];
-                if (a.Kind != b.Kind || a.ObjectId != b.ObjectId || a.ComponentType != b.ComponentType
+                if (a.Kind != b.Kind || a.ObjectId != b.ObjectId || a.AssetPath != b.AssetPath || a.ComponentType != b.ComponentType
                     || a.Property != b.Property || a.Before != b.Before || a.After != b.After)
                     return false;
             }
@@ -567,6 +570,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             public string Key;
             public string ObjectId;
             public string ObjectPath;
+            public string AssetPath;
             public string ComponentType;
             public string Property;
             public string Value;
@@ -580,6 +584,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     Key = $"{objectId}|{componentType}|{property.propertyPath}",
                     ObjectId = objectId,
                     ObjectPath = MutationTransaction.ObjectPath(target),
+                    AssetPath = AssetDatabase.GetAssetPath(target),
                     ComponentType = componentType,
                     Property = property.propertyPath,
                     Value = Normalize(property)
