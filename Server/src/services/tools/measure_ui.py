@@ -21,16 +21,17 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 
 
 @mcp_for_unity_tool(
+    group="core",
     description=(
         "Measure uGUI RectTransform bounds without a screenshot. Returns each target's "
-        "rectangle in canvas-local space (origin = reference centre, y up) and/or screen "
-        "pixels (y up from bottom). Use for numeric layout verification — clearances, "
+        "rectangle in an explicit canvas, local, world, or screen-pixel coordinate space. "
+        "Use for numeric layout verification — clearances, "
         "overlaps, clipping, off-screen checks — during iteration; it is cheap and "
         "deterministic where a Game View capture is large and returns white when unfocused. "
         "Targets are GameObject names, or hierarchy paths ('Canvas/Panel/Button') for "
         "disambiguation. Set include_children to also measure each target's immediate "
         "RectTransform children (e.g. a grid container's tiles). Inactive objects are "
-        "included by default so hidden/gated tiles are still measured."
+        "included by default. Geometry assertions can be evaluated in the same call."
     )
 )
 async def measure_ui(
@@ -56,9 +57,13 @@ async def measure_ui(
         Field(default=None, description="Measure inactive/hidden objects too (default true).")
     ] = None,
     space: Annotated[
-        Literal["canvas", "screen", "both"],
-        Field(default="both", description="Which coordinate space(s) to report.")
-    ] = "both",
+        Literal["canvas", "local", "world", "screen_pixels"],
+        Field(default="canvas", description="The single coordinate space used by all measurements and assertions.")
+    ] = "canvas",
+    assertions: Annotated[
+        list[dict[str, Any]] | None,
+        Field(default=None, description="Optional geometry assertions evaluated in the declared coordinate space.")
+    ] = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
 
@@ -81,6 +86,8 @@ async def measure_ui(
         params["includeChildren"] = include_children
     if include_inactive is not None:
         params["includeInactive"] = include_inactive
+    if assertions is not None:
+        params["assertions"] = assertions
 
     try:
         response = await send_with_unity_instance(
