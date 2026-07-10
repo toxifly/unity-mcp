@@ -23,6 +23,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
     {
         public string Name { get; set; } = "MCP scoped mutation";
         public DirtyScenePolicy DirtyScenePolicy { get; set; } = DirtyScenePolicy.Reject;
+        public bool AllowDirtyAssets { get; set; }
         public IReadOnlyList<string> AdditionalAssetPaths { get; set; } = Array.Empty<string>();
     }
 
@@ -88,7 +89,8 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 .GroupBy(SceneKey)
                 .Select(group => group.First())
                 .ToList();
-            if (targets.Count == 0 && targetScenes.Count == 0)
+            if (targets.Count == 0 && targetScenes.Count == 0
+                && !(options.AdditionalAssetPaths?.Any() ?? false))
                 throw new MutationTransactionException("TARGET_NOT_FOUND", "A mutation transaction requires at least one resolved target.");
 
             sceneSetup = EditorSceneManager.GetSceneManagerSetup();
@@ -128,6 +130,15 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             MutationTransactionOptions options = null)
         {
             return new MutationTransaction(Array.Empty<Object>(), options, new[] { scene });
+        }
+
+        public static MutationTransaction BeginAssets(
+            IEnumerable<string> assetPaths,
+            MutationTransactionOptions options = null)
+        {
+            options = options ?? new MutationTransactionOptions();
+            options.AdditionalAssetPaths = assetPaths?.ToArray() ?? Array.Empty<string>();
+            return new MutationTransaction(Array.Empty<Object>(), options);
         }
 
         public IReadOnlyList<string> TargetGlobalObjectIds =>
@@ -241,6 +252,8 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
 
         private void PreflightDirtyAssets()
         {
+            if (options.AllowDirtyAssets)
+                return;
             string dirtyPath = initialDirtyAssets.FirstOrDefault(pair => pair.Value).Key;
             if (!string.IsNullOrEmpty(dirtyPath))
                 throw new MutationTransactionException(
@@ -262,9 +275,8 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
 
             foreach (string path in targetAssetPaths.Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
             {
-                Object dirtyAsset = AssetDatabase.LoadAllAssetsAtPath(path)
-                    .FirstOrDefault(asset => asset != null && EditorUtility.IsDirty(asset));
-                if (dirtyAsset != null)
+                foreach (Object dirtyAsset in AssetDatabase.LoadAllAssetsAtPath(path)
+                    .Where(asset => asset != null && EditorUtility.IsDirty(asset)))
                     AssetDatabase.SaveAssetIfDirty(dirtyAsset);
             }
         }
