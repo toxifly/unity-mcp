@@ -38,6 +38,7 @@ The transaction layer is the most important safety improvement. The measurement 
 - [x] Correct `wait_for_ready` semantics.
 - [x] Correct console log typing.
 - [x] First-class, always-registered `measure_ui` with explicit coordinate spaces and geometry assertions.
+- [x] First-class `inspect_serialized` with property whitelists, missing-reference findings, stable identity, and prefab property provenance.
 
 Implemented on 2026-07-10:
 
@@ -81,6 +82,14 @@ Implemented on 2026-07-10:
 - Kept inactive authored RectTransforms measurable by default, added container/immediate-child batching, and return stable error codes for missing targets, invalid spaces, non-RectTransform targets, and missing coordinate references.
 - Added in-call `inside`, `covers`, `matches_bounds`, `no_overlap`, `minimum_gap`, `on_screen`, `not_clipped`, `ordered_left_to_right`, and `ordered_top_to_bottom` assertions with a compact pass/fail summary. Coordinate-dependent assertions reject incompatible spaces rather than silently converting them.
 - Added three server registration/request-contract tests and five Unity EditMode geometry/validation tests, including full-screen overlay bounds, inactive authored objects, and multi-assertion evaluation. Validation: all 3 focused Server tests passed; the full Server suite reached 1,341 passed and 3 skipped, with its 6 failures confined to the previously documented screenshot parameters, object-reference coercion, and sandboxed telemetry file. Unity 6.5 compiled the package implementation without `MeasureUI` errors, but pre-existing Unity 6.5-obsolete `GetInstanceID`/`InstanceIDToObject` calls elsewhere in the fixture prevented the EditMode test assembly from compiling, so the five new tests are checked in but not claimed as executed here.
+
+Implemented on 2026-07-10:
+
+- Added `inspect_serialized` as an always-enabled core tool on the server and Unity sides. It reads only explicit `SerializedProperty` paths and never falls back to reflection or whole-component dumps.
+- Added string targets plus structured target/component selectors, GlobalObjectId resolution, inactive-object lookup, and `TARGET_AMBIGUOUS` rejection for duplicate names. Findings include hierarchy/asset identity and GlobalObjectIds.
+- Distinguished valid, null, and broken object references using Unity's serialized reference value and instance ID, with referenced object type, GlobalObjectId, and asset path when resolvable.
+- Added compact prefab property provenance (`is_instance`, source asset/object/GlobalObjectId, and `is_override`) and bounded cursor paging with a 200-finding ceiling.
+- Added three server registration/request-contract tests and six Unity EditMode tests covering whitelisting, valid/null/broken references, ambiguous names, and prefab source/override reporting. Validation: all 10 focused Server inspection/registration/registry tests passed. The full Server suite reached 1,345 passed and 3 skipped; its 6 failures are the same pre-existing screenshot-parameter, object-reference-coercion, and sandboxed telemetry-file failures. The configured Unity compile matrix could not run because none of its four editor versions are installed locally, so the six Unity tests are checked in but not claimed as executed here.
 
 ---
 
@@ -394,6 +403,8 @@ Useful assertions:
 The tool should calculate all target bounds in one editor invocation.
 
 #### 6.7 Implement `inspect_serialized`
+
+**Implementation status:** Complete (2026-07-10). The core tool uses `SerializedObject` with explicit property whitelists, resolves stable identities, distinguishes null and broken references, and reports prefab property provenance with bounded paging.
 
 Proposed request:
 
