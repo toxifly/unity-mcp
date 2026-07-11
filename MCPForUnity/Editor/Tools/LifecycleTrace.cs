@@ -408,33 +408,46 @@ namespace MCPForUnity.Editor.Tools
 
         private static void PreserveSceneDirtyState(IEnumerable<GameObject> objects, Action action)
         {
-            var states = objects
+            GameObject[] targets = objects
+                .Where(item => item != null)
+                .Distinct()
+                .ToArray();
+            var sceneStates = targets
                 .Where(item => item != null && item.scene.IsValid() && item.scene.isLoaded)
                 .Select(item => item.scene)
                 .GroupBy(item => item.handle)
                 .Select(group => new KeyValuePair<Scene, bool>(group.First(), group.First().isDirty))
                 .ToArray();
-            action();
-            foreach (KeyValuePair<Scene, bool> state in states)
+            var objectStates = targets
+                .SelectMany(item => new UnityEngine.Object[] { item }
+                    .Concat(item.GetComponents<Component>().Where(component => component != null)))
+                .Distinct()
+                .ToDictionary(item => item, EditorUtility.IsDirty);
+
+            try
             {
-                if (!state.Key.IsValid() || !state.Key.isLoaded) continue;
-                if (state.Value)
+                action();
+            }
+            finally
+            {
+                foreach (KeyValuePair<UnityEngine.Object, bool> state in objectStates)
                 {
-                    EditorSceneManager.MarkSceneDirty(state.Key);
+                    if (state.Key == null) continue;
+                    if (state.Value) EditorUtility.SetDirty(state.Key);
+                    else EditorUtility.ClearDirty(state.Key);
                 }
-                else if (state.Key.isDirty)
+
+                foreach (KeyValuePair<Scene, bool> state in sceneStates)
                 {
-                    try
+                    if (!state.Key.IsValid() || !state.Key.isLoaded) continue;
+                    if (state.Value)
                     {
-                        if (ClearSceneDirtiness != null)
-                            ClearSceneDirtiness.Invoke(null, new object[] { state.Key });
+                        EditorSceneManager.MarkSceneDirty(state.Key);
                     }
-                    catch { }
-                    foreach (GameObject root in state.Key.GetRootGameObjects())
+                    else if (state.Key.isDirty && ClearSceneDirtiness != null)
                     {
-                        EditorUtility.ClearDirty(root);
-                        foreach (Component component in root.GetComponentsInChildren<Component>(true).Where(item => item != null))
-                            EditorUtility.ClearDirty(component);
+                        try { ClearSceneDirtiness.Invoke(null, new object[] { state.Key }); }
+                        catch { }
                     }
                 }
             }

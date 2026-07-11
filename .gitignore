@@ -27,6 +27,10 @@ htmlcov/
 coverage.xml
 *.cover
 
+# Server pytest artifacts
+/Server/.pytest-tmp/
+/Server/.pytest_cache/
+
 # Virtual environments
 .venv
 

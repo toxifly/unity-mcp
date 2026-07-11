@@ -73,6 +73,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         private readonly List<Object> targets;
         private readonly List<Scene> targetScenes;
         private readonly List<string> targetAssetPaths;
+        private readonly List<string> initiallyMissingAssetFolders;
         private readonly Dictionary<string, byte[]> assetBytes;
         private readonly Dictionary<string, Fingerprint> before;
         private readonly SceneSetup[] sceneSetup;
@@ -105,6 +106,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             activeScene = SceneManager.GetActiveScene();
             prefabStageAssetPath = PrefabStageUtility.GetCurrentPrefabStage()?.assetPath;
             targetAssetPaths = ResolveTargetAssetPaths(targets, targetScenes, options.AdditionalAssetPaths);
+            initiallyMissingAssetFolders = SnapshotMissingParentFolders(targetAssetPaths);
             initialDirtyScenes = targetScenes.ToDictionary(SceneKey, scene => scene.isDirty, StringComparer.Ordinal);
             initialDirtyAssets = targetAssetPaths
                 .Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
@@ -303,6 +305,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             {
                 Undo.RevertAllDownToGroup(undoGroup);
                 RestoreAssetBytes();
+                RestoreMissingAssetFolders();
                 RestoreDirtyStates();
                 RestoreEditorSetup();
             }
@@ -393,6 +396,33 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
         }
 
+        private void RestoreMissingAssetFolders()
+        {
+            bool refreshRequired = false;
+            foreach (string folder in initiallyMissingAssetFolders
+                .OrderByDescending(path => path.Count(character => character == '/')))
+            {
+                string fullPath = FullProjectPath(folder);
+                if (Directory.Exists(fullPath))
+                {
+                    if (Directory.EnumerateFileSystemEntries(fullPath).Any())
+                        throw new IOException(
+                            $"Cannot roll back newly created asset folder '{folder}' because it is not empty.");
+                    if (!AssetDatabase.DeleteAsset(folder) && Directory.Exists(fullPath))
+                        throw new IOException($"Unity could not remove newly created asset folder '{folder}'.");
+                }
+
+                string metaPath = fullPath + ".meta";
+                if (File.Exists(metaPath))
+                {
+                    File.Delete(metaPath);
+                    refreshRequired = true;
+                }
+            }
+            if (refreshRequired)
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        }
+
         private void RestoreEditorSetup()
         {
             var currentPrefabStage = PrefabStageUtility.GetCurrentPrefabStage();
@@ -467,6 +497,23 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 result[path] = File.Exists(fullPath) ? File.ReadAllBytes(fullPath) : null;
             }
             return result;
+        }
+
+        private static List<string> SnapshotMissingParentFolders(IEnumerable<string> assetPaths)
+        {
+            var missing = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string assetPath in assetPaths)
+            {
+                string folder = Path.GetDirectoryName(assetPath)?.Replace('\\', '/');
+                while (!string.IsNullOrEmpty(folder)
+                    && folder.StartsWith("Assets/", StringComparison.Ordinal))
+                {
+                    if (!Directory.Exists(FullProjectPath(folder)))
+                        missing.Add(folder);
+                    folder = Path.GetDirectoryName(folder)?.Replace('\\', '/');
+                }
+            }
+            return missing.ToList();
         }
 
         private static string FullProjectPath(string assetPath)

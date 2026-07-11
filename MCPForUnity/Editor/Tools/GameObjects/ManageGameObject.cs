@@ -102,7 +102,11 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 };
                 string prefabPath = @params["prefabPath"]?.ToString() ?? @params["prefab_path"]?.ToString();
                 if (action == "create" && @params["saveAsPrefab"]?.ToObject<bool?>() == true && !string.IsNullOrEmpty(prefabPath))
+                {
+                    if (!prefabPath.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase))
+                        prefabPath += ".prefab";
                     options.AdditionalAssetPaths = new[] { prefabPath };
+                }
 
                 if (action == "create")
                 {
