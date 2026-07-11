@@ -64,3 +64,27 @@ def test_preview_rejects_mixed_scene_and_asset_scopes():
         object(), asset_paths=["Assets/Data.asset"], scene_path="Assets/Main.unity"
     ))
     assert result["success"] is False
+
+
+def test_preview_uses_non_refreshing_preflight(monkeypatch):
+    captured = {}
+
+    async def fake_send(_ctx, command, params, *, refresh_if_dirty=True):
+        captured.update(
+            command=command,
+            params=params,
+            refresh_if_dirty=refresh_if_dirty,
+        )
+        return {"success": True}
+
+    monkeypatch.setattr(scoped_mod, "_send", fake_send)
+    result = run(scoped_mod.preview_asset_changes(
+        object(), asset_paths="Assets/Data/Config.asset"
+    ))
+
+    assert result["success"] is True
+    assert captured == {
+        "command": "preview_asset_changes",
+        "params": {"assetPaths": ["Assets/Data/Config.asset"]},
+        "refresh_if_dirty": False,
+    }

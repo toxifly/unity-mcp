@@ -203,6 +203,8 @@ def _canonicalize_tool_result(
     *,
     unity_instance: str | None,
     duration_ms: int,
+    response_format: ResponseFormat,
+    verbosity: Verbosity,
 ) -> ToolResult:
     """Add the advertised envelope without discarding rich MCP content blocks."""
     payload = result.structured_content
@@ -223,8 +225,21 @@ def _canonicalize_tool_result(
         unity_instance=unity_instance,
         duration_ms=duration_ms,
     )
+    non_text_blocks = [
+        block for block in result.content if getattr(block, "type", None) != "text"
+    ]
+    content = non_text_blocks
+    if response_format != "structured":
+        indent = 2 if verbosity == "detailed" else None
+        text = json.dumps(
+            envelope,
+            ensure_ascii=False,
+            indent=indent,
+            separators=None if indent else (",", ":"),
+        )
+        content = [TextContent(type="text", text=text), *non_text_blocks]
     return ToolResult(
-        content=result.content,
+        content=content,
         structured_content=envelope,
         meta=result.meta,
     )
@@ -289,6 +304,8 @@ def canonical_result(func: Callable[..., Any]) -> Callable[..., Any]:
                 result,
                 unity_instance=unity_instance,
                 duration_ms=duration_ms,
+                response_format=response_format,
+                verbosity=verbosity,
             )
 
         envelope = canonicalize_result(
