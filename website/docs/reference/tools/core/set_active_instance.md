@@ -1,7 +1,7 @@
 ---
 title: set_active_instance
 sidebar_label: set_active_instance
-description: "Set the active Unity instance for this client/session."
+description: "Set this client session's active Unity instance without changing Unity project state. instance accepts Name@hash, a unique hash prefix, or a port number in stdio mode; ambiguous identifiers are rejected."
 ---
 
 # `set_active_instance`
@@ -12,7 +12,7 @@ description: "Set the active Unity instance for this client/session."
 
 ## Description
 
-Set the active Unity instance for this client/session. Accepts Name@hash, hash prefix, or port number (stdio only).
+Set this client session's active Unity instance without changing Unity project state. instance accepts Name@hash, a unique hash prefix, or a port number in stdio mode; ambiguous identifiers are rejected.
 
 ## Parameters
 

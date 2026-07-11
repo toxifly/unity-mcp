@@ -14,7 +14,7 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 
 
 @mcp_for_unity_tool(
-    description="Execute a Unity menu item by path.",
+    description="Execute the Unity menu item identified by menu_path. This mutates editor or project state when the selected menu command does; the tool cannot predict or roll back third-party menu behavior.",
     annotations=ToolAnnotations(
         title="Execute Menu Item",
         destructiveHint=True,

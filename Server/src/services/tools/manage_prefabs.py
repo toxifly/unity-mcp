@@ -26,25 +26,14 @@ REQUIRED_PARAMS = {
 @mcp_for_unity_tool(
     description=(
         "Manages Unity Prefab assets. "
-        "Actions: get_info, get_hierarchy, create_from_gameobject, create_and_replace, modify_contents, "
+        "Read-only actions: get_info and get_hierarchy. Mutating actions: create_from_gameobject, create_and_replace, modify_contents, "
         "apply_instance_overrides, revert_instance_overrides, unpack_instance, "
         "open_prefab_stage, save_prefab_stage, close_prefab_stage. "
-        "Two approaches to prefab editing: "
-        "(1) Headless: use modify_contents for automated/scripted edits without opening the prefab in the editor. "
-        "(2) Interactive: use open_prefab_stage to open a prefab, then manage_gameobject/manage_components to edit objects inside the prefab stage, then save_prefab_stage to save and close_prefab_stage to return to the main scene. "
-        "Use create_and_replace for an atomic, transaction-guarded prefab creation and optional scene replacement. "
-        "Use apply_instance_overrides/revert_instance_overrides/unpack_instance to manage prefab instances in a scene. "
-        "Use create_child parameter with modify_contents to add child GameObjects or nested prefab instances to a prefab "
-        "(single object or array for batch creation in one save). "
-        "Example: create_child=[{\"name\": \"Child1\", \"primitive_type\": \"Sphere\", \"position\": [1,0,0]}, "
-        "{\"name\": \"Nested\", \"source_prefab_path\": \"Assets/Prefabs/Bullet.prefab\", \"position\": [0,2,0]}]. "
-        "Use delete_child parameter to remove child GameObjects from the prefab "
-        "(single name/path or array of paths for batch deletion. "
-        "Example: delete_child=[\"Child1\", \"Child2/Grandchild\"]). "
-        "Use component_properties with modify_contents to set serialized fields on existing components "
-        "(e.g. component_properties={\"Rigidbody\": {\"mass\": 5.0}, \"MyScript\": {\"health\": 100}}). "
-        "Supports object references via {\"guid\": \"...\"}, {\"path\": \"Assets/...\"}, or {\"instanceID\": 123}. "
-        "Use manage_asset action=search filterType=Prefab to list prefabs."
+        "modify_contents edits an asset without opening Prefab Stage; open_prefab_stage, save_prefab_stage, "
+        "and close_prefab_stage control interactive stage state. create_and_replace performs guarded prefab "
+        "creation with optional scene replacement. With modify_contents, create_child and delete_child accept "
+        "one item or an array, and component_properties sets serialized fields on existing components. "
+        "Object references accept guid, Assets path, or instanceID forms."
     ),
     annotations=ToolAnnotations(
         title="Manage Prefabs",

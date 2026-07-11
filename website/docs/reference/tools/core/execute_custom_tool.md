@@ -1,7 +1,7 @@
 ---
 title: execute_custom_tool
 sidebar_label: execute_custom_tool
-description: "Execute a project-scoped custom tool registered by Unity."
+description: "Execute a project-scoped custom tool by tool_name with optional parameters."
 ---
 
 # `execute_custom_tool`
@@ -12,7 +12,7 @@ description: "Execute a project-scoped custom tool registered by Unity."
 
 ## Description
 
-Execute a project-scoped custom tool registered by Unity.
+Execute a project-scoped custom tool by tool_name with optional parameters. Read-only versus mutating behavior and other constraints are defined by the registered custom tool.
 
 ## Parameters
 

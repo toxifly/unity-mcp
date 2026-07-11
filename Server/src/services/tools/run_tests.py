@@ -155,7 +155,7 @@ class GetTestJobResponse(MCPResponse):
 
 @mcp_for_unity_tool(
     group="testing",
-    description="Starts a Unity test run asynchronously and returns a job_id immediately. Poll with get_test_job for progress.",
+    description="Start an asynchronous Unity Test Framework run and return a job_id immediately. This mutates transient test and Editor state; mode, test_names, group_names, category_names, and assembly_names filter the run.",
     annotations=ToolAnnotations(
         title="Run Tests",
         destructiveHint=True,
@@ -249,7 +249,7 @@ async def run_tests(
 
 @mcp_for_unity_tool(
     group="testing",
-    description="Polls an async Unity test job by job_id.",
+    description="Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed_tests and include_details control returned result detail.",
     annotations=ToolAnnotations(
         title="Get Test Job",
         readOnlyHint=True,

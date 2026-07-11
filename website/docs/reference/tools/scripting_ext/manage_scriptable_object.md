@@ -1,7 +1,7 @@
 ---
 title: manage_scriptable_object
 sidebar_label: manage_scriptable_object
-description: "Creates and modifies ScriptableObject assets using Unity SerializedObject property paths."
+description: "Create or modify ScriptableObject assets using Unity SerializedObject property paths."
 ---
 
 # `manage_scriptable_object`
@@ -12,7 +12,7 @@ description: "Creates and modifies ScriptableObject assets using Unity Serialize
 
 ## Description
 
-Creates and modifies ScriptableObject assets using Unity SerializedObject property paths.
+Create or modify ScriptableObject assets using Unity SerializedObject property paths. Both actions mutate project assets; type_name and asset_path identify a new asset, while properties supplies serialized field values.
 
 ## Parameters
 

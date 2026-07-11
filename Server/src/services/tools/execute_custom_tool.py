@@ -17,7 +17,7 @@ from services.tools import get_unity_instance_from_context
     name="execute_custom_tool",
     unity_target=None,
     group=None,
-    description="Execute a project-scoped custom tool registered by Unity.",
+    description="Execute a project-scoped custom tool by tool_name with optional parameters. Read-only versus mutating behavior and other constraints are defined by the registered custom tool.",
     annotations=ToolAnnotations(
         title="Execute Custom Tool",
         destructiveHint=True,

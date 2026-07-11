@@ -1,7 +1,7 @@
 ---
 title: get_test_job
 sidebar_label: get_test_job
-description: "Polls an async Unity test job by job_id."
+description: "Read the status or results of an asynchronous Unity test job by job_id."
 ---
 
 # `get_test_job`
@@ -12,7 +12,7 @@ description: "Polls an async Unity test job by job_id."
 
 ## Description
 
-Polls an async Unity test job by job_id.
+Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed_tests and include_details control returned result detail.
 
 ## Parameters
 

@@ -62,12 +62,12 @@ def invalidate_cached_max_commands() -> None:
 @mcp_for_unity_tool(
     name="batch_execute",
     description=(
-        "Executes multiple MCP commands in a single batch for dramatically better performance. "
-        "STRONGLY RECOMMENDED when creating/modifying multiple objects, adding components to multiple targets, "
-        "or performing any repetitive operations. Reduces latency and token costs by 10-100x compared to "
-        "sequential tool calls. The max commands per batch is configurable in the Unity MCP Tools window "
-        f"(default {DEFAULT_MAX_COMMANDS_PER_BATCH}, hard max {ABSOLUTE_MAX_COMMANDS_PER_BATCH}). "
-        "Example: creating 5 cubes → use 1 batch_execute with 5 create commands instead of 5 separate calls."
+        "Execute multiple Unity MCP commands as one batch. The batch is read-only only when all "
+        "contained commands are read-only; mutating commands are serialized. commands contains "
+        "objects with tool and params keys. parallel enables concurrency for eligible read-only "
+        "commands, fail_fast stops after the first failure, and max_parallelism bounds workers. "
+        f"The default limit is {DEFAULT_MAX_COMMANDS_PER_BATCH} commands and the hard limit is "
+        f"{ABSOLUTE_MAX_COMMANDS_PER_BATCH}. Per-command instance routing is not supported."
     ),
     annotations=ToolAnnotations(
         title="Batch Execute",

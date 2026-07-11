@@ -1,7 +1,7 @@
 ---
 title: unity_reflect
 sidebar_label: unity_reflect
-description: "Inspect Unity's live C# API via reflection."
+description: "Inspect Unity's live C# API via reflection without mutating editor or project state."
 ---
 
 # `unity_reflect`
@@ -12,7 +12,7 @@ description: "Inspect Unity's live C# API via reflection."
 
 ## Description
 
-Inspect Unity's live C# API via reflection. Use this to verify that classes, methods, and properties exist before writing C# code — training data may be wrong or outdated.
+Inspect Unity's live C# API via reflection without mutating editor or project state.
 
 Actions:
 - get_type: Member summary (names only) for a class. Requires class_name.

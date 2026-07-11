@@ -16,9 +16,8 @@ from services.tools.preflight import preflight
         "Performs CRUD operations on Unity scenes. "
         "Read-only actions: get_hierarchy, get_active, get_build_settings, get_loaded_scenes, scene_view_frame. "
         "Modifying actions: create (with optional template), load (with optional additive flag), save, "
-        "close_scene, set_active_scene, move_to_scene, validate (with optional auto_repair). "
-        "For build settings management (add/remove/enable scenes), use manage_build(action='scenes'). "
-        "For screenshots, use manage_camera (screenshot, screenshot_multiview actions)."
+        "close_scene, set_active_scene, move_to_scene, and validate when auto_repair is enabled. "
+        "get_hierarchy supports page_size, cursor, max_depth, and include_transform."
     ),
     annotations=ToolAnnotations(
         title="Manage Scene",

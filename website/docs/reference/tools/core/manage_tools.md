@@ -1,7 +1,7 @@
 ---
 title: manage_tools
 sidebar_label: manage_tools
-description: "Manage which tool groups are visible in this session."
+description: "Manage which tool groups are visible in this session. list_groups is read-only."
 ---
 
 # `manage_tools`
@@ -12,7 +12,7 @@ description: "Manage which tool groups are visible in this session."
 
 ## Description
 
-Manage which tool groups are visible in this session. Actions: list_groups (show all groups and their status), activate (enable a group), deactivate (disable a group), sync (refresh visibility from Unity Editor's toggle states), reset (restore defaults). Activating a group makes its tools appear; deactivating hides them. Use sync after toggling tools in the Unity Editor GUI.
+Manage which tool groups are visible in this session. list_groups is read-only. Session-mutating actions: activate (enable a group), deactivate (disable a group), sync (refresh visibility from Unity Editor's toggle states), reset (restore defaults). Activating a group makes its tools appear; deactivating hides them. These actions do not modify Unity project content; sync imports the Editor's current toggle states.
 
 ## Parameters
 

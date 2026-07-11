@@ -1,7 +1,7 @@
 ---
 title: manage_gameobject
 sidebar_label: manage_gameobject
-description: "Performs CRUD operations on GameObjects."
+description: "Create, modify, delete, duplicate, move, or orient GameObjects."
 ---
 
 # `manage_gameobject`
@@ -12,14 +12,14 @@ description: "Performs CRUD operations on GameObjects."
 
 ## Description
 
-Performs CRUD operations on GameObjects. Actions: create, modify, delete, duplicate, move_relative, look_at. NOT for searching — use the find_gameobjects tool to search by name/tag/layer/component/path. NOT for component management — use the manage_components tool (add/remove/set_property) or mcpforunity://scene/gameobject/{id}/components resource (read).
+Create, modify, delete, duplicate, move, or orient GameObjects. All actions mutate scene state. Important parameters include target, name, primitive_type, parent, position, rotation, scale, and relative transform values. The tool does not search for objects or add, remove, or configure components.
 
 ## Parameters
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `action` | `Literal['create', 'modify', 'delete', 'duplicate', 'move_relative', 'look_at'] \| None` | — | Action to perform on GameObject. |
-| `target` | `str \| None` | — | GameObject identifier by name, path, or instance ID for modify/delete/duplicate actions |
+| `target` | `str \| int \| dict[str, Any] \| None` | — | GameObject identifier by name, path, instance ID, or a reference object containing path, name, or instanceID |
 | `search_method` | `Literal['by_id', 'by_name', 'by_path', 'by_tag', 'by_layer', 'by_component'] \| None` | — | How to resolve 'target'. If omitted, Unity infers: instance ID -> by_id, path (contains '/') -> by_path, otherwise by_name. |
 | `name` | `str \| None` | — | GameObject name for 'create' (initial name) and 'modify' (rename) actions. |
 | `tag` | `str \| None` | — | Tag name - used for both 'create' (initial tag) and 'modify' (change tag) |
@@ -45,6 +45,8 @@ Performs CRUD operations on GameObjects. Actions: create, modify, delete, duplic
 | `world_space` | `bool \| str \| None` | — | If True (default), use world space directions; if False, use reference object's local directions |
 | `look_at_target` | `list[float] \| str \| None` | — | World position [x,y,z] or GameObject name/path/ID to look at (for look_at action). |
 | `look_at_up` | `list[float] \| str \| None` | — | Optional up vector [x,y,z] for look_at. Defaults to [0,1,0]. |
+| `change_guard` | `dict[str, Any] \| str \| None` | — | Reject and roll back mutations outside expected_objects/expected_properties or max_changed_objects. |
+| `dry_run` | `bool \| str \| None` | — | Preview the exact serialized changes, then roll them back without saving or changing dirty state. |
 
 ## Returns
 

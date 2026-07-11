@@ -34,6 +34,7 @@ def test_capabilities_manifest_is_compact_and_matches_registered_tools():
     result = run(get_capabilities(object()))
 
     assert result["schema_version"] == 1
+    assert result["workflow_resource"] == "mcpforunity://workflow"
     assert result["tools"] == {
         "measure_ui": {"version": 1},
         "inspect_serialized": {"version": 1},
@@ -42,7 +43,7 @@ def test_capabilities_manifest_is_compact_and_matches_registered_tools():
         "scoped_saves": {"version": 1},
         "lifecycle_tracing": {"version": 1},
     }
-    assert set(result) == {"schema_version", "tools"}
+    assert set(result) == {"schema_version", "workflow_resource", "tools"}
 
 
 def test_capabilities_omit_tools_that_are_not_registered(monkeypatch):

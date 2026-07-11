@@ -700,8 +700,7 @@ async def _lookup(
     description=(
         "Fetch official Unity documentation from docs.unity3d.com. "
         "Returns descriptions, parameter details, code examples, and caveats. "
-        "Use after unity_reflect confirms a type exists, to get usage patterns, "
-        "gotchas, and code examples before writing implementation code.\n\n"
+        "This tool is read-only but performs network requests and may use its local cache.\n\n"
         "Actions:\n"
         "- get_doc: Fetch ScriptReference docs for a class or member. Requires class_name. "
         "Optional member_name, version.\n"

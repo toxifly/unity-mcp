@@ -67,7 +67,7 @@ def _split_uri(uri: str) -> tuple[str, str]:
 
 @mcp_for_unity_tool(
     unity_target="manage_script",
-    description="Searches a file with a regex pattern and returns line numbers and excerpts.",
+    description="Search a file identified by uri with a regular-expression pattern. This tool is read-only and returns matching line numbers and excerpts; invalid regular expressions fail without reading matches.",
     annotations=ToolAnnotations(
         title="Find in File",
         readOnlyHint=True,

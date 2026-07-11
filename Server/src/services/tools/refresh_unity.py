@@ -256,7 +256,7 @@ async def verify_edit_by_sha(
 
 
 @mcp_for_unity_tool(
-    description="Request a Unity asset database refresh and optionally a script compilation. Can optionally wait for readiness.",
+    description="Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job.",
     annotations=ToolAnnotations(
         title="Refresh Unity",
         destructiveHint=True,

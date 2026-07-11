@@ -16,22 +16,7 @@ Manages Unity UI Toolkit elements (UXML documents, USS stylesheets, UIDocument c
 Visual actions: render_ui (captures UI panel to a PNG screenshot for self-evaluation).
 Structural actions: link_stylesheet (adds a Style src reference to a UXML file).
 
-UI Toolkit workflow:
-1. Use list to discover existing UI assets
-2. Create a UXML file (structure, like HTML)
-3. Create a USS file (styling, like CSS)
-4. Link stylesheet to UXML via link_stylesheet
-5. Attach UIDocument to a GameObject with the UXML source
-6. Use get_visual_tree to inspect the result
-7. Use modify_visual_element to change text, classes, or inline styles on live elements
-8. Use render_ui to capture a visual preview for self-evaluation
-   - In play mode: first call queues a WaitForEndOfFrame screen capture and returns pending=true;
-     call render_ui a second time to retrieve the saved PNG (hasContent will be true).
-   - In editor mode: assigns a RenderTexture to PanelSettings (best-effort; may stay blank).
-9. Use detach_ui_document to remove UIDocument from a GameObject
-10. Use delete to remove .uxml/.uss files
-
-Important: Always use <ui:Style> (with the ui: namespace prefix) in UXML, not bare <Style>. UI Builder will fail to open files that use <Style> without the prefix.
+In play mode, render_ui first queues a WaitForEndOfFrame capture and returns pending=true; a later call retrieves the PNG. Editor-mode rendering is best-effort and may be blank. UXML styles must use <ui:Style> with the ui namespace, not bare <Style>; UI Builder will fail to open files that use <Style> without the prefix.
 
 ## Parameters
 

@@ -14,7 +14,7 @@ from core.config import config
 @mcp_for_unity_tool(
     unity_target=None,
     group=None,
-    description="Set the active Unity instance for this client/session. Accepts Name@hash, hash prefix, or port number (stdio only).",
+    description="Set this client session's active Unity instance without changing Unity project state. instance accepts Name@hash, a unique hash prefix, or a port number in stdio mode; ambiguous identifiers are rejected.",
     annotations=ToolAnnotations(
         title="Set Active Instance",
     ),
