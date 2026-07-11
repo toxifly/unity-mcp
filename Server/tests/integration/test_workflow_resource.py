@@ -38,6 +38,14 @@ def test_workflow_returns_the_five_stable_sections():
         for section in result["sections"].values()
     )
 
+    compilation = "\n".join(
+        result["sections"]["script_compilation"]["instructions"]
+    )
+    assert "refresh_unity(wait_for_ready=true)" in compilation
+    assert "resume the same refresh with its job_id" in compilation
+    assert "get_test_job with wait_timeout" in compilation
+    assert "Poll mcpforunity://editor/state" not in compilation
+
 
 def test_server_instructions_only_point_to_on_demand_resources():
     from main import _build_instructions
