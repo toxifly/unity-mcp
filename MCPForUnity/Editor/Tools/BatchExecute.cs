@@ -105,9 +105,9 @@ namespace MCPForUnity.Editor.Tools
                     continue;
                 }
 
-                // Block disabled tools (mirrors TransportCommandDispatcher check)
+                // Block explicitly disabled tools (mirrors TransportCommandDispatcher check)
                 var toolMeta = MCPServiceLocator.ToolDiscovery.GetToolMetadata(toolName);
-                if (toolMeta != null && !MCPServiceLocator.ToolDiscovery.IsToolEnabled(toolName))
+                if (toolMeta != null && MCPServiceLocator.ToolDiscovery.IsToolExplicitlyDisabled(toolName))
                 {
                     invocationFailureCount++;
                     anyCommandFailed = true;

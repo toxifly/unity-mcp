@@ -50,10 +50,7 @@ def test_workflow_returns_the_five_stable_sections():
 def test_server_instructions_only_point_to_on_demand_resources():
     from main import _build_instructions
 
-    expected = (
-        "Unity Editor automation server. Before first use, read "
-        "mcpforunity://workflow and mcpforunity://capabilities."
-    )
+    expected = "Read mcpforunity://workflow."
     assert _build_instructions(project_scoped_tools=True) == expected
     assert _build_instructions(project_scoped_tools=False) == expected
-    assert len(expected) < 300
+    assert len(expected) < 80

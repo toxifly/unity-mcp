@@ -42,7 +42,11 @@ namespace MCPForUnity.Editor.Constants
         internal const string UseEmbeddedServer = "MCPForUnity.UseEmbeddedServer";
         internal const string LockCursorConfig = "MCPForUnity.LockCursorConfig";
         internal const string AutoRegisterEnabled = "MCPForUnity.AutoRegisterEnabled";
-        internal const string ToolEnabledPrefix = "MCPForUnity.ToolEnabled.";
+        // v2 namespace: defaults derive from tool groups (see McpToolGroups). The
+        // unversioned v1 keys treated every built-in tool as enabled; explicit v1
+        // disables are migrated once by ToolDiscoveryService, then v1 keys are deleted.
+        internal const string ToolEnabledPrefix = "MCPForUnity.ToolEnabled.v2.";
+        internal const string LegacyToolEnabledPrefix = "MCPForUnity.ToolEnabled.";
         internal const string ToolFoldoutStatePrefix = "MCPForUnity.ToolFoldout.";
         internal const string ResourceEnabledPrefix = "MCPForUnity.ResourceEnabled.";
         internal const string ResourceFoldoutStatePrefix = "MCPForUnity.ResourceFoldout.";

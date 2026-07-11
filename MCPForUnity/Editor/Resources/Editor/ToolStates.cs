@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Services;
 using Newtonsoft.Json.Linq;
@@ -44,6 +45,7 @@ namespace MCPForUnity.Editor.Resources.Editor
                         ["name"] = tool.Name,
                         ["group"] = tool.Group ?? "core",
                         ["enabled"] = discovery.IsToolEnabled(tool.Name),
+                        ["default_enabled"] = ToolDiscoveryService.ComputeDefaultEnabled(tool),
                         ["description"] = tool.Description,
                         ["auto_register"] = tool.AutoRegister,
                         ["is_built_in"] = tool.IsBuiltIn,
@@ -61,13 +63,17 @@ namespace MCPForUnity.Editor.Resources.Editor
                     {
                         ["name"] = g.Key,
                         ["enabled_count"] = g.Count(t => discovery.IsToolEnabled(t.Name)),
-                        ["total_count"] = g.Count()
+                        ["total_count"] = g.Count(),
+                        ["default_enabled"] = McpToolGroups.IsDefaultEnabled(g.Key)
                     });
 
                 var result = new JObject
                 {
                     ["tools"] = toolsArray,
-                    ["groups"] = new JArray(groups)
+                    ["groups"] = new JArray(groups),
+                    // Lets the Python server distinguish intentional v2 enabled
+                    // states from legacy always-on defaults.
+                    ["preferences_version"] = McpToolGroups.PreferencesVersion
                 };
 
                 return new SuccessResponse("Retrieved tool states.", result);

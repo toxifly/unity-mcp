@@ -1,3 +1,4 @@
+using MCPForUnity.Runtime.Helpers;
 using NUnit.Framework;
 using System.Reflection;
 using UnityEngine;
@@ -87,7 +88,7 @@ namespace MCPForUnityTests.Editor.Tools
             var pChildren = new JObject
             {
                 ["action"] = "get_hierarchy",
-                ["parent"] = _root.GetInstanceID(),
+                ["parent"] = _root.GetInstanceIDCompat(),
                 ["pageSize"] = 7,
             };
             var rawChildren = ManageScene.HandleCommand(pChildren);

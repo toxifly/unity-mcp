@@ -125,6 +125,61 @@ def get_group_tool_names() -> dict[str, list[str]]:
     return result
 
 
+def parse_session_group_overrides(rules: list | None) -> dict[str, bool]:
+    """Extract per-group enabled overrides from FastMCP session visibility rules.
+
+    Rules accumulate; the last rule whose tags include ``group:<name>`` wins.
+    """
+    overrides: dict[str, bool] = {}
+    for rule in rules or []:
+        tags = rule.get("tags") or []
+        enabled = rule.get("enabled", True)
+        for tag in tags:
+            if isinstance(tag, str) and tag.startswith("group:"):
+                overrides[tag[len("group:"):]] = enabled
+    return overrides
+
+
+def get_group_visibility_states(
+    session_overrides: dict[str, bool] | None = None,
+) -> list[dict[str, Any]]:
+    """Per-group visibility combining declared defaults, the last Unity sync
+    (server level), and per-session overrides.
+
+    Precedence mirrors FastMCP evaluation order: session rules override the
+    server-level Unity sync, which overrides the declared defaults.
+    """
+    try:
+        from transport.plugin_hub import PluginHub
+        unity_sync = PluginHub.get_last_unity_sync()
+    except Exception:
+        unity_sync = None
+    unity_state: dict[str, bool] = (unity_sync or {}).get("group_state") or {}
+
+    group_tools = get_group_tool_names()
+    session_overrides = session_overrides or {}
+    groups: list[dict[str, Any]] = []
+    for name in sorted(TOOL_GROUPS):
+        default_enabled = name in DEFAULT_ENABLED_GROUPS
+        if name in session_overrides:
+            enabled, source = session_overrides[name], "session"
+        elif name in unity_state:
+            enabled, source = unity_state[name], "unity"
+        else:
+            enabled, source = default_enabled, "default"
+        groups.append({
+            "name": name,
+            "description": TOOL_GROUPS[name],
+            "enabled": enabled,
+            "source": source,
+            "default_enabled": default_enabled,
+            "unity_persisted": unity_state.get(name),
+            "tools": group_tools.get(name, []),
+            "tool_count": len(group_tools.get(name, [])),
+        })
+    return groups
+
+
 def clear_tool_registry():
     """Clear the tool registry (useful for testing)"""
     _tool_registry.clear()

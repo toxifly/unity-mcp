@@ -289,7 +289,7 @@ namespace MCPForUnity.Editor.Windows.Components.Tools
             var tagsContainer = new VisualElement();
             tagsContainer.AddToClassList("tool-tags");
 
-            bool defaultEnabled = tool.AutoRegister || tool.IsBuiltIn;
+            bool defaultEnabled = ToolDiscoveryService.ComputeDefaultEnabled(tool);
             tagsContainer.Add(CreateTag(defaultEnabled ? "On by default" : "Off by default"));
 
             tagsContainer.Add(CreateTag(tool.StructuredOutput ? "Structured output" : "Free-form"));

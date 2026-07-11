@@ -351,9 +351,10 @@ namespace MCPForUnity.Editor.Services.Transport
                     return;
                 }
 
-                // Block execution of disabled tools
+                // Block execution of explicitly disabled tools. Default-off group
+                // tools stay executable so per-session activation works.
                 var toolMeta = MCPServiceLocator.ToolDiscovery.GetToolMetadata(command.type);
-                if (toolMeta != null && !MCPServiceLocator.ToolDiscovery.IsToolEnabled(command.type))
+                if (toolMeta != null && MCPServiceLocator.ToolDiscovery.IsToolExplicitlyDisabled(command.type))
                 {
                     pending.TrySetResult(SerializeError(
                         $"Tool '{command.type}' is disabled in the Unity Editor."));

@@ -567,7 +567,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             var payload = new JObject
             {
                 ["type"] = "register_tools",
-                ["tools"] = toolsArray
+                ["tools"] = toolsArray,
+                // Marks the enabled set as intentional (group-based v2 defaults);
+                // the server ignores group re-enables from unversioned senders.
+                ["preferences_version"] = McpToolGroups.PreferencesVersion
             };
 
             await SendJsonAsync(payload, token).ConfigureAwait(false);

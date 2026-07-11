@@ -287,10 +287,10 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[dict[str, Any]]:
 
 
 def _build_instructions(project_scoped_tools: bool) -> str:
-    return (
-        "Unity Editor automation server. Before first use, read "
-        "mcpforunity://workflow and mcpforunity://capabilities."
-    )
+    # Keep this a minimal pointer: clients expand instructions into every
+    # conversation, so the full operating guidance lives in the workflow
+    # resource instead of being repeated here.
+    return "Read mcpforunity://workflow."
 
 
 def _normalize_instance_token(instance_token: str | None) -> tuple[str | None, str | None]:
