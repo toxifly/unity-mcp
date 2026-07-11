@@ -20,6 +20,8 @@ namespace MCPForUnityTests.Editor.Services
         private Scene testScene;
         private const string ScenePath = "Assets/Temp/MutationTransactionTests.unity";
         private const string PrefabPath = "Assets/Temp/AtomicMutationTest.prefab";
+        private const string DryRunPrefabFolder = "Assets/Temp/DryRunPrefab/Nested";
+        private const string DryRunPrefabPath = DryRunPrefabFolder + "/Preview.prefab";
 
         [SetUp]
         public void SetUp()
@@ -61,6 +63,7 @@ namespace MCPForUnityTests.Editor.Services
             }
             AssetDatabase.DeleteAsset(ScenePath);
             AssetDatabase.DeleteAsset(PrefabPath);
+            AssetDatabase.DeleteAsset("Assets/Temp/DryRunPrefab");
         }
 
         [Test]
@@ -398,6 +401,26 @@ namespace MCPForUnityTests.Editor.Services
                 change["Property"].Value<string>() == "m_IsActive"));
             Assert.IsTrue(root.activeSelf);
             Assert.IsFalse(root.scene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_CreatePrefabDryRunRemovesNewParentFolders()
+        {
+            Assert.IsFalse(AssetDatabase.IsValidFolder(DryRunPrefabFolder));
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "create",
+                ["name"] = "PrefabPreview",
+                ["saveAsPrefab"] = true,
+                ["prefabPath"] = DryRunPrefabFolder + "/Preview",
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsFalse(AssetDatabase.IsValidFolder("Assets/Temp/DryRunPrefab"));
+            Assert.IsFalse(AssetDatabase.IsValidFolder(DryRunPrefabFolder));
+            Assert.IsNull(AssetDatabase.LoadAssetAtPath<GameObject>(DryRunPrefabPath));
         }
 
         [Test]

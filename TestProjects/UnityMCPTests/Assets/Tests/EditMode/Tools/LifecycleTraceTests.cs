@@ -9,6 +9,7 @@ using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using TestNamespace;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using static MCPForUnityTests.Editor.TestUtilities;
 
@@ -18,6 +19,7 @@ namespace MCPForUnityTests.Editor.Tools
     {
         private const string ReloadStateKey = "MCPForUnity.LifecycleTrace.ReloadState.v1";
         private GameObject _target;
+        private GameObject _unrelated;
         private string _sessionId;
 
         [TearDown]
@@ -26,6 +28,7 @@ namespace MCPForUnityTests.Editor.Tools
             if (!string.IsNullOrEmpty(_sessionId))
                 LifecycleTrace.HandleCommand(new JObject { ["action"] = "stop", ["sessionId"] = _sessionId });
             if (_target != null) UnityEngine.Object.DestroyImmediate(_target);
+            if (_unrelated != null) UnityEngine.Object.DestroyImmediate(_unrelated);
             SessionState.EraseString(ReloadStateKey);
         }
 
@@ -69,6 +72,30 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsTrue(stopped["data"].Value<bool>("truncated"), stopped.ToString());
             Assert.LessOrEqual(stopped["data"]["events"].Count(), 1);
             Assert.IsNull(_target.GetComponent<LifecycleTraceProbe>());
+        }
+
+        [Test]
+        public void StartAndStop_PreserveExistingPerObjectDirtyFlags()
+        {
+            _target = new GameObject("LifecycleTraceDirtyTarget");
+            var fixture = _target.AddComponent<SerializedInspectionFixture>();
+            _unrelated = new GameObject("LifecycleTraceUnrelatedDirtyObject");
+            ClearSceneDirtyFlag(_target.scene);
+            EditorUtility.SetDirty(fixture);
+            EditorUtility.SetDirty(_unrelated);
+            Assert.IsFalse(_target.scene.isDirty);
+            Assert.IsTrue(EditorUtility.IsDirty(fixture));
+            Assert.IsTrue(EditorUtility.IsDirty(_unrelated));
+
+            JObject started = Start(20, "Awake", "OnEnable", "OnDisable", "OnDestroy");
+            Assert.IsTrue(started.Value<bool>("success"), started.ToString());
+            _sessionId = started["data"].Value<string>("session_id");
+            Assert.IsTrue(EditorUtility.IsDirty(fixture));
+            Assert.IsTrue(EditorUtility.IsDirty(_unrelated));
+
+            Stop();
+            Assert.IsTrue(EditorUtility.IsDirty(fixture));
+            Assert.IsTrue(EditorUtility.IsDirty(_unrelated));
         }
 
         [Test]
@@ -238,6 +265,18 @@ namespace MCPForUnityTests.Editor.Tools
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert.IsNotNull(method, $"LifecycleTrace.{methodName} was not found.");
             method.Invoke(null, null);
+        }
+
+        private static void ClearSceneDirtyFlag(UnityEngine.SceneManagement.Scene scene)
+        {
+            MethodInfo method = typeof(EditorSceneManager).GetMethod(
+                "ClearSceneDirtiness",
+                BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(UnityEngine.SceneManagement.Scene) },
+                null);
+            Assert.IsNotNull(method, "EditorSceneManager.ClearSceneDirtiness was not found.");
+            method.Invoke(null, new object[] { scene });
         }
     }
 }
