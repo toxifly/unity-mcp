@@ -69,6 +69,10 @@ namespace MCPForUnityTests.Editor.Tools
         public void UnfilteredGameObjectTarget_InspectsGameObjectProperties()
         {
             string globalId = GlobalObjectId.GetGlobalObjectIdSlow(_owner).ToString();
+            // On 6000.5+ objects in untitled scenes get the null GlobalObjectId;
+            // fall back to name targeting so the inspection itself is still covered.
+            if (globalId.EndsWith("-0-0"))
+                globalId = _owner.name;
             JObject result = ToJObject(InspectSerialized.HandleCommand(new JObject
             {
                 ["targets"] = new JArray(globalId),

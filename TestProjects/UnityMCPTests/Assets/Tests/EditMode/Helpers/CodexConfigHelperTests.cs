@@ -61,6 +61,8 @@ namespace MCPForUnityTests.Editor.Helpers
         private bool _originalHttpTransport;
         private bool _hadDevForceRefresh;
         private bool _originalDevForceRefresh;
+        private bool _hadHttpScope;
+        private string _originalHttpScope;
         private IPlatformService _originalPlatformService;
 
         [OneTimeSetUp]
@@ -72,6 +74,8 @@ namespace MCPForUnityTests.Editor.Helpers
             _originalHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
             _hadDevForceRefresh = EditorPrefs.HasKey(EditorPrefKeys.DevModeForceServerRefresh);
             _originalDevForceRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+            _hadHttpScope = EditorPrefs.HasKey(EditorPrefKeys.HttpTransportScope);
+            _originalHttpScope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
             _originalPlatformService = MCPServiceLocator.Platform;
         }
 
@@ -85,6 +89,9 @@ namespace MCPForUnityTests.Editor.Helpers
             // Ensure deterministic uvx args ordering for these tests regardless of editor settings
             // (dev-mode inserts --no-cache/--refresh, which changes the first args).
             EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
+            // Pin the HTTP scope to local so a developer's "remote" scope (whose
+            // base URL may be empty) cannot leak into the generated endpoints.
+            EditorPrefs.SetString(EditorPrefKeys.HttpTransportScope, "local");
             // Refresh the cache so it picks up the test's pref values
             EditorConfigurationCache.Instance.Refresh();
         }
@@ -138,6 +145,15 @@ namespace MCPForUnityTests.Editor.Helpers
                 EditorPrefs.DeleteKey(EditorPrefKeys.DevModeForceServerRefresh);
             }
 
+            if (_hadHttpScope)
+            {
+                EditorPrefs.SetString(EditorPrefKeys.HttpTransportScope, _originalHttpScope);
+            }
+            else
+            {
+                EditorPrefs.DeleteKey(EditorPrefKeys.HttpTransportScope);
+            }
+            EditorConfigurationCache.Instance.Refresh();
         }
 
         [Test]

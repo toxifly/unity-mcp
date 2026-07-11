@@ -1,3 +1,4 @@
+using MCPForUnity.Runtime.Helpers;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -39,11 +40,7 @@ namespace MCPForUnityTests.Editor.Tools
         [TearDown]
         public void TearDown()
         {
-#if UNITY_2022_2_OR_NEWER
-            foreach (var go in UnityEngine.Object.FindObjectsByType<GameObject>(FindObjectsSortMode.None))
-#else
-            foreach (var go in UnityEngine.Object.FindObjectsOfType<GameObject>())
-#endif
+            foreach (var go in UnityFindObjectsCompat.FindAll<GameObject>())
             {
                 if (go.name.StartsWith("GfxTest_"))
                     UnityEngine.Object.DestroyImmediate(go);

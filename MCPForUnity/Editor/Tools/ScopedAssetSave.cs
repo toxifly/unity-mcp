@@ -149,7 +149,9 @@ namespace MCPForUnity.Editor.Tools
         private static object[] DirtyObjects(IEnumerable<string> paths)
         {
             var result = new List<object>();
-            foreach (string path in paths)
+            // Loaded scenes are handled below; LoadAllAssetsAtPath on a scene
+            // path raises internal ReadObjectThreaded errors on newer editors.
+            foreach (string path in paths.Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
             foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path).Where(item => item != null && EditorUtility.IsDirty(item)))
                 result.Add(new
                 {
@@ -199,7 +201,7 @@ namespace MCPForUnity.Editor.Tools
             var dirty = new HashSet<string>(StringComparer.Ordinal);
             foreach (Scene scene in LoadedScenes())
                 if (scene.isDirty && requested.Contains(NormalizePath(scene.path))) dirty.Add(NormalizePath(scene.path));
-            foreach (string path in requested)
+            foreach (string path in requested.Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
                 if (AssetDatabase.LoadAllAssetsAtPath(path).Any(item => item != null && EditorUtility.IsDirty(item)))
                     dirty.Add(path);
             return dirty.OrderBy(path => path).ToArray();

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Tools;
+using MCPForUnity.Runtime.Tools;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using TestNamespace;

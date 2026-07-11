@@ -246,6 +246,37 @@ namespace MCPForUnity.Runtime.Helpers
             return false;
         }
 
+        // ---------- Rigidbody damping ----------
+        // 6000.0+ : Rigidbody.linearDamping / angularDamping
+        // <6000.0 : Rigidbody.drag / angularDrag (CS0618 on 6000.5+)
+
+        public static float GetLinearDamping(this Rigidbody rigidbody)
+        {
+#if UNITY_6000_0_OR_NEWER
+            return rigidbody.linearDamping;
+#else
+            return rigidbody.drag;
+#endif
+        }
+
+        public static void SetLinearDamping(this Rigidbody rigidbody, float value)
+        {
+#if UNITY_6000_0_OR_NEWER
+            rigidbody.linearDamping = value;
+#else
+            rigidbody.drag = value;
+#endif
+        }
+
+        public static float GetAngularDamping(this Rigidbody rigidbody)
+        {
+#if UNITY_6000_0_OR_NEWER
+            return rigidbody.angularDamping;
+#else
+            return rigidbody.angularDrag;
+#endif
+        }
+
         private static SimulationMode ParseSimulationMode(string s)
         {
             if (string.IsNullOrEmpty(s)) return SimulationMode.Unknown;

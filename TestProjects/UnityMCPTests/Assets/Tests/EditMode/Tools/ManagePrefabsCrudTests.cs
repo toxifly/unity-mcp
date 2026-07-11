@@ -1,3 +1,4 @@
+using MCPForUnity.Runtime.Helpers;
 using System;
 using System.IO;
 using System.Linq;
@@ -933,7 +934,7 @@ namespace MCPForUnityTests.Editor.Tools
                 GameObject reloaded = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
                 var childRb = reloaded.transform.Find("Child1").GetComponent<Rigidbody>();
                 Assert.AreEqual(99f, childRb.mass, 0.01f);
-                Assert.AreEqual(2.5f, childRb.drag, 0.01f);
+                Assert.AreEqual(2.5f, childRb.GetLinearDamping(), 0.01f);
             }
             finally
             {
