@@ -25,13 +25,12 @@ from services.registry import (
     unity_target=None,
     group=None,
     description=(
-        "Manage which tool groups are visible in this session. "
-        "Actions: list_groups (show all groups and their status), "
-        "activate (enable a group), deactivate (disable a group), "
+        "Manage which tool groups are visible in this session. list_groups is read-only. "
+        "Session-mutating actions: activate (enable a group), deactivate (disable a group), "
         "sync (refresh visibility from Unity Editor's toggle states), "
         "reset (restore defaults). "
         "Activating a group makes its tools appear; deactivating hides them. "
-        "Use sync after toggling tools in the Unity Editor GUI."
+        "These actions do not modify Unity project content; sync imports the Editor's current toggle states."
     ),
     annotations=ToolAnnotations(
         title="Manage Tools",

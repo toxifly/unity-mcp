@@ -71,18 +71,10 @@ def _split_uri(uri: str) -> tuple[str, str]:
 @mcp_for_unity_tool(
     unity_target="manage_script",
     description=(
-        """Apply small text edits to a C# script identified by URI.
-    IMPORTANT: This tool replaces EXACT character positions. Always verify content at target lines/columns BEFORE editing!
-    RECOMMENDED WORKFLOW:
-        1. First call resources/read with start_line/line_count to verify exact content
-        2. Count columns carefully (or use find_in_file to locate patterns)
-        3. Apply your edit with precise coordinates
-        4. Consider script_apply_edits with anchors for safer pattern-based replacements
-    Notes:
-        - For method/class operations, use script_apply_edits (safer, structured edits)
-        - For pattern-based replacements, consider anchor operations in script_apply_edits
-        - Lines, columns are 1-indexed
-        - Tabs count as 1 column"""
+        "Apply mutating, position-based text edits to a C# script identified by URI. "
+        "Each edit requires startLine, startCol, endLine, endCol, and newText. Lines and "
+        "columns are 1-indexed, and tabs count as one column. precondition_sha256 can reject "
+        "an edit when the file changed concurrently; positions must match the current content."
     ),
     annotations=ToolAnnotations(
         title="Apply Text Edits",

@@ -1,7 +1,7 @@
 ---
 title: refresh_unity
 sidebar_label: refresh_unity
-description: "Request a Unity asset database refresh and optionally a script compilation."
+description: "Refresh Unity's asset database and optionally request script compilation."
 ---
 
 # `refresh_unity`
@@ -12,7 +12,7 @@ description: "Request a Unity asset database refresh and optionally a script com
 
 ## Description
 
-Request a Unity asset database refresh and optionally a script compilation. Can optionally wait for readiness.
+Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job.
 
 ## Parameters
 
@@ -22,6 +22,7 @@ Request a Unity asset database refresh and optionally a script compilation. Can 
 | `scope` | `Literal['assets', 'scripts', 'all']` | — | Refresh scope |
 | `compile` | `Literal['none', 'request']` | — | Whether to request compilation |
 | `wait_for_ready` | `bool` | — | If true, wait until editor_state.advice.ready_for_tools is true |
+| `job_id` | `str \| None` | — | Resume a previously timed-out refresh job without requesting another refresh |
 
 ## Returns
 

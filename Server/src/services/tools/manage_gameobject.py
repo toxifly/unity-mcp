@@ -40,11 +40,10 @@ def _normalize_component_properties(value: Any) -> tuple[dict[str, dict[str, Any
 
 @mcp_for_unity_tool(
     description=(
-        "Performs CRUD operations on GameObjects. "
-        "Actions: create, modify, delete, duplicate, move_relative, look_at. "
-        "NOT for searching — use the find_gameobjects tool to search by name/tag/layer/component/path. "
-        "NOT for component management — use the manage_components tool (add/remove/set_property) "
-        "or mcpforunity://scene/gameobject/{id}/components resource (read)."
+        "Create, modify, delete, duplicate, move, or orient GameObjects. All actions mutate "
+        "scene state. Important parameters include target, name, primitive_type, parent, "
+        "position, rotation, scale, and relative transform values. The tool does not search "
+        "for objects or add, remove, or configure components."
     ),
     annotations=ToolAnnotations(
         title="Manage GameObject",

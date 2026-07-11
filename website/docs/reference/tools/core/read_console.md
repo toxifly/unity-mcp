@@ -24,7 +24,7 @@ Gets messages from or clears the Unity Editor console. Defaults to 10 most recen
 | `filter_text` | `str \| None` | — | Text filter for messages |
 | `page_size` | `int \| str \| None` | — | Page size for paginated console reads. Defaults to 50 when omitted. |
 | `cursor` | `int \| str \| None` | — | Opaque cursor for paging (0-based offset). Defaults to 0. |
-| `format` | `Literal['plain', 'detailed', 'json'] \| None` | — | Output format |
+| `format` | `Literal['plain', 'detailed', 'json'] \| None` | — | Output format; defaults to structured JSON records |
 | `include_stacktrace` | `bool \| str \| None` | — | Include stack traces in output (accepts true/false or 'true'/'false') |
 
 ## Returns

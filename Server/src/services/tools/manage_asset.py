@@ -18,9 +18,10 @@ from services.tools.preflight import preflight
 
 @mcp_for_unity_tool(
     description=(
-        "Performs asset operations (import, create, modify, delete, etc.) in Unity.\n\n"
-        "Tip (payload safety): for `action=\"search\"`, prefer paging (`page_size`, `page_number`) and keep "
-        "`generate_preview=false` (previews can add large base64 blobs)."
+        "Manage Unity assets. Read-only actions: search, get_info, and get_components. "
+        "Mutating actions: import, create, modify, delete, duplicate, move, rename, and "
+        "create_folder. Search uses page_size and page_number; generate_preview includes "
+        "thumbnail data when enabled."
     ),
     annotations=ToolAnnotations(
         title="Manage Asset",
@@ -38,8 +39,7 @@ async def manage_asset(
     destination: Annotated[str,
                            "Target path for 'duplicate'/'move'."] | None = None,
     generate_preview: Annotated[bool,
-                                "Generate a preview/thumbnail for the asset when supported. "
-                                "Warning: previews may include large base64 payloads; keep false unless needed."] = False,
+                                "When true, include a base64 preview/thumbnail when supported."] = False,
     search_pattern: Annotated[str,
                               "Search pattern (e.g., '*.prefab' or AssetDatabase filters like 't:MonoScript'). "
                               "Recommended: put queries like 't:MonoScript' here and set path='Assets'."] | None = None,

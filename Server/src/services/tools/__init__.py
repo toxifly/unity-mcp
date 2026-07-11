@@ -74,30 +74,19 @@ def register_all_tools(mcp: FastMCP, *, project_scoped_tools: bool = True):
 
     logger.info(f"Registered {len(tools)} MCP tools")
 
-    # In HTTP mode, disable non-default groups at the server level so new
-    # sessions start lean.  Unity will re-enable groups via register_tools
-    # (PluginHub._sync_server_tool_visibility) once it connects.
-    # In stdio mode we skip this: the legacy TCP bridge has no register_tools
-    # message, so disabled groups would stay invisible for the entire session.
+    # Keep initial discovery lean for every transport. Unity state sync and the
+    # manage_tools meta-tool can explicitly enable optional groups later.
     # Tools with group=None (no tag) are unaffected and always visible.
-    from core.config import config as server_config
-
-    if (server_config.transport_mode or "stdio").lower() == "http":
-        groups_to_disable = set(TOOL_GROUPS.keys()) - DEFAULT_ENABLED_GROUPS
-        for group_name in sorted(groups_to_disable):
-            tag = f"group:{group_name}"
-            mcp.disable(tags={tag}, components={"tool"})
-            logger.debug(f"Disabled tool group at startup: {group_name}")
-        logger.info(
-            f"Default tool groups: {', '.join(sorted(DEFAULT_ENABLED_GROUPS))}. "
-            f"Disabled: {', '.join(sorted(groups_to_disable))}. "
-            "Use manage_tools to activate more."
-        )
-    else:
-        logger.info(
-            "Stdio transport: all tool groups enabled at startup. "
-            "Will sync with Unity's tool states after connecting."
-        )
+    groups_to_disable = set(TOOL_GROUPS) - DEFAULT_ENABLED_GROUPS
+    for group_name in sorted(groups_to_disable):
+        tag = f"group:{group_name}"
+        mcp.disable(tags={tag}, components={"tool"})
+        logger.debug(f"Disabled tool group at startup: {group_name}")
+    logger.info(
+        f"Default tool groups: {', '.join(sorted(DEFAULT_ENABLED_GROUPS))}. "
+        f"Disabled: {', '.join(sorted(groups_to_disable))}. "
+        "Use manage_tools to activate more."
+    )
 
 
 async def sync_tool_visibility_from_unity(

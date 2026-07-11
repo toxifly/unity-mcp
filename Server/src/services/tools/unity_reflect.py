@@ -27,9 +27,7 @@ async def _send_reflect_command(
 @mcp_for_unity_tool(
     group="docs",
     description=(
-        "Inspect Unity's live C# API via reflection. Use this to verify that classes, "
-        "methods, and properties exist before writing C# code — training data may be "
-        "wrong or outdated.\n\n"
+        "Inspect Unity's live C# API via reflection without mutating editor or project state.\n\n"
         "Actions:\n"
         "- get_type: Member summary (names only) for a class. Requires class_name.\n"
         "- get_member: Full signature detail for one member. Requires class_name + member_name.\n"

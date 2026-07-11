@@ -23,14 +23,11 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 @mcp_for_unity_tool(
     group="core",
     description=(
-        "Measure uGUI RectTransform bounds without a screenshot. Returns each target's "
+        "Read uGUI RectTransform bounds without mutating scene state. Returns each target's "
         "rectangle in an explicit canvas, local, world, or screen-pixel coordinate space. "
-        "Use for numeric layout verification — clearances, "
-        "overlaps, clipping, off-screen checks — during iteration; it is cheap and "
-        "deterministic where a Game View capture is large and returns white when unfocused. "
         "Targets are GameObject names, or hierarchy paths ('Canvas/Panel/Button') for "
         "disambiguation. Set include_children to also measure each target's immediate "
-        "RectTransform children (e.g. a grid container's tiles). Inactive objects are "
+        "RectTransform children. Inactive objects are "
         "included by default. Geometry assertions can be evaluated in the same call."
     )
 )

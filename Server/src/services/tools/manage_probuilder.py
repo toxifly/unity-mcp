@@ -101,9 +101,10 @@ ALL_ACTIONS = (
         "- freeze_transform: Bake position/rotation/scale into vertex data, reset transform.\n"
         "- validate_mesh: Check mesh health (degenerate triangles, unused vertices). Read-only.\n"
         "- repair_mesh: Auto-fix degenerate triangles and unused vertices.\n\n"
-        "WORKFLOW TIP: Call get_mesh_info with include='faces' to see face normals and directions "
-        "before editing. Each face shows its direction ('top','bottom','front','back','left','right') "
-        "so you can pick the right indices for operations like extrude_faces or delete_faces."
+        "get_mesh_info is read-only; include='faces' returns face normals and semantic "
+        "directions ('top', 'bottom', 'front', 'back', 'left', 'right'). validate_mesh is "
+        "also read-only. All creation, conversion, repair, selection, UV, material, pivot, "
+        "smoothing, and mesh-editing actions mutate scene objects."
     ),
     annotations=ToolAnnotations(
         title="Manage ProBuilder",

@@ -15,9 +15,10 @@ from services.tools.preflight import preflight
 
 @mcp_for_unity_tool(
     description=(
-        "Manages components on GameObjects. "
-        "Actions: add, remove, set_property, get_properties, get_components. "
-        "For creating/deleting GameObjects themselves, use manage_gameobject instead."
+        "Manage components on existing GameObjects. Read-only actions: get_properties and "
+        "get_components. Mutating actions: add, remove, and set_property. Targets accept a "
+        "GameObject name, hierarchy path, instance ID, or structured target; property filters "
+        "can bound serialized-property reads."
     )
 )
 async def manage_components(

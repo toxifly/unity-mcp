@@ -12,7 +12,7 @@ description: "Fetch official Unity documentation from docs.unity3d.com."
 
 ## Description
 
-Fetch official Unity documentation from docs.unity3d.com. Returns descriptions, parameter details, code examples, and caveats. Use after unity_reflect confirms a type exists, to get usage patterns, gotchas, and code examples before writing implementation code.
+Fetch official Unity documentation from docs.unity3d.com. Returns descriptions, parameter details, code examples, and caveats. This tool is read-only but performs network requests and may use its local cache.
 
 Actions:
 - get_doc: Fetch ScriptReference docs for a class or member. Requires class_name. Optional member_name, version.

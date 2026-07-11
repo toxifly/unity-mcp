@@ -8,5 +8,5 @@ description: "MCP for Unity tools in the testing group."
 
 Test runner & async test jobs
 
-- **[`get_test_job`](./get_test_job.md)** — Polls an async Unity test job by job_id.
-- **[`run_tests`](./run_tests.md)** — Starts a Unity test run asynchronously and returns a job_id immediately.
+- **[`get_test_job`](./get_test_job.md)** — Read the status or results of an asynchronous Unity test job by job_id.
+- **[`run_tests`](./run_tests.md)** — Start an asynchronous Unity Test Framework run and return a job_id immediately.

@@ -65,7 +65,7 @@ MESH UTILITIES:
 - validate_mesh: Check mesh health (degenerate triangles, unused vertices). Read-only.
 - repair_mesh: Auto-fix degenerate triangles and unused vertices.
 
-WORKFLOW TIP: Call get_mesh_info with include='faces' to see face normals and directions before editing. Each face shows its direction ('top','bottom','front','back','left','right') so you can pick the right indices for operations like extrude_faces or delete_faces.
+get_mesh_info is read-only; include='faces' returns face normals and semantic directions ('top', 'bottom', 'front', 'back', 'left', 'right'). validate_mesh is also read-only. All creation, conversion, repair, selection, UV, material, pivot, smoothing, and mesh-editing actions mutate scene objects.
 
 ## Parameters
 

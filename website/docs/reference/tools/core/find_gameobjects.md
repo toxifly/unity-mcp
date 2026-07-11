@@ -12,7 +12,7 @@ description: "Search for GameObjects in the scene by name, tag, layer, component
 
 ## Description
 
-Search for GameObjects in the scene by name, tag, layer, component type, or path. Returns instance IDs only (paginated). Then use mcpforunity://scene/gameobject/{id} resource for full data, or mcpforunity://scene/gameobject/{id}/components for component details. For CRUD operations (create/modify/delete), use manage_gameobject instead.
+Search for GameObjects in the scene by name, tag, layer, component type, or path. This tool is read-only and returns paginated instance IDs rather than serialized object or component data. Important parameters: search_method, search_term, include_inactive, page_size, and cursor.
 
 ## Parameters
 

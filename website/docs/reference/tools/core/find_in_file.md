@@ -1,7 +1,7 @@
 ---
 title: find_in_file
 sidebar_label: find_in_file
-description: "Searches a file with a regex pattern and returns line numbers and excerpts."
+description: "Search a file identified by uri with a regular-expression pattern."
 ---
 
 # `find_in_file`
@@ -12,7 +12,7 @@ description: "Searches a file with a regex pattern and returns line numbers and 
 
 ## Description
 
-Searches a file with a regex pattern and returns line numbers and excerpts.
+Search a file identified by uri with a regular-expression pattern. This tool is read-only and returns matching line numbers and excerpts; invalid regular expressions fail without reading matches.
 
 ## Parameters
 

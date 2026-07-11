@@ -60,5 +60,6 @@ async def get_capabilities(ctx: Context) -> dict[str, Any]:
     }
     return {
         "schema_version": 1,
+        "workflow_resource": "mcpforunity://workflow",
         "tools": capabilities,
     }

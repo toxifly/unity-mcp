@@ -1,24 +1,26 @@
 ---
-title: execute_menu_item
-sidebar_label: execute_menu_item
-description: "Execute the Unity menu item identified by menu_path."
+title: preview_asset_changes
+sidebar_label: preview_asset_changes
+description: "Preview dirty objects for declared asset paths or one loaded scene without saving."
 ---
 
-# `execute_menu_item`
+# `preview_asset_changes`
 
 > **Auto-generated** from the Python tool registry. Do not hand-edit outside `<!-- examples:start --><!-- examples:end -->` blocks — the generator (`tools/generate_docs_reference.py`) will overwrite them.
 
-**Group:** `core` &nbsp;·&nbsp; **Module:** `services.tools.execute_menu_item`
+**Group:** `core` &nbsp;·&nbsp; **Module:** `services.tools.scoped_asset_save`
 
 ## Description
 
-Execute the Unity menu item identified by menu_path. This mutates editor or project state when the selected menu command does; the tool cannot predict or roll back third-party menu behavior.
+Preview dirty objects for declared asset paths or one loaded scene without saving. Returns the same bounded scoped-save report shape with assets_saved empty.
 
 ## Parameters
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `menu_path` | `str \| None` | — | Menu path for 'execute' or 'exists' (e.g., 'File/Save Project') |
+| `asset_paths` | `list[str] \| str \| None` | — |  |
+| `scene_path` | `str \| None` | — |  |
+| `scene_name` | `str \| None` | — |  |
 
 ## Returns
 

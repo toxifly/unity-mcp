@@ -20,6 +20,15 @@ List all cameras in the scene (Unity Camera + CinemachineCamera) with status. In
 URI: mcpforunity://scene/cameras
 
 
+## `capabilities`
+
+**URI:** `mcpforunity://capabilities`
+
+Compact versioned manifest of available Unity MCP capabilities. Read this resource before relying on optional or versioned workflows.
+
+URI: mcpforunity://capabilities
+
+
 ## `custom_tools`
 
 **URI:** `mcpforunity://custom-tools`
@@ -125,6 +134,8 @@ URI: mcpforunity://scene/gameobject/{instance_id}/components
 - `page_size` (`int`, optional) — 
 - `cursor` (`int`, optional) — 
 - `include_properties` (`bool`, optional) — 
+- `property_whitelist` (`list[str] | None`, optional) — 
+- `property_blacklist` (`list[str] | None`, optional) — 
 
 ## `get_tests`
 
@@ -256,5 +267,14 @@ URI: mcpforunity://instances
 **URI:** `mcpforunity://scene/volumes`
 
 Lists all Volume components in the active scene with their profiles, effects, and settings.
+
+
+## `workflow`
+
+**URI:** `mcpforunity://workflow`
+
+Read-only operating guide for Unity MCP instance routing, safe mutation, script compilation, payload sizing, and tool groups. Read before first use.
+
+URI: mcpforunity://workflow
 
 

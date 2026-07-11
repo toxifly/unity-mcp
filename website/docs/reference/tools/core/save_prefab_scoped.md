@@ -1,24 +1,24 @@
 ---
-title: execute_menu_item
-sidebar_label: execute_menu_item
-description: "Execute the Unity menu item identified by menu_path."
+title: save_prefab_scoped
+sidebar_label: save_prefab_scoped
+description: "Save exactly one prefab asset with transaction-backed save-time change detection and rollback."
 ---
 
-# `execute_menu_item`
+# `save_prefab_scoped`
 
 > **Auto-generated** from the Python tool registry. Do not hand-edit outside `<!-- examples:start --><!-- examples:end -->` blocks — the generator (`tools/generate_docs_reference.py`) will overwrite them.
 
-**Group:** `core` &nbsp;·&nbsp; **Module:** `services.tools.execute_menu_item`
+**Group:** `core` &nbsp;·&nbsp; **Module:** `services.tools.scoped_asset_save`
 
 ## Description
 
-Execute the Unity menu item identified by menu_path. This mutates editor or project state when the selected menu command does; the tool cannot predict or roll back third-party menu behavior.
+Save exactly one prefab asset with transaction-backed save-time change detection and rollback.
 
 ## Parameters
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
-| `menu_path` | `str \| None` | — | Menu path for 'execute' or 'exists' (e.g., 'File/Save Project') |
+| `prefab_path` | `str` | yes |  |
 
 ## Returns
 
