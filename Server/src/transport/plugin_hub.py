@@ -112,6 +112,9 @@ class PluginHub(WebSocketEndpoint):
     # Index into mcp._transforms where Unity's server-level overrides start.
     # Transforms before this index are startup defaults; at and after are Unity syncs.
     _unity_transform_start: int | None = None
+    # Result of the most recent Unity visibility sync, for state reporting:
+    # {"group_state": {group: bool}, "trusted": bool, "skipped_groups": [...]}
+    _last_unity_sync: dict | None = None
     _connections: dict[str, WebSocket] = {}
     # command_id -> {"future": Future, "session_id": str}
     _pending: dict[str, dict[str, Any]] = {}
@@ -506,7 +509,10 @@ class PluginHub(WebSocketEndpoint):
 
         # Sync server-level FastMCP visibility so new MCP client sessions
         # (e.g. new Claude Code conversations) see the correct tool set.
-        self._sync_server_tool_visibility(payload.tools)
+        # Only v2+ senders report intentional group-based enabled states;
+        # older plugins reported every built-in tool as enabled.
+        trusted = (payload.preferences_version or 0) >= 2
+        self._sync_server_tool_visibility(payload.tools, trusted=trusted)
 
         # Notify any already-connected MCP clients (e.g. CC over stdio) that
         # the tool list has changed so they re-fetch.
@@ -530,7 +536,9 @@ class PluginHub(WebSocketEndpoint):
             )
 
     @classmethod
-    def _sync_server_tool_visibility(cls, registered_tools: list) -> None:
+    def _sync_server_tool_visibility(
+        cls, registered_tools: list, *, trusted: bool = False,
+    ) -> dict | None:
         """Sync FastMCP server-level tool group visibility to match Unity's state.
 
         When Unity sends ``register_tools``, some groups may have been toggled
@@ -544,13 +552,26 @@ class PluginHub(WebSocketEndpoint):
         transforms for groups that Unity has enabled, effectively overriding
         the startup defaults.  FastMCP processes transforms in order so later
         ``enable`` calls override earlier ``disable`` calls.
+
+        ``trusted`` marks the enabled set as intentional (Unity preferences
+        v2+, where defaults derive from tool groups).  Untrusted data comes
+        from older Unity packages whose defaults treated every built-in tool
+        as enabled — it may *disable* groups but never enable a non-default
+        group, so legacy state cannot silently re-expose optional tools.
+
+        Returns a summary dict (enabled/disabled/skipped group lists) or None
+        when no MCP server is configured / the sync failed.
         """
         mcp = cls._mcp
         if mcp is None:
-            return
+            return None
 
         try:
-            from services.registry import get_group_tool_names, TOOL_GROUPS
+            from services.registry import (
+                DEFAULT_ENABLED_GROUPS,
+                get_group_tool_names,
+                TOOL_GROUPS,
+            )
 
             registered_names: set[str] = set()
             for tool in registered_tools:
@@ -570,22 +591,45 @@ class PluginHub(WebSocketEndpoint):
 
             enabled_groups: list[str] = []
             disabled_groups: list[str] = []
+            skipped_groups: list[str] = []
+            group_state: dict[str, bool] = {}
 
             for group_name in sorted(TOOL_GROUPS.keys()):
                 tool_names = group_tools.get(group_name, [])
                 has_any_registered = any(n in registered_names for n in tool_names)
+                tag = f"group:{group_name}"
 
-                if has_any_registered:
+                if has_any_registered and not trusted and group_name not in DEFAULT_ENABLED_GROUPS:
+                    # Legacy Unity data claims this optional group is enabled,
+                    # but under v1 semantics that was the blanket default, not
+                    # a user choice. Keep the startup default (disabled).
+                    mcp.disable(tags={tag}, components={"tool"})
+                    skipped_groups.append(group_name)
+                    group_state[group_name] = False
+                elif has_any_registered:
                     # Override the startup disable with an enable.
-                    tag = f"group:{group_name}"
                     mcp.enable(tags={tag}, components={"tool"})
                     enabled_groups.append(group_name)
+                    group_state[group_name] = True
                 else:
                     # Group not present in Unity's registered tools — disable it.
-                    tag = f"group:{group_name}"
                     mcp.disable(tags={tag}, components={"tool"})
                     disabled_groups.append(group_name)
+                    group_state[group_name] = False
 
+            cls._last_unity_sync = {
+                "group_state": group_state,
+                "trusted": trusted,
+                "skipped_groups": skipped_groups,
+            }
+
+            if skipped_groups:
+                logger.info(
+                    "Ignoring legacy enabled state for optional groups [%s] — "
+                    "update the MCPForUnity package to sync Editor toggles, or "
+                    "use manage_tools to activate groups per session.",
+                    ", ".join(skipped_groups),
+                )
             if enabled_groups or disabled_groups:
                 logger.info(
                     "Server-level tool visibility synced from Unity: "
@@ -595,11 +639,23 @@ class PluginHub(WebSocketEndpoint):
                     len(mcp._transforms),
                     cls._unity_transform_start or 0,
                 )
+
+            return {
+                "enabled_groups": enabled_groups,
+                "disabled_groups": sorted(disabled_groups + skipped_groups),
+                "skipped_groups": skipped_groups,
+            }
         except Exception:
             logger.debug(
                 "Failed to sync server-level tool visibility",
                 exc_info=True,
             )
+            return None
+
+    @classmethod
+    def get_last_unity_sync(cls) -> dict | None:
+        """Most recent Unity visibility sync summary, for state reporting."""
+        return cls._last_unity_sync
 
     @classmethod
     async def _notify_mcp_tool_list_changed(cls) -> None:

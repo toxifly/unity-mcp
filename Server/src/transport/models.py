@@ -42,6 +42,10 @@ class RegisterMessage(BaseModel):
 class RegisterToolsMessage(BaseModel):
     type: str = "register_tools"
     tools: list[ToolDefinitionModel]
+    # Unity tool-preference semantics version. None/absent = legacy plugin
+    # whose "enabled" states defaulted to on for every built-in tool; >= 2
+    # means enabled states are intentional (group-based defaults).
+    preferences_version: int | None = None
 
 
 class PongMessage(BaseModel):

@@ -135,16 +135,20 @@ async def sync_tool_visibility_from_unity(
 
         # Extract tool list from response
         tools = None
+        prefs_version = None
         if isinstance(response, dict):
             # SuccessResponse wraps data in "data" key
             data = response.get("data")
             if isinstance(data, dict):
                 tools = data.get("tools")
+                prefs_version = data.get("preferences_version")
             elif isinstance(data, list):
                 tools = data
             # Fallback: maybe tools directly in response
             if tools is None:
                 tools = response.get("tools")
+            if prefs_version is None:
+                prefs_version = response.get("preferences_version")
 
         if not tools or not isinstance(tools, list):
             logger.debug(
@@ -157,12 +161,20 @@ async def sync_tool_visibility_from_unity(
         # the list as "registered" (i.e. enabled) tools.
         enabled_tools = [t for t in tools if t.get("enabled", True)]
 
+        # Only preferences v2+ report intentional group-based enabled states.
+        # Older Unity packages defaulted every built-in tool to enabled, so
+        # their state must not re-enable optional groups.
+        trusted = isinstance(prefs_version, int) and prefs_version >= 2
+
         logger.info(
-            "Syncing tool visibility from Unity: %d/%d tools enabled",
-            len(enabled_tools), len(tools),
+            "Syncing tool visibility from Unity: %d/%d tools enabled "
+            "(preferences_version=%s)",
+            len(enabled_tools), len(tools), prefs_version,
         )
 
-        PluginHub._sync_server_tool_visibility(enabled_tools)
+        visibility = PluginHub._sync_server_tool_visibility(
+            enabled_tools, trusted=trusted,
+        )
 
         # Register custom (non-built-in) tools via CustomToolService.
         # The extended get_tool_states response includes is_built_in,
@@ -233,23 +245,30 @@ async def sync_tool_visibility_from_unity(
         if notify:
             await PluginHub._notify_mcp_tool_list_changed()
 
-        # Build summary
-        from services.registry import get_group_tool_names
-        group_tools = get_group_tool_names()
-        enabled_names = {t.get("name") for t in enabled_tools if t.get("name")}
-        enabled_groups = []
-        disabled_groups = []
-        for group_name in sorted(TOOL_GROUPS.keys()):
-            tool_names = group_tools.get(group_name, [])
-            if any(n in enabled_names for n in tool_names):
-                enabled_groups.append(group_name)
-            else:
-                disabled_groups.append(group_name)
+        # Report the state that was actually applied server-side, not Unity's
+        # raw claims — under legacy (untrusted) data these differ.
+        if visibility is None:
+            from services.registry import get_group_tool_names
+            group_tools = get_group_tool_names()
+            enabled_names = {t.get("name") for t in enabled_tools if t.get("name")}
+            visibility = {
+                "enabled_groups": [],
+                "disabled_groups": [],
+                "skipped_groups": [],
+            }
+            for group_name in sorted(TOOL_GROUPS.keys()):
+                tool_names = group_tools.get(group_name, [])
+                if any(n in enabled_names for n in tool_names):
+                    visibility["enabled_groups"].append(group_name)
+                else:
+                    visibility["disabled_groups"].append(group_name)
 
         return {
             "synced": True,
-            "enabled_groups": enabled_groups,
-            "disabled_groups": disabled_groups,
+            "enabled_groups": visibility["enabled_groups"],
+            "disabled_groups": visibility["disabled_groups"],
+            "skipped_legacy_groups": visibility.get("skipped_groups", []),
+            "preferences_version": prefs_version,
             "enabled_tool_count": len(enabled_tools),
             "total_tool_count": len(tools),
             "custom_tool_count": custom_tool_count,

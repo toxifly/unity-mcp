@@ -60,6 +60,13 @@ namespace MCPForUnity.Editor.Services
         bool IsToolEnabled(string toolName);
 
         /// <summary>
+        /// Checks whether a tool was explicitly disabled (persisted user choice).
+        /// Tools that are merely default-off by group stay executable so that
+        /// per-session activation via manage_tools works.
+        /// </summary>
+        bool IsToolExplicitlyDisabled(string toolName);
+
+        /// <summary>
         /// Updates the enabled state for a tool
         /// </summary>
         void SetToolEnabled(string toolName, bool enabled);

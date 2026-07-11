@@ -111,7 +111,38 @@ namespace MCPForUnity.Editor.Services
             }
 
             var metadata = GetToolMetadata(toolName);
-            return metadata?.AutoRegister ?? false;
+            return ComputeDefaultEnabled(metadata);
+        }
+
+        /// <summary>
+        /// Declared default enabled state for a tool: built-in tools follow their
+        /// group's default (see <see cref="McpToolGroups"/>); custom project tools
+        /// keep their attribute-driven AutoRegister behaviour.
+        /// </summary>
+        public static bool ComputeDefaultEnabled(ToolMetadata metadata)
+        {
+            if (metadata == null)
+            {
+                return false;
+            }
+
+            if (!metadata.IsBuiltIn)
+            {
+                return metadata.AutoRegister;
+            }
+
+            return McpToolGroups.IsDefaultEnabled(metadata.Group ?? "core");
+        }
+
+        public bool IsToolExplicitlyDisabled(string toolName)
+        {
+            if (string.IsNullOrEmpty(toolName))
+            {
+                return false;
+            }
+
+            string key = GetToolPreferenceKey(toolName);
+            return EditorPrefs.HasKey(key) && !EditorPrefs.GetBool(key, true);
         }
 
         public void SetToolEnabled(string toolName, bool enabled)
@@ -245,11 +276,29 @@ namespace MCPForUnity.Editor.Services
                 return;
             }
 
+            // v2 semantics: a preference key exists only for explicit choices
+            // (user toggles or migrated v1 disables). Absent key = follow the
+            // group-based default dynamically, and the tool stays executable so
+            // per-session activation via manage_tools works.
             string key = GetToolPreferenceKey(metadata.Name);
-            if (!EditorPrefs.HasKey(key))
+            if (EditorPrefs.HasKey(key))
             {
-                bool defaultValue = metadata.AutoRegister || metadata.IsBuiltIn;
-                EditorPrefs.SetBool(key, defaultValue);
+                return;
+            }
+
+            // One-time migration from the unversioned v1 namespace, whose defaults
+            // treated every built-in tool as enabled. A stored false was always an
+            // explicit user choice under v1 semantics, so carry it over; a stored
+            // true is indistinguishable from the old auto-initialised default and
+            // is dropped in favour of the group-based default.
+            string legacyKey = EditorPrefKeys.LegacyToolEnabledPrefix + metadata.Name;
+            if (EditorPrefs.HasKey(legacyKey))
+            {
+                if (!EditorPrefs.GetBool(legacyKey, true))
+                {
+                    EditorPrefs.SetBool(key, false);
+                }
+                EditorPrefs.DeleteKey(legacyKey);
             }
         }
 

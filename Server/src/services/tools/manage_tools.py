@@ -18,6 +18,8 @@ from services.registry import (
     TOOL_GROUPS,
     DEFAULT_ENABLED_GROUPS,
     get_group_tool_names,
+    get_group_visibility_states,
+    parse_session_group_overrides,
 )
 
 
@@ -121,40 +123,20 @@ async def manage_tools(
 
 async def _list_groups(ctx: Context) -> dict[str, Any]:
     """Build the list_groups response with group metadata and tool names."""
-    group_tools = get_group_tool_names()
-
     # Determine current session-enabled state for each group.
-    # Session rules accumulate; the last rule whose tags include "group:<name>" wins.
-    session_enabled: dict[str, bool] = {}
+    session_overrides: dict[str, bool] = {}
     try:
         rules = await ctx._get_visibility_rules()
-        for rule in rules:
-            tags = rule.get("tags") or []
-            enabled = rule.get("enabled", True)
-            for tag in tags:
-                if isinstance(tag, str) and tag.startswith("group:"):
-                    group_name = tag[len("group:"):]
-                    session_enabled[group_name] = enabled
+        session_overrides = parse_session_group_overrides(rules)
     except Exception:
         pass  # No active session or unsupported – fall back to defaults
 
-    groups = []
-    for name in sorted(TOOL_GROUPS.keys()):
-        if name in session_enabled:
-            currently_enabled = session_enabled[name]
-        else:
-            currently_enabled = name in DEFAULT_ENABLED_GROUPS
-        groups.append({
-            "name": name,
-            "description": TOOL_GROUPS[name],
-            "enabled": currently_enabled,
-            "default_enabled": name in DEFAULT_ENABLED_GROUPS,
-            "tools": group_tools.get(name, []),
-            "tool_count": len(group_tools.get(name, [])),
-        })
     return {
-        "groups": groups,
+        "groups": get_group_visibility_states(session_overrides),
         "note": (
+            "'enabled' is the effective state for this session; 'source' says "
+            "whether it comes from a session override, the Unity Editor's "
+            "persisted toggles, or the declared defaults. "
             "Use activate/deactivate to toggle groups for this session. "
             "Tools with group=None (server meta-tools) are always visible."
         ),
