@@ -13,8 +13,18 @@ from transport.legacy.unity_connection import async_send_command_with_retry
 from transport.unity_transport import send_with_unity_instance
 
 
-async def _send(ctx: Context, command: str, params: dict[str, Any]) -> dict[str, Any]:
-    gate = await preflight(ctx, wait_for_no_compile=True, refresh_if_dirty=True)
+async def _send(
+    ctx: Context,
+    command: str,
+    params: dict[str, Any],
+    *,
+    refresh_if_dirty: bool = True,
+) -> dict[str, Any]:
+    gate = await preflight(
+        ctx,
+        wait_for_no_compile=True,
+        refresh_if_dirty=refresh_if_dirty,
+    )
     if gate is not None:
         return gate.model_dump()
     instance = await get_unity_instance_from_context(ctx)
@@ -113,4 +123,9 @@ async def preview_asset_changes(
         params["scenePath"] = scene_path
     if scene_name:
         params["sceneName"] = scene_name
-    return await _send(ctx, "preview_asset_changes", params)
+    return await _send(
+        ctx,
+        "preview_asset_changes",
+        params,
+        refresh_if_dirty=False,
+    )

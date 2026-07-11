@@ -311,7 +311,7 @@ namespace MCPForUnity.Editor.Tools
 
         private static void Record(TraceSession session, GameObject target, string eventName, IEnumerable<PropertyChange> changes)
         {
-            if (session == null || !session.EventKinds.Contains(eventName) || session.Truncated) return;
+            if (session == null || session.Status != "running" || !session.EventKinds.Contains(eventName) || session.Truncated) return;
             if (session.Events.Count >= session.MaxEvents)
             {
                 session.Truncated = true;
