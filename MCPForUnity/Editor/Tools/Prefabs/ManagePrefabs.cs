@@ -204,6 +204,9 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                             return new ErrorResponse("SAVE_FAILED", new { message = "Unity created the prefab but failed to instantiate its connected scene replacement.", committed = false, rolled_back = true });
                         }
                         Undo.RegisterCreatedObjectUndo(linkedInstance, options.Name);
+                        // 6000.5+ names prefab roots after the asset file; keep the
+                        // scene object's original name so the replacement is a true swap.
+                        linkedInstance.name = source.name;
                         linkedInstance.transform.SetParent(transformState.Parent, true);
                         linkedInstance.transform.SetSiblingIndex(transformState.SiblingIndex);
                         linkedInstance.transform.position = transformState.Position;

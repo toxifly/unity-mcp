@@ -208,6 +208,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                             "Saving introduced additional serialized changes; the transaction was rolled back.");
                     }
                 }
+                RestoreUntouchedCleanScenes(changes);
                 RestoreEditorSetup();
                 Undo.CollapseUndoOperations(undoGroup);
                 finished = true;
@@ -316,6 +317,27 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
 
             if (failure != null)
                 throw new MutationTransactionException("ROLLBACK_FAILED", $"Mutation rollback failed: {failure.Message}", failure);
+        }
+
+        private void RestoreUntouchedCleanScenes(IReadOnlyList<SerializedChange> changes)
+        {
+            // Asset-only commits (e.g. SaveAsPrefabAsset without linking) can flag a
+            // target scene dirty even though none of its objects changed. Scene-side
+            // fingerprints carry an empty AssetPath or the scene's own path.
+            bool anySceneSideChange = changes.Any(change =>
+                string.IsNullOrEmpty(change.AssetPath)
+                || change.AssetPath.EndsWith(".unity", StringComparison.OrdinalIgnoreCase));
+            if (anySceneSideChange)
+                return;
+            foreach (Scene scene in targetScenes)
+            {
+                if (!scene.IsValid() || !scene.isLoaded || !scene.isDirty)
+                    continue;
+                if (initialDirtyScenes.TryGetValue(SceneKey(scene), out bool wasDirty) && wasDirty)
+                    continue;
+                if (ClearSceneDirtiness != null)
+                    ClearSceneDirtiness.Invoke(null, new object[] { scene });
+            }
         }
 
         private void RestoreDirtyStates()
@@ -470,10 +492,12 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     while (property.Next(enterChildren))
                     {
                         // Unity exposes strings through the iterator as array-like values with
-                        // synthetic Array.size and Character children. The string fingerprint
-                        // already captures the complete value, so those implementation details
-                        // must not become independently guarded changes.
-                        enterChildren = property.propertyType != SerializedPropertyType.String;
+                        // synthetic Array.size and Character children, and (6000.5+) object
+                        // references with m_FileID/m_PathID children. Both fingerprints already
+                        // capture the complete value, so those implementation details must not
+                        // become independently guarded changes.
+                        enterChildren = property.propertyType != SerializedPropertyType.String
+                            && property.propertyType != SerializedPropertyType.ObjectReference;
                         if (IgnoredProperties.Contains(property.propertyPath))
                             continue;
                         Fingerprint fingerprint = Fingerprint.Create(target, property);

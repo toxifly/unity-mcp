@@ -11,7 +11,8 @@ namespace MCPForUnity.Runtime.Helpers
     ///   • <see cref="UnityFindObjectsCompat"/> — Object.FindObjectsOfType → FindObjectsByType (2023.1)
     ///   • <see cref="UnityObjectIdCompat"/>    — InstanceID ↔ EntityId (6000.3 → 6000.6 CS0619)
     ///   • <see cref="UnityPhysicsCompat"/>     — Physics{,2D}.autoSyncTransforms (6000.0),
-    ///                                            Physics{,2D}.autoSimulation → simulationMode (2022.2)
+    ///                                            Physics{,2D}.autoSimulation → simulationMode (2022.2),
+    ///                                            Rigidbody.drag/angularDrag → linear/angularDamping (6000.5 CS0618)
     ///   • <see cref="UnityAssembliesCompat"/>  — AppDomain.GetAssemblies →
     ///                                            UnityEngine.Assemblies.CurrentAssemblies (Unity 6.8 CoreCLR)
     ///

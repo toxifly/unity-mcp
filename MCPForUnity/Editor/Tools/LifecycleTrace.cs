@@ -4,6 +4,7 @@ using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Runtime.Helpers;
+using MCPForUnity.Runtime.Tools;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -35,6 +36,7 @@ namespace MCPForUnity.Editor.Tools
 
         static LifecycleTrace()
         {
+            LifecycleTraceProbe.EventSink = ProbeEvent;
             RestoreReloadedSessions();
             EditorApplication.update += Update;
             Selection.selectionChanged += SelectionChanged;

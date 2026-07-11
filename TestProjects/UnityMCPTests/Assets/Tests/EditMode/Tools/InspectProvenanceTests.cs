@@ -37,7 +37,9 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.IsTrue(result.Value<bool>("success"), result.ToString());
             JToken finding = result["data"]["findings"][0];
             Assert.IsNotEmpty(finding.Value<string>("global_object_id"));
-            Assert.AreEqual(EditorSceneManager.GetActiveScene().path, finding.Value<string>("scene_path"));
+            // The tool reports empty scene paths (untitled scenes) as null.
+            string activeScenePath = EditorSceneManager.GetActiveScene().path;
+            Assert.AreEqual(string.IsNullOrEmpty(activeScenePath) ? null : activeScenePath, finding.Value<string>("scene_path"));
             Assert.IsFalse(finding["prefab"].Value<bool>("is_instance"));
         }
 

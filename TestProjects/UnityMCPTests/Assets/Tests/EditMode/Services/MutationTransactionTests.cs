@@ -27,7 +27,17 @@ namespace MCPForUnityTests.Editor.Services
             originalScene = EditorSceneManager.GetActiveScene();
             if (!AssetDatabase.IsValidFolder("Assets/Temp"))
                 AssetDatabase.CreateFolder("Assets", "Temp");
-            testScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            if (string.IsNullOrEmpty(originalScene.path))
+            {
+                // An untitled active scene (batchmode's default) blocks additive
+                // scene creation, so replace it instead of adding alongside it.
+                testScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                originalScene = testScene;
+            }
+            else
+            {
+                testScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            }
             EditorSceneManager.SetActiveScene(testScene);
             root = new GameObject("MutationTransactionRoot");
             Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
@@ -41,7 +51,14 @@ namespace MCPForUnityTests.Editor.Services
             if (originalScene.IsValid() && originalScene.isLoaded)
                 EditorSceneManager.SetActiveScene(originalScene);
             if (testScene.IsValid() && testScene.isLoaded)
-                EditorSceneManager.CloseScene(testScene, true);
+            {
+                if (SceneManager.sceneCount > 1)
+                    EditorSceneManager.CloseScene(testScene, true);
+                else
+                    // The last loaded scene cannot be closed; replace it so the
+                    // saved scene path is released before the asset is deleted.
+                    EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            }
             AssetDatabase.DeleteAsset(ScenePath);
             AssetDatabase.DeleteAsset(PrefabPath);
         }
@@ -390,6 +407,9 @@ namespace MCPForUnityTests.Editor.Services
             GameObject prefab = PrefabUtility.SaveAsPrefabAsset(prefabSource, PrefabPath);
             Object.DestroyImmediate(prefabSource);
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, testScene);
+            // 6000.5+ renames prefab roots to the asset filename, so capture the
+            // actual instance name instead of assuming the source object's name.
+            string instanceName = instance.name;
             Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
             Assert.IsFalse(testScene.isDirty);
 
@@ -403,7 +423,7 @@ namespace MCPForUnityTests.Editor.Services
             }));
 
             Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
-            Assert.AreEqual("SelectionManager", instance.name);
+            Assert.AreEqual(instanceName, instance.name);
             Assert.IsFalse(
                 testScene.isDirty,
                 "Rolling back a prefab-instance override must restore the scene's initial clean state.");
