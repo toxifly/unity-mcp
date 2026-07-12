@@ -120,6 +120,44 @@ async def test_acknowledged_no_wait_compile_returns_resumable_job(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_expired_refresh_job_is_removed_before_resume(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+    refresh_mod._REFRESH_JOBS["expired-job"] = {
+        "unity_instance": "ProjectA@111",
+        "baseline_compile_started_ms": 100,
+        "compile_requested": True,
+        "created_at": time.monotonic() - refresh_mod._REFRESH_JOB_TTL_SECONDS,
+    }
+
+    async def fail_if_polled(*args, **kwargs):
+        raise AssertionError("An expired refresh job must not poll editor state")
+
+    monkeypatch.setattr(refresh_mod, "wait_for_editor_ready", fail_if_polled)
+
+    response = await refresh_mod.refresh_unity(DummyContext(), job_id="expired-job")
+
+    assert response.model_dump()["error"] == "REFRESH_JOB_NOT_FOUND"
+    assert "expired-job" not in refresh_mod._REFRESH_JOBS
+
+
+def test_refresh_job_registry_evicts_oldest_entries_at_capacity(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+    monkeypatch.setattr(refresh_mod, "_MAX_REFRESH_JOBS", 2)
+    timestamps = iter([1.0] * 3 + [2.0] * 3 + [3.0] * 3)
+    monkeypatch.setattr(refresh_mod.time, "monotonic", lambda: next(timestamps))
+
+    refresh_mod._register_refresh_job("oldest", {})
+    refresh_mod._register_refresh_job("middle", {})
+    refresh_mod._register_refresh_job("newest", {})
+
+    assert list(refresh_mod._REFRESH_JOBS) == ["middle", "newest"]
+
+
+@pytest.mark.asyncio
 async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeypatch):
     import services.tools.refresh_unity as refresh_mod
 
