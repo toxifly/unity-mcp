@@ -30,6 +30,37 @@ _REAL_BLOCKING_REASONS = {
     "asset_refresh", "playmode_transition",
 }
 _REFRESH_JOBS: dict[str, dict[str, Any]] = {}
+_REFRESH_JOB_TTL_SECONDS = 10 * 60
+_MAX_REFRESH_JOBS = 256
+
+
+def _prune_refresh_jobs(now: float | None = None) -> None:
+    """Remove expired jobs and cap the registry to its newest entries."""
+    current_time = time.monotonic() if now is None else now
+    stale_job_ids = [
+        job_id
+        for job_id, job in _REFRESH_JOBS.items()
+        if not isinstance(job.get("created_at"), (int, float))
+        or current_time - job["created_at"] >= _REFRESH_JOB_TTL_SECONDS
+    ]
+    for stale_job_id in stale_job_ids:
+        _REFRESH_JOBS.pop(stale_job_id, None)
+
+    overflow = len(_REFRESH_JOBS) - _MAX_REFRESH_JOBS
+    if overflow > 0:
+        oldest_jobs = sorted(
+            _REFRESH_JOBS,
+            key=lambda job_id: _REFRESH_JOBS[job_id]["created_at"],
+        )
+        for oldest_job_id in oldest_jobs[:overflow]:
+            _REFRESH_JOBS.pop(oldest_job_id, None)
+
+
+def _register_refresh_job(job_id: str, job: dict[str, Any]) -> None:
+    _prune_refresh_jobs()
+    job["created_at"] = time.monotonic()
+    _REFRESH_JOBS[job_id] = job
+    _prune_refresh_jobs()
 
 
 def _in_pytest() -> bool:
@@ -277,6 +308,7 @@ async def refresh_unity(
     unity_instance = await get_unity_instance_from_context(ctx)
 
     if job_id is not None:
+        _prune_refresh_jobs()
         job = _REFRESH_JOBS.get(job_id)
         if job is None:
             return MCPResponse(success=False, error="REFRESH_JOB_NOT_FOUND", message="Refresh job was not found.")
@@ -318,11 +350,11 @@ async def refresh_unity(
         # the baseline snapshot was incomplete.
         baseline_compile_started_ms = int(time.time() * 1000) - 1000
     refresh_job_id = str(uuid.uuid4())
-    _REFRESH_JOBS[refresh_job_id] = {
+    _register_refresh_job(refresh_job_id, {
         "unity_instance": unity_instance,
         "baseline_compile_started_ms": baseline_compile_started_ms,
         "compile_requested": compile == "request",
-    }
+    })
 
     params: dict[str, Any] = {
         "mode": mode,
