@@ -64,8 +64,10 @@ MCP for Unity 将工具组织为**分组**（Core、VFX & Shaders、Animation、
 **Stdio 模式**：
 
 1. 开关状态在本地保存，但无法推送到服务器（没有 WebSocket 连接）。
-2. 服务器启动时所有分组均启用。更改开关后，让 AI 执行 `manage_tools`，`action` 设为 `'sync'`——这会从 Unity 拉取当前工具状态并同步服务器可见性。
+2. 服务器启动时使用基于分组的默认值——仅启用 `core` 分组。更改开关后，让 AI 执行 `manage_tools`，`action` 设为 `'sync'`——这会从 Unity 拉取当前工具状态并同步服务器可见性。
 3. 也可以重启服务器来应用更改。
+
+在两种模式下，会话的实际工具可见性按以下顺序解析：首先是会话级 `manage_tools` 的 `activate`/`deactivate` 覆盖，其次是最近一次从 Unity 同步的状态，最后是基于分组的默认值（仅启用 `core`）。`manage_tools(action='reset')` 会清除会话级覆盖。
 
 ### `manage_tools` Meta-Tool
 

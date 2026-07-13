@@ -75,6 +75,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         private readonly List<string> targetAssetPaths;
         private readonly List<string> initiallyMissingAssetFolders;
         private readonly Dictionary<string, byte[]> assetBytes;
+        private readonly Dictionary<string, List<AssetObjectState>> initialDirtyAssetContents;
         private readonly Dictionary<string, Fingerprint> before;
         private readonly SceneSetup[] sceneSetup;
         private readonly Scene activeScene;
@@ -118,6 +119,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             PreflightDirtyAssets();
 
             assetBytes = SnapshotAssetBytes(targetAssetPaths);
+            initialDirtyAssetContents = SnapshotDirtyAssetContents(initialDirtyAssets);
             before = CaptureFingerprints(targets, targetScenes, targetAssetPaths);
 
             Undo.IncrementCurrentGroup();
@@ -304,7 +306,8 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             try
             {
                 Undo.RevertAllDownToGroup(undoGroup);
-                RestoreAssetBytes();
+                IReadOnlyCollection<string> importedAssetPaths = RestoreAssetBytes();
+                RestoreDirtyAssetContents(importedAssetPaths);
                 RestoreMissingAssetFolders();
                 RestoreDirtyStates();
                 RestoreEditorSetup();
@@ -375,7 +378,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             }
         }
 
-        private void RestoreAssetBytes()
+        private IReadOnlyCollection<string> RestoreAssetBytes()
         {
             var changedPaths = new List<string>();
             foreach (KeyValuePair<string, byte[]> pair in assetBytes)
@@ -393,7 +396,41 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 }
             }
             foreach (string path in changedPaths)
-                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                AssetDatabase.ImportAsset(
+                    path,
+                    ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            return changedPaths;
+        }
+
+        private void RestoreDirtyAssetContents(IReadOnlyCollection<string> importedAssetPaths)
+        {
+            foreach (string path in importedAssetPaths.Where(initialDirtyAssetContents.ContainsKey))
+            {
+                Dictionary<string, Object> currentObjects = EnumerateSnapshotObjects(
+                        Array.Empty<Object>(),
+                        Array.Empty<Scene>(),
+                        new[] { path })
+                    .Where(asset => asset != null)
+                    .GroupBy(ObjectIdentity, StringComparer.Ordinal)
+                    .ToDictionary(group => group.Key, group => group.First(), StringComparer.Ordinal);
+
+                foreach (AssetObjectState state in initialDirtyAssetContents[path])
+                {
+                    if (!currentObjects.TryGetValue(state.ObjectId, out Object asset) || asset == null)
+                    {
+                        asset = state.Asset;
+                        if (asset == null || !string.Equals(
+                                AssetDatabase.GetAssetPath(asset),
+                                path,
+                                StringComparison.Ordinal))
+                            throw new InvalidOperationException(
+                                $"Could not restore the unsaved serialized state of '{state.ObjectPath}' in '{path}'.");
+                    }
+
+                    EditorJsonUtility.FromJsonOverwrite(state.Json, asset);
+                    EditorUtility.SetDirty(asset);
+                }
+            }
         }
 
         private void RestoreMissingAssetFolders()
@@ -495,6 +532,33 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             {
                 string fullPath = FullProjectPath(path);
                 result[path] = File.Exists(fullPath) ? File.ReadAllBytes(fullPath) : null;
+            }
+            return result;
+        }
+
+        private static Dictionary<string, List<AssetObjectState>> SnapshotDirtyAssetContents(
+            IReadOnlyDictionary<string, bool> dirtyAssets)
+        {
+            var result = new Dictionary<string, List<AssetObjectState>>(StringComparer.Ordinal);
+            foreach (string path in dirtyAssets.Where(pair => pair.Value).Select(pair => pair.Key))
+            {
+                try
+                {
+                    result[path] = EnumerateSnapshotObjects(
+                            Array.Empty<Object>(),
+                            Array.Empty<Scene>(),
+                            new[] { path })
+                        .Where(asset => asset != null)
+                        .Select(AssetObjectState.Capture)
+                        .ToList();
+                }
+                catch (Exception exception)
+                {
+                    throw new MutationTransactionException(
+                        "DIRTY_ASSET_SNAPSHOT_FAILED",
+                        $"Could not snapshot the unsaved contents of dirty asset '{path}': {exception.Message}",
+                        exception);
+                }
             }
             return result;
         }
@@ -847,6 +911,25 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                         .Append((int)key.weightedMode);
                 }
                 return builder.ToString();
+            }
+        }
+
+        private sealed class AssetObjectState
+        {
+            public Object Asset;
+            public string ObjectId;
+            public string ObjectPath;
+            public string Json;
+
+            public static AssetObjectState Capture(Object asset)
+            {
+                return new AssetObjectState
+                {
+                    Asset = asset,
+                    ObjectId = ObjectIdentity(asset),
+                    ObjectPath = MutationTransaction.ObjectPath(asset),
+                    Json = EditorJsonUtility.ToJson(asset)
+                };
             }
         }
     }

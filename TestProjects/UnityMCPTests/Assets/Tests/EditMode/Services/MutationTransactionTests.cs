@@ -1,3 +1,4 @@
+using System.IO;
 using System.Linq;
 using MCPForUnity.Editor.Services.MutationTransactions;
 using MCPForUnity.Editor.Tools;
@@ -22,6 +23,7 @@ namespace MCPForUnityTests.Editor.Services
         private const string PrefabPath = "Assets/Temp/AtomicMutationTest.prefab";
         private const string DryRunPrefabFolder = "Assets/Temp/DryRunPrefab/Nested";
         private const string DryRunPrefabPath = DryRunPrefabFolder + "/Preview.prefab";
+        private const string DirtyAssetPath = "Assets/Temp/MutationTransactionDirtyAsset.asset";
 
         [SetUp]
         public void SetUp()
@@ -63,6 +65,7 @@ namespace MCPForUnityTests.Editor.Services
             }
             AssetDatabase.DeleteAsset(ScenePath);
             AssetDatabase.DeleteAsset(PrefabPath);
+            AssetDatabase.DeleteAsset(DirtyAssetPath);
             AssetDatabase.DeleteAsset("Assets/Temp/DryRunPrefab");
         }
 
@@ -383,6 +386,34 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void Rollback_AfterAssetWasSaved_RestoresPredirtyInMemoryContents()
+        {
+            var asset = ScriptableObject.CreateInstance<MutationTransactionDirtyAsset>();
+            asset.Value = "persisted value";
+            AssetDatabase.CreateAsset(asset, DirtyAssetPath);
+            AssetDatabase.SaveAssetIfDirty(asset);
+            string fullPath = Path.Combine(Directory.GetParent(Application.dataPath).FullName, DirtyAssetPath);
+            byte[] persistedBytes = File.ReadAllBytes(fullPath);
+
+            asset.Value = "unsaved value";
+            EditorUtility.SetDirty(asset);
+
+            using (MutationTransaction transaction = MutationTransaction.BeginAssets(
+                new[] { DirtyAssetPath },
+                new MutationTransactionOptions { AllowDirtyAssets = true }))
+            {
+                asset.Value = "transaction value";
+                EditorUtility.SetDirty(asset);
+                AssetDatabase.SaveAssetIfDirty(asset);
+                transaction.Rollback();
+            }
+
+            Assert.AreEqual("unsaved value", asset.Value);
+            Assert.IsTrue(EditorUtility.IsDirty(asset));
+            CollectionAssert.AreEqual(persistedBytes, File.ReadAllBytes(fullPath));
+        }
+
+        [Test]
         public void ManageGameObject_DryRunReturnsChangesAndRollsBack()
         {
             JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
@@ -507,6 +538,39 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void ManagePrefabs_CreateAndReplacePreservesReferenceFromAdditiveScene()
+        {
+            Scene referenceScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var owner = new GameObject("AdditiveSceneReferenceOwner");
+            SceneManager.MoveGameObjectToScene(owner, referenceScene);
+            var reference = owner.AddComponent<AtomicPrefabReferenceHolder>();
+            reference.Target = root;
+
+            try
+            {
+                JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "create_and_replace",
+                    ["target"] = root.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["prefabPath"] = PrefabPath,
+                    ["dirtyScenePolicy"] = "allow",
+                    ["saveScene"] = false
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                root = testScene.GetRootGameObjects().Single(item => item.name == "MutationTransactionRoot");
+                Assert.AreEqual(root, reference.Target);
+                Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(root));
+            }
+            finally
+            {
+                if (referenceScene.IsValid() && referenceScene.isLoaded)
+                    EditorSceneManager.CloseScene(referenceScene, true);
+            }
+        }
+
+        [Test]
         public void ManagePrefabs_CreateAndReplaceDryRunRemovesPrefabAndRestoresScene()
         {
             JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
@@ -607,5 +671,10 @@ namespace MCPForUnityTests.Editor.Services
     public sealed class AtomicPrefabReferenceHolder : MonoBehaviour
     {
         public GameObject Target;
+    }
+
+    public sealed class MutationTransactionDirtyAsset : ScriptableObject
+    {
+        public string Value;
     }
 }
