@@ -74,6 +74,16 @@ Three reasons:
 
 `sync` reconciles the two: it pulls the Editor's toggle states into the current session.
 
+## Defaults and precedence
+
+Out of the box, only `core` is enabled — every other group starts hidden. When a session resolves which groups are visible, the most specific source wins:
+
+1. **Session overrides** — `activate`/`deactivate` calls made via `manage_tools` in the current session.
+2. **Unity-persisted state** — the Editor's toggle UI choices, as of the last sync from Unity.
+3. **Defaults** — only `core` enabled.
+
+`reset` removes the session overrides, so the session falls back to Unity-persisted state (or the defaults where Unity hasn't changed anything). After changing toggles in the Unity Editor, run `sync` — or restart the server — so sessions pick up the new state.
+
 ## Related reference
 
 - [`manage_tools`](/reference/tools/core/manage_tools) — full tool reference

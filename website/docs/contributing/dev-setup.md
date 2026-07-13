@@ -141,8 +141,10 @@ Tool visibility changes work differently depending on the transport mode:
 **Stdio mode**:
 
 1. Toggles are persisted locally but cannot be pushed to the server (no WebSocket connection).
-2. The server starts with all groups enabled. After changing toggles, ask the AI to run `manage_tools` with `action='sync'` — this pulls the current tool states from Unity and syncs server visibility.
+2. The server starts with group-based defaults — only `core` is enabled. After changing toggles, ask the AI to run `manage_tools` with `action='sync'` — this pulls the current tool states from Unity and syncs server visibility.
 3. Alternatively, restart the server to pick up changes.
+
+In both modes, effective visibility for a session resolves in order: session-level `manage_tools` `activate`/`deactivate` overrides first, then the last state synced from Unity, then the group-based defaults (only `core` enabled). `manage_tools(action='reset')` clears the session overrides.
 
 ### The `manage_tools` Meta-Tool
 

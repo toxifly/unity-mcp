@@ -172,6 +172,11 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             List<ExternalReferenceState> references = preserveSceneReferences
                 ? CaptureExternalReferences(source)
                 : new List<ExternalReferenceState>();
+            UnityEngine.Object[] transactionTargets = new UnityEngine.Object[] { source }
+                .Concat(references.Select(reference => reference.Owner))
+                .Where(target => target != null)
+                .Distinct()
+                .ToArray();
             var options = new MutationTransactionOptions
             {
                 Name = "MCP atomic prefab create and replace",
@@ -183,7 +188,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             bool keepCreatedDirectories = false;
             try
             {
-                using (MutationTransaction transaction = MutationTransaction.Begin(new UnityEngine.Object[] { source }, options))
+                using (MutationTransaction transaction = MutationTransaction.Begin(transactionTargets, options))
                 {
                     createdDirectories = EnsureAssetDirectoryExists(sanitizedPath);
                     bool saved;
@@ -318,7 +323,11 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             var hierarchy = new HashSet<UnityEngine.Object>(root.GetComponentsInChildren<Transform>(true)
                 .SelectMany(transform => new UnityEngine.Object[] { transform.gameObject }.Concat(transform.GetComponents<Component>())));
             var result = new List<ExternalReferenceState>();
-            foreach (GameObject sceneRoot in root.scene.GetRootGameObjects())
+            IEnumerable<Scene> loadedScenes = Enumerable.Range(0, SceneManager.sceneCount)
+                .Select(SceneManager.GetSceneAt)
+                .Where(scene => scene.IsValid() && scene.isLoaded);
+            foreach (Scene scene in loadedScenes)
+            foreach (GameObject sceneRoot in scene.GetRootGameObjects())
             foreach (Transform transform in sceneRoot.GetComponentsInChildren<Transform>(true))
             foreach (UnityEngine.Object owner in new UnityEngine.Object[] { transform.gameObject }.Concat(transform.GetComponents<Component>()).Where(item => item != null && !hierarchy.Contains(item)))
             {
@@ -334,7 +343,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                             continue;
                         result.Add(new ExternalReferenceState
                         {
-                            Key = GlobalObjectId.GetGlobalObjectIdSlow(owner) + "|" + owner.GetType().FullName + "|" + property.propertyPath,
+                            Key = TransactionObjectId(owner) + "|" + owner.GetType().FullName + "|" + property.propertyPath,
                             Owner = owner,
                             PropertyPath = property.propertyPath,
                             ChildIndices = ChildIndexPath(root.transform, OwnerTransform(property.objectReferenceValue)),
@@ -395,6 +404,20 @@ namespace MCPForUnity.Editor.Tools.Prefabs
         {
             if (value is GameObject gameObject) return gameObject.transform;
             return (value as Component)?.transform;
+        }
+
+        private static string TransactionObjectId(UnityEngine.Object value)
+        {
+            string stable = GlobalObjectId.GetGlobalObjectIdSlow(value).ToString();
+            if (!stable.EndsWith("-0-0", StringComparison.Ordinal))
+                return stable;
+
+            Transform transform = OwnerTransform(value);
+            string assetPath = AssetDatabase.GetAssetPath(value);
+            string objectPath = transform != null
+                ? GetHierarchyPath(transform)
+                : (string.IsNullOrEmpty(assetPath) ? value.name : assetPath);
+            return $"temporary:{objectPath}:{value.GetType().FullName}:{value.GetInstanceIDCompat()}";
         }
 
         private static int[] ChildIndexPath(Transform root, Transform target)
