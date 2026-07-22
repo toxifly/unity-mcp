@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -80,6 +81,10 @@ namespace MCPForUnity.Editor.Helpers
                 // Apply default values for specific component types
                 ApplyDefaultValues(newComponent);
 
+                // The new component's block is auto-scoped, but the owning GameObject's
+                // m_Component list changed too.
+                SceneMutationLedger.Record(target);
+
                 return newComponent;
             }
             catch (Exception ex)
@@ -128,6 +133,10 @@ namespace MCPForUnity.Editor.Helpers
 
             try
             {
+                // Ledger before destroy (GlobalObjectId unreadable afterwards); the owning
+                // GameObject's m_Component list also changed.
+                SceneMutationLedger.RecordDeletion(component);
+                SceneMutationLedger.Record(target);
                 Undo.DestroyObjectImmediate(component);
                 return true;
             }
@@ -165,6 +174,7 @@ namespace MCPForUnity.Editor.Helpers
             Type type = component.GetType();
             BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase;
             string normalizedName = ParamCoercion.NormalizePropertyName(propertyName);
+            string serializedStateBefore = CaptureSerializedState(component);
 
             // UnityEventBase-derived types must be set via SerializedProperty, not reflection.
             // Reflection creates a disconnected object that Unity's serialization layer doesn't track,
@@ -172,18 +182,28 @@ namespace MCPForUnity.Editor.Helpers
             Type memberType = ResolveMemberType(type, propertyName, normalizedName);
             if (memberType != null && typeof(UnityEventBase).IsAssignableFrom(memberType))
             {
-                return SetViaSerializedProperty(component, propertyName, normalizedName, value, out error);
+                bool eventSet = SetViaSerializedProperty(component, propertyName, normalizedName, value, out error);
+                if (eventSet)
+                    RecordIfSerializedStateChanged(component, propertyName, serializedStateBefore);
+                return eventSet;
             }
 
-            // Try reflection first (property, field, then non-public serialized field)
+            // Try reflection first (property, field, then non-public serialized field).
+            // Reflection writes fields directly (no undo record), so the ledger must be told here.
             if (TrySetViaReflection(component, type, propertyName, normalizedName, flags, value, out error))
+            {
+                RecordIfSerializedStateChanged(component, propertyName, serializedStateBefore);
                 return true;
+            }
 
             // Reflection failed — fall back to SerializedProperty which handles arrays,
             // custom serialization (e.g. UdonSharp), and types reflection can't convert.
             string reflectionError = error;
             if (SetViaSerializedProperty(component, propertyName, normalizedName, value, out error))
+            {
+                RecordIfSerializedStateChanged(component, propertyName, serializedStateBefore);
                 return true;
+            }
 
             // Both paths failed. If reflection found the member but couldn't convert,
             // report that (more useful than the SerializedProperty error).
@@ -581,6 +601,62 @@ namespace MCPForUnity.Editor.Helpers
                     case SerializedPropertyType.Enum:
                         return SetEnum(prop, value, out error);
 
+                    case SerializedPropertyType.Vector2:
+                    {
+                        Vector4 v = prop.vector2Value;
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.vector2Value = new Vector2(v.x, v.y);
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Vector3:
+                    {
+                        Vector4 v = prop.vector3Value;
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.vector3Value = new Vector3(v.x, v.y, v.z);
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Vector4:
+                    {
+                        Vector4 v = prop.vector4Value;
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.vector4Value = v;
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Quaternion:
+                    {
+                        Quaternion current = prop.quaternionValue;
+                        Vector4 v = new Vector4(current.x, current.y, current.z, current.w);
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.quaternionValue = new Quaternion(v.x, v.y, v.z, v.w);
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Vector2Int:
+                    {
+                        Vector4 v = (Vector2)prop.vector2IntValue;
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.vector2IntValue = new Vector2Int(Mathf.RoundToInt(v.x), Mathf.RoundToInt(v.y));
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Vector3Int:
+                    {
+                        Vector4 v = (Vector3)prop.vector3IntValue;
+                        if (!TryReadVectorComponents(value, ref v, out error)) return false;
+                        prop.vector3IntValue = new Vector3Int(
+                            Mathf.RoundToInt(v.x), Mathf.RoundToInt(v.y), Mathf.RoundToInt(v.z));
+                        return true;
+                    }
+
+                    case SerializedPropertyType.Color:
+                        return SetColor(prop, value, out error);
+
+                    case SerializedPropertyType.Rect:
+                        return SetRect(prop, value, out error);
+
                     default:
                         error = $"Unsupported SerializedPropertyType: {prop.propertyType} at '{prop.propertyPath}'.";
                         return false;
@@ -591,6 +667,168 @@ namespace MCPForUnity.Editor.Helpers
                 error = $"Error setting '{prop.propertyPath}': {ex.Message}";
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Reads vector components from a JArray ([x, y, ...], positional) or a JObject
+        /// ({"x": .., "y": ..}, case-insensitive). Components absent from the input keep the
+        /// current value already in <paramref name="components"/>, so a partial {"y": 5} works.
+        /// </summary>
+        private static bool TryReadVectorComponents(JToken value, ref Vector4 components, out string error)
+        {
+            error = null;
+            if (value is JArray array)
+            {
+                for (int i = 0; i < array.Count && i < 4; i++)
+                {
+                    if (!TryReadNumericComponent(array[i], $"Vector component at index {i}", out float parsed, out error))
+                        return false;
+                    components[i] = parsed;
+                }
+                return true;
+            }
+            if (value is JObject obj)
+            {
+                string[] names = { "x", "y", "z", "w" };
+                foreach (var kvp in obj)
+                {
+                    int index = Array.FindIndex(names, name =>
+                        string.Equals(name, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                    if (index < 0)
+                    {
+                        error = $"Unknown vector component '{kvp.Key}' (expected x/y/z/w).";
+                        return false;
+                    }
+                    if (!TryReadNumericComponent(kvp.Value, $"Vector component '{kvp.Key}'", out float parsed, out error))
+                        return false;
+                    components[index] = parsed;
+                }
+                return true;
+            }
+            error = "Expected a vector value: [x, y, ...] or {\"x\": .., \"y\": ..}.";
+            return false;
+        }
+
+        /// <summary>Color from [r, g, b(, a)] or {"r": .., "g": .., "b": ..(, "a": ..)}; absent components keep current.</summary>
+        private static bool SetColor(SerializedProperty prop, JToken value, out string error)
+        {
+            error = null;
+            Color color = prop.colorValue;
+            if (value is JArray array)
+            {
+                for (int i = 0; i < array.Count && i < 4; i++)
+                {
+                    if (!TryReadNumericComponent(array[i], $"Color component at index {i}", out float parsed, out error))
+                        return false;
+                    color[i] = parsed;
+                }
+                prop.colorValue = color;
+                return true;
+            }
+            if (value is JObject obj)
+            {
+                string[] names = { "r", "g", "b", "a" };
+                foreach (var kvp in obj)
+                {
+                    int index = Array.FindIndex(names, name =>
+                        string.Equals(name, kvp.Key, StringComparison.OrdinalIgnoreCase));
+                    if (index < 0)
+                    {
+                        error = $"Unknown color component '{kvp.Key}' (expected r/g/b/a).";
+                        return false;
+                    }
+                    if (!TryReadNumericComponent(kvp.Value, $"Color component '{kvp.Key}'", out float parsed, out error))
+                        return false;
+                    color[index] = parsed;
+                }
+                prop.colorValue = color;
+                return true;
+            }
+            error = "Expected a color value: [r, g, b, a] or {\"r\": .., \"g\": .., \"b\": ..}.";
+            return false;
+        }
+
+        /// <summary>Rect from [x, y, width, height] or {"x", "y", "width", "height"}; absent components keep current.</summary>
+        private static bool SetRect(SerializedProperty prop, JToken value, out string error)
+        {
+            error = null;
+            Rect rect = prop.rectValue;
+            if (value is JArray array)
+            {
+                float[] xywh = { rect.x, rect.y, rect.width, rect.height };
+                for (int i = 0; i < array.Count && i < 4; i++)
+                {
+                    if (!TryReadNumericComponent(array[i], $"Rect component at index {i}", out float parsed, out error))
+                        return false;
+                    xywh[i] = parsed;
+                }
+                prop.rectValue = new Rect(xywh[0], xywh[1], xywh[2], xywh[3]);
+                return true;
+            }
+            if (value is JObject obj)
+            {
+                foreach (var kvp in obj)
+                {
+                    if (!TryReadNumericComponent(kvp.Value, $"Rect component '{kvp.Key}'", out float parsed, out error))
+                        return false;
+                    switch (kvp.Key.ToLowerInvariant())
+                    {
+                        case "x": rect.x = parsed; break;
+                        case "y": rect.y = parsed; break;
+                        case "width": case "w": rect.width = parsed; break;
+                        case "height": case "h": rect.height = parsed; break;
+                        default:
+                            error = $"Unknown rect component '{kvp.Key}' (expected x/y/width/height).";
+                            return false;
+                    }
+                }
+                prop.rectValue = rect;
+                return true;
+            }
+            error = "Expected a rect value: [x, y, width, height] or {\"x\", \"y\", \"width\", \"height\"}.";
+            return false;
+        }
+
+        private static string CaptureSerializedState(Component component)
+        {
+            try
+            {
+                return EditorJsonUtility.ToJson(component, false);
+            }
+            catch
+            {
+                // If Unity cannot snapshot an unusual component, retain the conservative legacy
+                // behavior and scope a successful assignment rather than risk losing a real edit.
+                return null;
+            }
+        }
+
+        private static void RecordIfSerializedStateChanged(
+            Component component,
+            string propertyName,
+            string serializedStateBefore)
+        {
+            string serializedStateAfter = CaptureSerializedState(component);
+            if (serializedStateBefore == null
+                || serializedStateAfter == null
+                || !string.Equals(serializedStateBefore, serializedStateAfter, StringComparison.Ordinal))
+            {
+                SceneMutationLedger.Record(component, propertyName);
+            }
+        }
+
+        private static bool TryReadNumericComponent(
+            JToken value, string componentLabel, out float parsed, out string error)
+        {
+            parsed = ParamCoercion.CoerceFloat(value, float.NaN);
+            if (float.IsNaN(parsed))
+            {
+                error = $"{componentLabel} must be a number.";
+                return false;
+            }
+
+            error = null;
+            return true;
         }
 
         internal static bool SetObjectReference(SerializedProperty prop, JToken value, out string error)

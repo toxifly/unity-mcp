@@ -21,6 +21,7 @@ _SECTIONS: dict[str, dict[str, Any]] = {
             "Read the related resource before mutating editor state, identify the exact object or asset scope, and use forward-slash paths relative to Assets/ unless a tool says otherwise.",
             "Prefer dry_run and change_guard on supported mutation tools to preview exact serialized changes and roll back unexpected changes.",
             "Prefer save_scene_scoped, save_prefab_scoped, and save_assets_scoped over broad saves; use preview_asset_changes when only inspection is required.",
+            "save_scene_scoped saves the whole scene by default (unscoped_changes=include). Pass unscoped_changes=exclude to write only objects created or mutated through ledger-instrumented MCP tools (component add/remove/set-property and the GameObject tools) and report everything else as unscoped_drift instead of baking it into the file; edits from other tools, execute_code, or the Inspector count as drift in that mode.",
             "Use manage_prefabs(action='create_and_replace') when prefab creation and scene replacement must be one guarded transaction.",
             "Inspect each result's success, warnings, error, and rollback or dirty-state report before continuing. Use undo/redo only as an explicit recovery action.",
             "For new scenes, include a Camera and main Directional Light. Use manage_scene for scene lifecycle and prefabs for reusable GameObjects.",

@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from transport.legacy.port_discovery import PortDiscovery
 import random
+import re
 import socket
 import struct
 import threading
@@ -94,6 +95,23 @@ class UnityConnection:
                         self.use_framing = True
                         logger.debug(
                             'MCP for Unity handshake received: FRAMING=1 (strict)')
+                        # Newer editors identify themselves in the banner. If we were
+                        # aimed at a specific instance and reached a different project's
+                        # editor (stale port registry, reused port), fail loudly instead
+                        # of sending commands to the wrong Unity.
+                        banner_project = re.search(
+                            r'\bPROJECT=([0-9a-f]{8})\b', text)
+                        expected_hash = (
+                            self.instance_id.rsplit('@', 1)[-1]
+                            if self.instance_id and '@' in self.instance_id
+                            else None
+                        )
+                        if (banner_project and expected_hash
+                                and banner_project.group(1) != expected_hash):
+                            raise ConnectionError(
+                                f'Connected to the wrong Unity instance on port {self.port}: '
+                                f'expected project hash {expected_hash}, got {banner_project.group(1)}. '
+                                f'The port registry entry is stale.')
                     else:
                         if require_framing:
                             # Best-effort plain-text advisory for legacy peers
@@ -298,7 +316,7 @@ class UnityConnection:
 
         def read_status_file(target_hash: str | None = None) -> dict | None:
             try:
-                base_path = Path.home().joinpath('.unity-mcp')
+                base_path = PortDiscovery.get_registry_dir()
                 status_files = sorted(
                     base_path.glob('unity-mcp-status-*.json'),
                     key=lambda p: p.stat().st_mtime,
@@ -311,7 +329,10 @@ class UnityConnection:
                         if status_path.stem.endswith(target_hash):
                             with status_path.open('r') as f:
                                 return json.load(f)
-                # Fallback: return most recent regardless of hash
+                    # No status file for this instance: don't read another
+                    # editor's status, its reloading flag would gate this one.
+                    return None
+                # No target instance: fall back to the most recent file
                 with status_files[0].open('r') as f:
                     return json.load(f)
             except FileNotFoundError:
@@ -328,6 +349,7 @@ class UnityConnection:
                 logger.debug(f"Preflight status check failed: {exc}")
                 return None
 
+        request_may_have_reached_unity = False
         # Extract hash suffix from instance id (e.g., Project@hash)
         target_hash: str | None = None
         if self.instance_id and '@' in self.instance_id:
@@ -343,10 +365,14 @@ class UnityConnection:
                 # close is serialized against the send/recv block, then reconnect next call.
                 with self._io_lock:
                     self.disconnect()
+                # stage=preflight tells send_command_with_retry the command was
+                # never sent, so waiting and re-sending is safe even for
+                # commands that must not be re-sent after reaching Unity.
                 return MCPResponse(
                     success=False,
                     error="Unity is reloading; please retry",
                     hint="retry",
+                    data={"reason": "reloading", "stage": "preflight"},
                 )
         except Exception as exc:
             logger.debug(f"Preflight status check failed: {exc}")
@@ -391,6 +417,10 @@ class UnityConnection:
                         self.sock.sendall(payload)
                     else:
                         self.sock.sendall(payload)
+                    # From this point onward a transport failure can mean Unity executed the
+                    # command and only its reply was lost. Keep this sticky across internal
+                    # retries so callers can distinguish it from connect/preflight failures.
+                    request_may_have_reached_unity = True
                     logger.info("[TIMING-STDIO] sendall took %.3fs command=%s", time.time() - t_send_start, command_type)
 
                     # Cap the receive timeout to the remaining command budget (and use a
@@ -499,6 +529,10 @@ class UnityConnection:
                     sleep_s = self._cap_to_deadline(sleep_s, deadline, floor=0.0)
                     time.sleep(sleep_s)
                     continue
+                if request_may_have_reached_unity:
+                    # Exception instances carry a __dict__, including built-in transport errors.
+                    # Preserve the original exception type/message while exposing delivery stage.
+                    e.request_may_have_reached_unity = True
                 raise
 
 
@@ -768,33 +802,48 @@ def get_unity_connection(instance_identifier: str | None = None) -> UnityConnect
 # Centralized retry helpers
 # -----------------------------
 
+# Matches "reload"/"reloading"/"reloaded"/"reloads" as a standalone word (underscore
+# separators count as boundaries, e.g. "compiling_or_reloading"), but NOT identifiers
+# that adjoin it with a letter or digit, e.g. "ReloadProbe" or "Reload2". Applied to
+# lowercased text.
+_RELOAD_WORD_RE = re.compile(r"(?<![a-z0-9])reload(?:ing|ed|s)?(?![a-z0-9])")
+
+
 def _extract_response_reason(resp: object) -> str | None:
     """Extract a normalized (lowercase) reason string from a response.
 
     Returns lowercase reason values to enable case-insensitive comparisons
     by callers (e.g. _is_reloading_response, refresh_unity).
+
+    Successful responses never yield a reason: a command that completed must not
+    be classified as a busy/reloading state, or retry loops re-execute it
+    (non-idempotent commands like create would run dozens of times).
     """
     if isinstance(resp, MCPResponse):
+        if resp.success:
+            return None
         data = getattr(resp, "data", None)
         if isinstance(data, dict):
             reason = data.get("reason")
             if isinstance(reason, str):
                 return reason.lower()
         message_text = f"{resp.message or ''} {resp.error or ''}".lower()
-        if "reload" in message_text:
+        if _RELOAD_WORD_RE.search(message_text):
             return "reloading"
         return None
 
     if isinstance(resp, dict):
         if resp.get("state") == "reloading":
             return "reloading"
+        if resp.get("success") is True:
+            return None
         data = resp.get("data")
         if isinstance(data, dict):
             reason = data.get("reason")
             if isinstance(reason, str):
                 return reason.lower()
         message_text = (resp.get("message") or resp.get("error") or "").lower()
-        if "reload" in message_text:
+        if _RELOAD_WORD_RE.search(message_text):
             return "reloading"
         return None
 
@@ -841,8 +890,6 @@ def send_command_with_retry(
     t_get_conn = time.time()
     conn = get_unity_connection(instance_id)
     logger.info("[TIMING-STDIO] get_unity_connection took %.3fs command=%s", time.time() - t_get_conn, command_type)
-    if max_retries is None:
-        max_retries = getattr(config, "reload_max_retries", 40)
     if retry_ms is None:
         retry_ms = getattr(config, "reload_retry_ms", 250)
     # Default to 20s to handle domain reloads (which can take 10-20s after tests or script changes).
@@ -866,6 +913,14 @@ def send_command_with_retry(
         max_wait_s = 20.0
     # Clamp to [0, 20] to prevent misconfiguration from causing excessive waits
     max_wait_s = max(0.0, min(max_wait_s, 20.0))
+    if max_retries is None:
+        max_retries = getattr(config, "reload_max_retries", 40)
+        # Per-retry sleeps are clamped to at most 250ms, so a count that is too
+        # low silently caps the reload wait below max_wait_s (40 * 250ms = 10s
+        # vs a 20s budget). Give the default enough retries to span the budget;
+        # the elapsed-time check remains the binding limit.
+        budget_retries = int(max_wait_s * 1000 // max(50, min(int(retry_ms), 250)))
+        max_retries = max(max_retries, budget_retries)
 
     total_timeout = max(0.0, float(getattr(config, "command_total_timeout", 90.0)))
     deadline = time.monotonic() + total_timeout if total_timeout > 0 else None
@@ -874,12 +929,27 @@ def send_command_with_retry(
     # Commands that trigger compilation/reload shouldn't retry on disconnect
     send_max_attempts = None if retry_on_reload else 0
 
+    def _can_wait_on(resp: object) -> bool:
+        if not _is_reloading_response(resp):
+            return False
+        if retry_on_reload:
+            return True
+        # Preflight rejections are issued before the command reaches Unity,
+        # so waiting and re-sending cannot re-trigger a compile/reload
+        # (the issue #577 concern behind retry_on_reload=False).
+        data = getattr(resp, "data", None)
+        return isinstance(data, dict) and data.get("stage") == "preflight"
+
     response = conn.send_command(
         command_type, params, max_attempts=send_max_attempts, deadline=deadline)
     retries = 0
     wait_started = None
     reason = _extract_response_reason(response)
-    while retry_on_reload and _is_reloading_response(response) and retries < max_retries and (deadline is None or time.monotonic() < deadline):
+    while (
+        _can_wait_on(response)
+        and retries < max_retries
+        and (deadline is None or time.monotonic() < deadline)
+    ):
         if wait_started is None:
             wait_started = time.monotonic()
             logger.debug(
@@ -912,7 +982,12 @@ def send_command_with_retry(
         )
         time.sleep(max(0.0, sleep_ms / 1000.0))
         retries += 1
-        response = conn.send_command(command_type, params, deadline=deadline)
+        response = conn.send_command(
+            command_type,
+            params,
+            max_attempts=send_max_attempts,
+            deadline=deadline,
+        )
         reason = _extract_response_reason(response)
 
     if wait_started is not None:
@@ -924,14 +999,21 @@ def send_command_with_retry(
                 instance_id or "default",
                 waited,
             )
+            timeout_data = {
+                "reason": "reloading",
+                "retry_after_ms": min(250, max(50, retry_ms)),
+            }
+            response_data = getattr(response, "data", None)
+            if isinstance(response_data, dict) and response_data.get("stage") == "preflight":
+                # Preserve proof that the command never reached Unity. Callers such
+                # as refresh_unity use this marker to distinguish an unsent request
+                # from a post-send disconnect that can be acknowledged as running.
+                timeout_data["stage"] = "preflight"
             return MCPResponse(
                 success=False,
                 error="Unity is reloading; please retry",
                 hint="retry",
-                data={
-                    "reason": "reloading",
-                    "retry_after_ms": min(250, max(50, retry_ms)),
-                },
+                data=timeout_data,
             )
         logger.debug(
             "Unity reload wait completed: command=%s instance=%s waited_s=%.3f",

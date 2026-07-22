@@ -1,6 +1,7 @@
 #nullable disable
 using System.Collections.Generic;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -26,6 +27,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 {
                     string goName = targetGo.name;
                     int goId = targetGo.GetInstanceIDCompat();
+                    // Ledger before destroy: GlobalObjectIds are unreadable afterwards. The old
+                    // parent's Transform also changes (m_Children loses an entry).
+                    SceneMutationLedger.RecordDeletion(targetGo);
+                    SceneMutationLedger.Record(targetGo.transform.parent);
                     // Guarded mutations and dry runs roll back through Unity's undo group.
                     // Register the destruction so those operations cannot permanently delete
                     // an object when the transaction is rejected or previewed.

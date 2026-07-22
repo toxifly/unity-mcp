@@ -34,6 +34,22 @@ namespace MCPForUnity.Editor.Tools
                 });
             }
 
+            // Requesting a script compilation (or force-reimporting assets) while the editor is in
+            // Play Mode triggers a domain reload that races the play session: in practice it can
+            // wedge play-exit and leave the editor stuck compiling. Refuse instead of wedging; the
+            // caller should stop Play Mode first (manage_editor action=stop) and retry.
+            if (EditorApplication.isPlayingOrWillChangePlaymode
+                && (string.Equals(compile, "request", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(mode, "force", StringComparison.OrdinalIgnoreCase)))
+            {
+                return new ErrorResponse("play_mode_active", new
+                {
+                    reason = "play_mode_active",
+                    message = "Refusing to force-refresh or request compilation while the editor is playing; " +
+                              "this can wedge play-exit. Stop Play Mode (manage_editor action=stop), then retry.",
+                });
+            }
+
             bool refreshTriggered = false;
             bool compileRequested = false;
 

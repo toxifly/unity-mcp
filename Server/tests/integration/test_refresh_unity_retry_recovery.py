@@ -56,26 +56,41 @@ async def test_compile_refresh_returns_terminal_summary_after_stable_ready(monke
     import services.tools.refresh_unity as refresh_mod
 
     sent_params = None
-    states = iter([
-        {"data": {"update_tick": 10, "compilation": {"last_compile_started_unix_ms": 100},
+    states = [
+        {"data": {"update_tick": 10, "compilation": {"last_compile_started_unix_ms": 100,
+                                                       "last_domain_reload_after_unix_ms": 500},
                   "advice": {"blocking_reasons": []}}},
         {"data": {"update_tick": 11, "compilation": {"is_compiling": True,
-                                                       "last_compile_started_unix_ms": 200},
+                                                       "last_compile_started_unix_ms": 550,
+                                                       "last_domain_reload_after_unix_ms": 500},
                   "advice": {"blocking_reasons": ["compiling"]}}},
-        {"data": {"update_tick": 12, "compilation": {"last_compile_started_unix_ms": 200,
+        # Idle gap between compile-finish and domain-reload-start: must NOT count as ready.
+        {"data": {"update_tick": 12, "compilation": {"last_compile_started_unix_ms": 550,
                                                        "last_compile_errors": 0,
                                                        "last_compile_warnings": 2,
-                                                       "last_compile_duration_seconds": 1.25},
+                                                       "last_compile_duration_seconds": 1.25,
+                                                       "last_domain_reload_after_unix_ms": 500},
                   "advice": {"blocking_reasons": []}}},
-        {"data": {"update_tick": 13, "compilation": {"last_compile_started_unix_ms": 200,
+        {"data": {"update_tick": 13, "compilation": {"last_compile_started_unix_ms": 550,
                                                        "last_compile_errors": 0,
                                                        "last_compile_warnings": 2,
-                                                       "last_compile_duration_seconds": 1.25},
+                                                       "last_compile_duration_seconds": 1.25,
+                                                       "last_domain_reload_after_unix_ms": 600},
                   "advice": {"blocking_reasons": []}}},
-    ])
+        {"data": {"update_tick": 14, "compilation": {"last_compile_started_unix_ms": 550,
+                                                       "last_compile_errors": 0,
+                                                       "last_compile_warnings": 2,
+                                                       "last_compile_duration_seconds": 1.25,
+                                                       "last_domain_reload_after_unix_ms": 600},
+                  "advice": {"blocking_reasons": []}}},
+    ]
+    poll_index = 0
 
     async def fake_state(ctx):
-        return next(states)
+        nonlocal poll_index
+        state = states[min(poll_index, len(states) - 1)]
+        poll_index += 1
+        return state
 
     async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
         nonlocal sent_params
@@ -117,6 +132,63 @@ async def test_acknowledged_no_wait_compile_returns_resumable_job(monkeypatch):
     assert payload["data"]["status"] == "running"
     assert payload["data"]["recovered_from_disconnect"] is False
     assert job_id in refresh_mod._REFRESH_JOBS
+
+
+@pytest.mark.asyncio
+async def test_no_wait_compile_does_not_acknowledge_exhausted_preflight(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        return MCPResponse(
+            success=False,
+            error="Unity is reloading; please retry",
+            hint="retry",
+            data={"reason": "reloading", "stage": "preflight"},
+        )
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send)
+
+    response = await refresh_mod.refresh_unity(
+        DummyContext(), compile="request", wait_for_ready=False,
+    )
+    payload = response.model_dump()
+
+    assert payload["success"] is False
+    assert payload["data"]["stage"] == "preflight"
+    assert refresh_mod._REFRESH_JOBS == {}
+
+
+@pytest.mark.asyncio
+async def test_waiting_compile_does_not_create_job_for_exhausted_preflight(monkeypatch):
+    import services.tools.refresh_unity as refresh_mod
+
+    refresh_mod._REFRESH_JOBS.clear()
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        return MCPResponse(
+            success=False,
+            error="Unity is reloading; please retry",
+            hint="retry",
+            data={"reason": "reloading", "stage": "preflight"},
+        )
+
+    async def fail_if_polled(*args, **kwargs):
+        raise AssertionError("An unsent refresh must not create or poll a resumable job")
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send)
+    monkeypatch.setattr(refresh_mod, "wait_for_editor_ready", fail_if_polled)
+
+    response = await refresh_mod.refresh_unity(
+        DummyContext(), compile="request", wait_for_ready=True,
+    )
+    payload = response.model_dump()
+
+    assert payload["success"] is False
+    assert payload["hint"] == "retry"
+    assert payload["data"] == {"reason": "reloading", "stage": "preflight"}
+    assert refresh_mod._REFRESH_JOBS == {}
 
 
 @pytest.mark.asyncio
@@ -188,6 +260,7 @@ async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeyp
                 "compilation": {
                     "last_compile_started_unix_ms": int(time.time() * 1000),
                     "last_compile_errors": 0,
+                    "last_domain_reload_after_unix_ms": int(time.time() * 1000) + 10_000,
                 },
                 "advice": {"blocking_reasons": []},
             }
@@ -204,5 +277,3 @@ async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeyp
     assert resumed.model_dump()["data"]["status"] == "succeeded"
     assert observed_instances == ["ProjectA@111", "ProjectA@111"]
     assert job_id not in refresh_mod._REFRESH_JOBS
-
-

@@ -47,6 +47,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
             Undo.RecordObject(targetGo.transform, $"LookAt {targetGo.name}");
             targetGo.transform.LookAt(lookAtPos.Value, upVector);
+            Services.MutationTransactions.SceneMutationLedger.Record(targetGo.transform);
 
             var euler = targetGo.transform.rotation.eulerAngles;
             return new SuccessResponse(

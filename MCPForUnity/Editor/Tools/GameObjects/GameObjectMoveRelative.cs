@@ -61,6 +61,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
             targetGo.transform.position = newPosition;
 
+            Services.MutationTransactions.SceneMutationLedger.Record(targetGo.transform);
             EditorUtility.SetDirty(targetGo);
             EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
 

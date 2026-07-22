@@ -44,6 +44,18 @@ def test_canonicalize_failure_supplies_error_and_normalizes_warnings():
     assert result["warnings"] == ["Retry later"]
 
 
+def test_canonicalize_error_only_response_as_failure():
+    result = canonicalize_result(
+        {"error": "Unknown tool group: missing"},
+        unity_instance=None,
+        duration_ms=1,
+    )
+
+    assert result["success"] is False
+    assert result["status"] == "failed"
+    assert result["error"] == "Unknown tool group: missing"
+
+
 def test_canonicalize_is_idempotent_for_existing_envelope():
     existing = canonicalize_result(
         {"success": True, "message": "Done", "data": {"value": 1}},

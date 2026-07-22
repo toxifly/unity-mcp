@@ -123,6 +123,41 @@ def test_handshake_requires_framing():
     assert conn.sock is None
 
 
+def test_handshake_rejects_wrong_project_instance():
+    # A stale port registry can point at a different project's editor (or a
+    # reused port). The banner's PROJECT token must be checked against the
+    # instance we were aimed at, and the mismatch must fail the connection.
+    port = start_dummy_server(
+        b"WELCOME UNITY-MCP 1 FRAMING=1 PROJECT=deadbeef PORT=6400\n")
+    conn = UnityConnection(host="127.0.0.1", port=port,
+                           instance_id="MyProject@3a9e429a")
+    assert conn.connect() is False
+    assert conn.sock is None
+
+
+def test_handshake_accepts_matching_project_instance():
+    port = start_dummy_server(
+        b"WELCOME UNITY-MCP 1 FRAMING=1 PROJECT=3a9e429a PORT=6400\n")
+    conn = UnityConnection(host="127.0.0.1", port=port,
+                           instance_id="MyProject@3a9e429a")
+    try:
+        assert conn.connect() is True
+        assert conn.use_framing is True
+    finally:
+        conn.disconnect()
+
+
+def test_handshake_without_project_token_still_connects():
+    # Older editors don't send PROJECT; the check must not break them.
+    port = start_dummy_server(b"WELCOME UNITY-MCP 1 FRAMING=1\n")
+    conn = UnityConnection(host="127.0.0.1", port=port,
+                           instance_id="MyProject@3a9e429a")
+    try:
+        assert conn.connect() is True
+    finally:
+        conn.disconnect()
+
+
 def test_small_frame_ping_pong():
     port = start_dummy_server(b"MCP/0.1 FRAMING=1\n", respond_ping=True)
     conn = UnityConnection(host="127.0.0.1", port=port)
@@ -199,5 +234,57 @@ def test_zero_length_payload_heartbeat():
         assert resp in (b'{"type":"pong"}', b"")
     finally:
         conn.disconnect()
+
+
+class _DeliveryStageSocket:
+    def __init__(self, fail_send_number: int | None = None):
+        self.fail_send_number = fail_send_number
+        self.send_count = 0
+        self.closed = False
+
+    def getblocking(self):
+        return True
+
+    def setblocking(self, _value):
+        pass
+
+    def recv(self, *_args):
+        raise BlockingIOError()
+
+    def sendall(self, _data):
+        self.send_count += 1
+        if self.send_count == self.fail_send_number:
+            raise ConnectionError("send failed")
+
+    def close(self):
+        self.closed = True
+
+
+def test_receive_failure_after_complete_send_is_marked_delivery_uncertain(monkeypatch):
+    conn = UnityConnection(host="127.0.0.1", port=1)
+    conn.sock = _DeliveryStageSocket()
+    conn.use_framing = True
+    monkeypatch.setattr(
+        conn, "receive_full_response",
+        lambda _sock: (_ for _ in ()).throw(TimeoutError("reply was lost")),
+    )
+
+    with pytest.raises(TimeoutError) as raised:
+        conn.send_command("run_tests", {"mode": "EditMode"}, max_attempts=0)
+
+    assert raised.value.request_may_have_reached_unity is True
+
+
+def test_incomplete_send_is_not_marked_delivery_uncertain():
+    conn = UnityConnection(host="127.0.0.1", port=1)
+    # Framing sends the header first and payload second. Failing the payload send means
+    # the transport cannot prove the complete request reached Unity.
+    conn.sock = _DeliveryStageSocket(fail_send_number=2)
+    conn.use_framing = True
+
+    with pytest.raises(ConnectionError) as raised:
+        conn.send_command("run_tests", {"mode": "EditMode"}, max_attempts=0)
+
+    assert not getattr(raised.value, "request_may_have_reached_unity", False)
 
 

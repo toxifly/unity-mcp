@@ -46,11 +46,15 @@ namespace MCPForUnity.Editor.Tools
 
                 var filterOptions = GetFilterOptions(@params);
                 long initTimeoutMs = p.GetInt("initTimeout") ?? 0;
-                string jobId = TestJobManager.StartJob(parsedMode.Value, filterOptions, initTimeoutMs);
+                string requestToken = @params?["requestToken"]?.ToString()
+                    ?? @params?["request_token"]?.ToString();
+                string jobId = TestJobManager.StartJob(
+                    parsedMode.Value, filterOptions, initTimeoutMs, requestToken);
 
                 return Task.FromResult<object>(new SuccessResponse("Test job started.", new
                 {
                     job_id = jobId,
+                    request_token = string.IsNullOrWhiteSpace(requestToken) ? null : requestToken.Trim(),
                     status = "running",
                     mode = parsedMode.Value.ToString(),
                     include_details = includeDetails,
@@ -59,10 +63,18 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                // Normalize the already-running case to a stable error token.
+                // Normalize the already-running case to a stable error token. The active job id
+                // and its originating request token let a caller whose run_tests reply was lost
+                // distinguish its own run from another client's job.
                 if (ex.Message != null && ex.Message.IndexOf("already in progress", StringComparison.OrdinalIgnoreCase) >= 0)
                 {
-                    return Task.FromResult<object>(new ErrorResponse("tests_running", new { reason = "tests_running", retry_after_ms = 5000 }));
+                    return Task.FromResult<object>(new ErrorResponse("tests_running", new
+                    {
+                        reason = "tests_running",
+                        retry_after_ms = 5000,
+                        job_id = TestJobManager.CurrentJobId,
+                        request_token = TestJobManager.CurrentRequestToken
+                    }));
                 }
                 return Task.FromResult<object>(new ErrorResponse($"Failed to start test job: {ex.Message}"));
             }

@@ -69,8 +69,10 @@ _TRANSPORT_STATUS = {"success", "error", "ok", "failed", "failure"}
 def _success_from_payload(payload: dict[str, Any]) -> bool:
     if "success" in payload:
         return bool(payload["success"])
-    status = str(payload.get("status", "success")).lower()
-    return status not in {"error", "failed", "failure"}
+    if "status" in payload:
+        status = str(payload["status"]).lower()
+        return status not in {"error", "failed", "failure"}
+    return payload.get("error") is None
 
 
 def _normalize_warnings(value: Any) -> list[Any]:

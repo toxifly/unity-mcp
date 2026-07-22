@@ -80,9 +80,11 @@ namespace MCPForUnityTests.Editor.Tools
             _target = new GameObject("LifecycleTraceDirtyTarget");
             var fixture = _target.AddComponent<SerializedInspectionFixture>();
             _unrelated = new GameObject("LifecycleTraceUnrelatedDirtyObject");
-            ClearSceneDirtyFlag(_target.scene);
             EditorUtility.SetDirty(fixture);
             EditorUtility.SetDirty(_unrelated);
+            // On Unity 6000.5+, SetDirty also marks the containing scene dirty, so the
+            // scene flag must be cleared after arranging the per-object flags.
+            ClearSceneDirtyFlag(_target.scene);
             Assert.IsFalse(_target.scene.isDirty);
             Assert.IsTrue(EditorUtility.IsDirty(fixture));
             Assert.IsTrue(EditorUtility.IsDirty(_unrelated));

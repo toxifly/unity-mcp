@@ -758,6 +758,111 @@ class TestStartUtfTestsRunning:
         assert job_id == "J42"
         assert calls["n"] == 2  # retried exactly once
 
+    def test_adopts_own_running_job_after_lost_reply(self, monkeypatch):
+        # Regression: run_tests started a job but the reply was lost; the retry got
+        # tests_running back from our own run. The harness must adopt that job via
+        # the surfaced job_id, not exhaust retries and kill the editor mid-run.
+        monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
+        calls = {"run": 0}
+        request_token = {"value": None}
+
+        def fake_send(cmd, params, **kw):
+            if cmd == "run_tests":
+                calls["run"] += 1
+                if calls["run"] == 1:
+                    request_token["value"] = params["requestToken"]
+                    error = TimeoutError("start reply was lost")
+                    error.request_may_have_reached_unity = True
+                    raise error
+                return {"success": False, "error": "tests_running",
+                        "data": {"retry_after_ms": 10, "job_id": "J77",
+                                 "request_token": request_token["value"]}}
+            assert cmd == "get_test_job" and params["job_id"] == "J77"
+            return {"success": True,
+                    "data": {"job_id": "J77", "status": "running", "mode": "EditMode",
+                             "request_token": request_token["value"]}}
+
+        job_id, _ = lh._start_utf(fake_send, "EditMode", "inst@hash", None, 1, 50)
+        assert job_id == "J77"
+        assert calls["run"] == 2
+
+    def test_does_not_adopt_foreign_job_after_delivery_uncertain_failure(self, monkeypatch):
+        monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
+        calls = {"run": 0, "probe": 0}
+
+        def fake_send(cmd, params, **kw):
+            if cmd == "run_tests":
+                calls["run"] += 1
+                if calls["run"] == 1:
+                    error = TimeoutError("delivery uncertain")
+                    error.request_may_have_reached_unity = True
+                    raise error
+                return {"success": False, "error": "tests_running",
+                        "data": {"retry_after_ms": 1, "job_id": "FOREIGN",
+                                 "request_token": "another-client-token"}}
+            calls["probe"] += 1
+            return {"success": True,
+                    "data": {"job_id": "FOREIGN", "status": "running",
+                             "mode": "EditMode", "request_token": "another-client-token"}}
+
+        job_id, marker = lh._start_utf(
+            fake_send, "EditMode", "inst@hash", None, 1, 50)
+
+        assert job_id is None
+        assert calls["run"] == 5
+        assert calls["probe"] == 0
+        assert "exhausted" in str(marker)
+
+    def test_does_not_adopt_after_pre_send_failure(self, monkeypatch):
+        monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
+        calls = {"run": 0}
+
+        def fake_send(cmd, params, **kw):
+            assert cmd == "run_tests", "a job seen after a pre-send failure must not be probed"
+            calls["run"] += 1
+            if calls["run"] == 1:
+                raise ConnectionError("instance discovery failed before send")
+            return {"success": False, "error": "tests_running",
+                    "data": {"retry_after_ms": 1, "job_id": "FOREIGN"}}
+
+        job_id, marker = lh._start_utf(fake_send, "EditMode", "inst@hash", None, 1, 50)
+
+        assert job_id is None
+        assert calls["run"] == 5
+        assert "exhausted" in str(marker)
+
+    def test_does_not_adopt_unrelated_same_mode_job(self, monkeypatch):
+        monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
+        calls = {"run": 0}
+
+        def fake_send(cmd, params, **kw):
+            assert cmd == "run_tests", "an uncorrelated job must not be probed or adopted"
+            calls["run"] += 1
+            return {"success": False, "error": "tests_running",
+                    "data": {"retry_after_ms": 1, "job_id": "FOREIGN"}}
+
+        job_id, marker = lh._start_utf(fake_send, "EditMode", "inst@hash", None, 1, 50)
+        assert job_id is None
+        assert calls["run"] == 5
+        assert "exhausted" in str(marker)
+
+    def test_does_not_adopt_job_of_different_mode(self, monkeypatch):
+        monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
+        calls = {"n": 0}
+
+        def fake_send(cmd, params, **kw):
+            if cmd == "run_tests":
+                calls["n"] += 1
+                return {"success": False, "error": "tests_running",
+                        "data": {"retry_after_ms": 1, "job_id": "J88"}}
+            return {"success": True,
+                    "data": {"job_id": "J88", "status": "running", "mode": "PlayMode"}}
+
+        job_id, marker = lh._start_utf(fake_send, "EditMode", "inst@hash", None, 1, 50)
+        assert job_id is None
+        assert calls["n"] == 5  # foreign-mode job -> old back-off behavior
+        assert "exhausted" in str(marker)
+
     def test_exhausts_after_persistent_tests_running(self, monkeypatch):
         monkeypatch.setattr(lh.time, "sleep", lambda *_a, **_k: None)
         calls = {"n": 0}

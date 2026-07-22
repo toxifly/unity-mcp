@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -32,7 +33,15 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             Undo.RecordObject(targetGo.transform, "Modify GameObject Transform");
             Undo.RecordObject(targetGo, "Modify GameObject Properties");
 
-            bool modified = false;
+            // Ledgered separately: goModified covers the GameObject block (m_Name, m_TagString,
+            // m_Layer, m_IsActive, m_StaticEditorFlags), transformModified the Transform block
+            // (m_Father, m_LocalPosition/Rotation/Scale). Recording a block the modify did not
+            // change would make the scoped save bake its ambient in-memory drift (e.g. a
+            // layout-driven RectTransform) to disk. Component edits ledger their own blocks
+            // inside the helpers.
+            bool goModified = false;
+            bool transformModified = false;
+            bool componentsModified = false;
 
             string name = @params["name"]?.ToString() ?? @params["new_name"]?.ToString() ?? @params["newName"]?.ToString();
             if (!string.IsNullOrEmpty(name) && targetGo.name != name)
@@ -74,7 +83,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 }
 
                 targetGo.name = name;
-                modified = true;
+                goModified = true;
             }
 
             JToken parentToken = @params["parent"];
@@ -95,8 +104,12 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 }
                 if (targetGo.transform.parent != (newParentGo?.transform))
                 {
+                    // Reparenting rewrites m_Children on both parents' Transforms (and m_Father on
+                    // the target's, ledgered at the end of the modify), so ledger both parents.
+                    SceneMutationLedger.Record(targetGo.transform.parent);
                     targetGo.transform.SetParent(newParentGo?.transform, true);
-                    modified = true;
+                    SceneMutationLedger.Record(newParentGo?.transform);
+                    transformModified = true;
                 }
             }
 
@@ -104,7 +117,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             if (setActive.HasValue && targetGo.activeSelf != setActive.Value)
             {
                 targetGo.SetActive(setActive.Value);
-                modified = true;
+                goModified = true;
             }
 
             string tag = @params["tag"]?.ToString();
@@ -128,7 +141,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 try
                 {
                     targetGo.tag = tagToSet;
-                    modified = true;
+                    goModified = true;
                 }
                 catch (Exception ex)
                 {
@@ -147,7 +160,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 if (layerId != -1 && targetGo.layer != layerId)
                 {
                     targetGo.layer = layerId;
-                    modified = true;
+                    goModified = true;
                 }
             }
 
@@ -160,7 +173,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 if (currentFlags != desiredFlags)
                 {
                     GameObjectUtility.SetStaticEditorFlags(targetGo, desiredFlags);
-                    modified = true;
+                    goModified = true;
                 }
             }
 
@@ -171,17 +184,17 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             if (position.HasValue && targetGo.transform.localPosition != position.Value)
             {
                 targetGo.transform.localPosition = position.Value;
-                modified = true;
+                transformModified = true;
             }
             if (rotation.HasValue && targetGo.transform.localEulerAngles != rotation.Value)
             {
                 targetGo.transform.localEulerAngles = rotation.Value;
-                modified = true;
+                transformModified = true;
             }
             if (scale.HasValue && targetGo.transform.localScale != scale.Value)
             {
                 targetGo.transform.localScale = scale.Value;
-                modified = true;
+                transformModified = true;
             }
 
             if (@params["componentsToRemove"] is JArray componentsToRemoveArray)
@@ -194,7 +207,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                         var removeResult = GameObjectComponentHelpers.RemoveComponentInternal(targetGo, typeName);
                         if (removeResult != null)
                             return removeResult;
-                        modified = true;
+                        componentsModified = true;
                     }
                 }
             }
@@ -218,7 +231,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                         var addResult = GameObjectComponentHelpers.AddComponentInternal(targetGo, typeName, properties);
                         if (addResult != null)
                             return addResult;
-                        modified = true;
+                        componentsModified = true;
                     }
                 }
             }
@@ -239,7 +252,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                         }
                         else
                         {
-                            modified = true;
+                            componentsModified = true;
                         }
                     }
                 }
@@ -280,7 +293,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 );
             }
 
-            if (!modified)
+            if (!goModified && !transformModified && !componentsModified)
             {
                 return new SuccessResponse(
                     $"No modifications applied to GameObject '{targetGo.name}'.",
@@ -289,6 +302,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             }
 
             EditorUtility.SetDirty(targetGo);
+            if (goModified)
+                SceneMutationLedger.Record(targetGo);
+            if (transformModified)
+                SceneMutationLedger.Record(targetGo.transform);
 
             // Mark the appropriate scene as dirty (handles both regular scenes and prefab stages)
             var prefabStage = PrefabStageUtility.GetCurrentPrefabStage();

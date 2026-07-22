@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Services.MutationTransactions;
@@ -61,6 +62,21 @@ namespace MCPForUnity.Editor.Tools
             if (preview)
                 return Preview(paths, dirtyObjects);
 
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                return Error("PLAY_MODE_ACTIVE", "Scenes cannot be saved while the editor is playing. Stop Play Mode first.");
+
+            // exclude: merge only ledgered/new blocks into the on-disk file, suppressing ambient
+            // in-memory drift. include (default): legacy whole-scene save. reject: fail if any
+            // unscoped drift would have been suppressed. include stays the default until every
+            // scene-mutating tool records into SceneMutationLedger — today only ComponentOps,
+            // ManageComponents, and the GameObjects tools do, so exclude would silently discard
+            // intentional edits from uninstrumented tools (cameras, physics, VFX, UI, ...).
+            string unscoped = (p.Get("unscopedChanges") ?? "include").Trim().ToLowerInvariant();
+            if (unscoped != "exclude" && unscoped != "include" && unscoped != "reject")
+                return Error("INVALID_PARAMS", "unscoped_changes must be one of: exclude, include, reject.");
+            if (unscoped != "include")
+                return MergeSave(scene, rejectDrift: unscoped == "reject", dirtyObjects);
+
             DirtyScenePolicy policy = ParseDirtyScenePolicy(p.Get("dirtyScenePolicy"), DirtyScenePolicy.Allow);
             try
             {
@@ -80,6 +96,114 @@ namespace MCPForUnity.Editor.Tools
                 return Error(exception.Code, exception.Message, new { assets = paths, rolled_back = true });
             }
         }
+
+        /// <summary>
+        /// Serializes the scene to a temp copy (in-memory truth), then writes a merged scene file
+        /// where only new blocks and blocks the <see cref="SceneMutationLedger"/> marks as
+        /// intentionally mutated come from that serialization; everything else keeps its on-disk
+        /// bytes. This is what makes the save "scoped": ambient drift from [ExecuteAlways]
+        /// previews or layout-driven RectTransforms is reported, not baked in.
+        /// </summary>
+        private static object MergeSave(Scene scene, bool rejectDrift, object[] dirtyObjects)
+        {
+            string scenePath = NormalizePath(scene.path);
+            (IReadOnlyCollection<string> touched, IReadOnlyCollection<string> deleted) =
+                SceneMutationLedger.SnapshotForScene(scenePath);
+            string sceneGuid = AssetDatabase.AssetPathToGUID(scenePath);
+            HashSet<long> scopedIds = LedgerIdsToSceneFileIds(touched, sceneGuid);
+            HashSet<long> deletedIds = LedgerIdsToSceneFileIds(deleted, sceneGuid);
+
+            string tempPath = "Temp/mcp_scoped_scene_save.unity";
+            string tempText;
+            SceneMutationLedger.SuppressSceneSavedClear = true;
+            try
+            {
+                if (!EditorSceneManager.SaveScene(scene, tempPath, saveAsCopy: true))
+                    return Error("SAVE_FAILED", "Unity could not serialize the scene to a temporary copy.");
+                tempText = File.ReadAllText(tempPath);
+            }
+            finally
+            {
+                SceneMutationLedger.SuppressSceneSavedClear = false;
+                try { File.Delete(tempPath); } catch { /* temp cleanup only */ }
+            }
+
+            string diskText = File.ReadAllText(scenePath);
+            SceneYamlMerge.MergeResult merge;
+            try
+            {
+                merge = SceneYamlMerge.Merge(diskText, tempText, scopedIds, deletedIds);
+            }
+            // ArgumentException covers duplicate fileIDs (Merge's ToDictionary) in a corrupt scene.
+            catch (Exception exception) when (exception is FormatException || exception is ArgumentException)
+            {
+                return Error("MERGE_FAILED", $"Scene YAML could not be merged: {exception.Message}. " +
+                    "Retry with unscoped_changes=include for a legacy whole-scene save.");
+            }
+
+            object drift = DriftReport(merge);
+            if (rejectDrift && (merge.BlocksDriftSuppressed > 0 || merge.UnscopedDeletionsKept.Count > 0))
+                return Error("UNSCOPED_CHANGES", "The scene holds unscoped in-memory changes and unscoped_changes=reject was requested.", drift);
+
+            bool changed = !string.Equals(merge.MergedText, NormalizeNewlines(diskText), StringComparison.Ordinal);
+            if (changed)
+            {
+                File.WriteAllText(scenePath, merge.MergedText);
+                AssetDatabase.ImportAsset(scenePath);
+            }
+            SceneMutationLedger.Clear(scenePath);
+
+            string driftHint = merge.BlocksDriftSuppressed > 0 || merge.UnscopedDeletionsKept.Count > 0
+                ? " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits); if some were intentional, save via the editor or retry with unscoped_changes=include."
+                : string.Empty;
+            return new SuccessResponse(
+                (changed
+                    ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; {merge.BlocksDriftSuppressed} drifted block(s) left untouched."
+                    : "No scoped changes to write; the on-disk scene already matches.") + driftHint,
+                new
+                {
+                    assets_saved = changed ? new[] { scenePath } : Array.Empty<string>(),
+                    save_mode = "merge_scoped",
+                    blocks = new
+                    {
+                        total = merge.BlocksTotal,
+                        @new = merge.BlocksNew,
+                        scoped = merge.BlocksScoped,
+                        deleted = merge.BlocksDeleted,
+                        drift_suppressed = merge.BlocksDriftSuppressed,
+                    },
+                    unscoped_drift = drift,
+                    scene_still_dirty_in_memory = scene.isDirty,
+                    dirty_objects = SummarizeDirty(dirtyObjects),
+                    dirty_assets_left_unsaved = DirtyAssetPaths(changed ? new[] { scenePath } : Array.Empty<string>()),
+                    rolled_back = false,
+                });
+        }
+
+        private static object DriftReport(SceneYamlMerge.MergeResult merge) => new
+        {
+            drift_suppressed_block_count = merge.BlocksDriftSuppressed,
+            drift_suppressed_file_ids = merge.DriftSuppressedIds.Take(20).Select(id => id.ToString()).ToArray(),
+            unscoped_deletions_kept = merge.UnscopedDeletionsKept.Select(id => id.ToString()).ToArray(),
+            splice_notes = merge.Warnings.Take(20).ToArray(),
+        };
+
+        /// <summary>Maps ledger GlobalObjectId strings to scene-file fileIDs (prefab-instance members map to their PrefabInstance block).</summary>
+        private static HashSet<long> LedgerIdsToSceneFileIds(IEnumerable<string> ledgerIds, string sceneGuid)
+        {
+            var fileIds = new HashSet<long>();
+            foreach (string ledgerId in ledgerIds)
+            {
+                if (!GlobalObjectId.TryParse(ledgerId, out GlobalObjectId id))
+                    continue;
+                if (id.identifierType != 2 || !string.Equals(id.assetGUID.ToString(), sceneGuid, StringComparison.Ordinal))
+                    continue;
+                fileIds.Add(unchecked((long)(id.targetPrefabId != 0 ? id.targetPrefabId : id.targetObjectId)));
+            }
+            return fileIds;
+        }
+
+        private static string NormalizeNewlines(string text) => text.Replace("\r\n", "\n");
 
         public static object HandleAssets(JObject @params, bool prefabOnly, bool preview)
         {
@@ -124,11 +248,40 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
+        private sealed class DirtyEntry
+        {
+            public string asset_path;
+            public string object_name;
+            public string object_type;
+            public string global_object_id;
+        }
+
+        private const int DirtyObjectListCap = 25;
+
+        /// <summary>
+        /// Dirty-object payload that stays small when hundreds of objects have ambient in-memory
+        /// drift: a total, a per-type histogram, and a capped sample instead of the raw list.
+        /// </summary>
+        private static object SummarizeDirty(object[] dirtyObjects)
+        {
+            DirtyEntry[] entries = dirtyObjects.OfType<DirtyEntry>().ToArray();
+            return new
+            {
+                total = dirtyObjects.Length,
+                by_type = entries
+                    .GroupBy(entry => entry.object_type)
+                    .OrderByDescending(group => group.Count())
+                    .ToDictionary(group => group.Key, group => group.Count()),
+                sample = dirtyObjects.Take(DirtyObjectListCap).ToArray(),
+                sample_truncated = dirtyObjects.Length > DirtyObjectListCap,
+            };
+        }
+
         private static object Saved(string[] savedPaths, object[] dirtyObjects, IReadOnlyList<SerializedChange> changes) =>
             new SuccessResponse($"Scoped save completed for {savedPaths.Length} dirty asset(s).", new
             {
                 assets_saved = savedPaths,
-                objects_changed = dirtyObjects,
+                objects_changed = SummarizeDirty(dirtyObjects),
                 properties_changed = changes,
                 dirty_assets_left_unsaved = DirtyAssetPaths(savedPaths),
                 rolled_back = false
@@ -138,7 +291,7 @@ namespace MCPForUnity.Editor.Tools
             new SuccessResponse($"Previewed {paths.Length} scoped asset(s) without saving.", new
             {
                 assets_saved = Array.Empty<string>(),
-                objects_changed = dirtyObjects,
+                objects_changed = SummarizeDirty(dirtyObjects),
                 properties_changed = Array.Empty<object>(),
                 dirty_assets_left_unsaved = DirtyAssetPaths(Array.Empty<string>()),
                 requested_assets = paths,
@@ -153,7 +306,7 @@ namespace MCPForUnity.Editor.Tools
             // path raises internal ReadObjectThreaded errors on newer editors.
             foreach (string path in paths.Where(path => !path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase)))
             foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(path).Where(item => item != null && EditorUtility.IsDirty(item)))
-                result.Add(new
+                result.Add(new DirtyEntry
                 {
                     asset_path = path,
                     object_name = asset.name,
@@ -166,7 +319,7 @@ namespace MCPForUnity.Editor.Tools
                 int countBeforeScene = result.Count;
                 foreach (GameObject root in scene.GetRootGameObjects())
                 foreach (Object item in SceneObjects(root).Where(EditorUtility.IsDirty))
-                    result.Add(new
+                    result.Add(new DirtyEntry
                     {
                         asset_path = NormalizePath(scene.path),
                         object_name = item.name,
@@ -174,12 +327,12 @@ namespace MCPForUnity.Editor.Tools
                         global_object_id = GlobalObjectId.GetGlobalObjectIdSlow(item).ToString()
                     });
                 if (result.Count == countBeforeScene)
-                    result.Add(new
+                    result.Add(new DirtyEntry
                     {
                         asset_path = NormalizePath(scene.path),
                         object_name = scene.name,
                         object_type = "UnityEngine.SceneManagement.Scene",
-                        global_object_id = (string)null
+                        global_object_id = null
                     });
             }
             return result.ToArray();

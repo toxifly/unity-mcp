@@ -107,6 +107,127 @@ async def test_compile_wait_does_not_accept_idle_before_compile_starts(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_compile_wait_requires_domain_reload_after_successful_compile(monkeypatch):
+    """The idle gap between compile-finish and domain-reload-start must not count as ready."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    from services.tools import refresh_unity as mod
+
+    states = [
+        {"update_tick": 1, "compilation": {"is_compiling": True, "last_compile_started_unix_ms": 200,
+                                           "last_domain_reload_after_unix_ms": 100},
+         "advice": {"blocking_reasons": ["compiling"]}},
+        # Compile done, reload not started yet — Unity briefly reports idle here.
+        {"update_tick": 2, "compilation": {"last_compile_started_unix_ms": 200, "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 100},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 3, "compilation": {"last_compile_started_unix_ms": 200, "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 100},
+         "advice": {"blocking_reasons": []}},
+        # Reload completed — now readiness may be declared.
+        {"update_tick": 4, "compilation": {"last_compile_started_unix_ms": 200, "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 900},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 5, "compilation": {"last_compile_started_unix_ms": 200, "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 900},
+         "advice": {"blocking_reasons": []}},
+    ]
+    poll_index = 0
+
+    async def fake_get_editor_state(ctx):
+        nonlocal poll_index
+        state = states[min(poll_index, len(states) - 1)]
+        poll_index += 1
+        return {"data": state}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", fake_get_editor_state)
+    result = await mod.wait_for_editor_ready(
+        DummyContext(), timeout_s=10.0,
+        baseline_compile_started_ms=100, require_compile_observation=True,
+        baseline_domain_reload_after_ms=100, require_reload_observation=True,
+    )
+    assert result.ready is True
+    assert result.last_state["update_tick"] == 5
+
+
+@pytest.mark.asyncio
+async def test_compile_wait_ignores_reload_completed_before_requested_compile(monkeypatch):
+    """A preflight reload must not satisfy the subsequently requested compile's reload gate."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    from services.tools import refresh_unity as mod
+
+    states = [
+        # An older reload completed while the compile request was waiting in preflight.
+        {"update_tick": 1, "compilation": {"last_compile_started_unix_ms": 100,
+                                           "last_domain_reload_after_unix_ms": 150},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 2, "compilation": {"is_compiling": True,
+                                           "last_compile_started_unix_ms": 200,
+                                           "last_domain_reload_after_unix_ms": 150},
+         "advice": {"blocking_reasons": ["compiling"]}},
+        # The requested compile's idle gap must remain gated.
+        {"update_tick": 3, "compilation": {"last_compile_started_unix_ms": 200,
+                                           "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 150},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 4, "compilation": {"last_compile_started_unix_ms": 200,
+                                           "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 150},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 5, "compilation": {"last_compile_started_unix_ms": 200,
+                                           "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 300},
+         "advice": {"blocking_reasons": []}},
+        {"update_tick": 6, "compilation": {"last_compile_started_unix_ms": 200,
+                                           "last_compile_errors": 0,
+                                           "last_domain_reload_after_unix_ms": 300},
+         "advice": {"blocking_reasons": []}},
+    ]
+    poll_index = 0
+
+    async def fake_get_editor_state(ctx):
+        nonlocal poll_index
+        state = states[min(poll_index, len(states) - 1)]
+        poll_index += 1
+        return {"data": state}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", fake_get_editor_state)
+    result = await mod.wait_for_editor_ready(
+        DummyContext(), timeout_s=10.0,
+        baseline_compile_started_ms=100, require_compile_observation=True,
+        baseline_domain_reload_after_ms=100, require_reload_observation=True,
+    )
+
+    assert result.ready is True
+    assert result.last_state["update_tick"] == 6
+
+
+@pytest.mark.asyncio
+async def test_compile_wait_failed_compile_does_not_wait_for_reload(monkeypatch):
+    """A compile that finishes with errors never domain-reloads; readiness must not hang."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    from services.tools import refresh_unity as mod
+
+    tick = 0
+
+    async def fake_get_editor_state(ctx):
+        nonlocal tick
+        tick += 1
+        return {"data": {"update_tick": tick,
+                         "compilation": {"last_compile_started_unix_ms": 200, "last_compile_errors": 3,
+                                         "last_domain_reload_after_unix_ms": 100},
+                         "advice": {"blocking_reasons": []}}}
+
+    monkeypatch.setattr(mod.editor_state, "get_editor_state", fake_get_editor_state)
+    result = await mod.wait_for_editor_ready(
+        DummyContext(), timeout_s=10.0,
+        baseline_compile_started_ms=100, require_compile_observation=True,
+        baseline_domain_reload_after_ms=100, require_reload_observation=True,
+    )
+    assert result.ready is True
+    assert result.observed_compile is True
+
+
+@pytest.mark.asyncio
 async def test_stale_only_treated_as_ready(monkeypatch):
     """If the only blocking reason is stale_status, consider ready."""
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)

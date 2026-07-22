@@ -82,7 +82,7 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [UnityTest]
-        public IEnumerator NewClient_WhileOldClientStillConnected_ClosesStaleClient()
+        public IEnumerator ConcurrentClients_AreServedIndependently()
         {
             if (!StdioBridgeHost.IsRunning)
             {
@@ -92,66 +92,54 @@ namespace MCPForUnityTests.Editor.Services
 
             int port = StdioBridgeHost.GetCurrentPort();
 
-            // --- First client: connect and verify handshake (but don't close) ---
             var client1 = new TcpClient();
+            var client2 = new TcpClient();
             try
             {
                 Assert.IsTrue(client1.ConnectAsync("127.0.0.1", port).Wait(ConnectTimeoutMs),
                     "First client connect timed out");
                 client1.ReceiveTimeout = ReadTimeoutMs;
                 var stream1 = client1.GetStream();
+                Assert.That(ReadLine(stream1, ReadTimeoutMs), Does.Contain("FRAMING=1"),
+                    "First client should receive handshake");
 
-                string handshake1 = ReadLine(stream1, ReadTimeoutMs);
-                Assert.That(handshake1, Does.Contain("FRAMING=1"), "First client should receive handshake");
-
-                // Verify ping works on first client
                 SendFrame(stream1, Encoding.UTF8.GetBytes("ping"));
-                byte[] pong1Bytes = ReadFrame(stream1, ReadTimeoutMs);
-                Assert.That(Encoding.UTF8.GetString(pong1Bytes), Does.Contain("pong"));
+                Assert.That(Encoding.UTF8.GetString(ReadFrame(stream1, ReadTimeoutMs)), Does.Contain("pong"));
 
-                // --- Second client: connect while first is still open ---
-                using (var client2 = new TcpClient())
-                {
-                    Assert.IsTrue(client2.ConnectAsync("127.0.0.1", port).Wait(ConnectTimeoutMs),
-                        "Second client connect timed out");
-                    client2.ReceiveTimeout = ReadTimeoutMs;
-                    var stream2 = client2.GetStream();
+                Assert.IsTrue(client2.ConnectAsync("127.0.0.1", port).Wait(ConnectTimeoutMs),
+                    "Second client connect timed out");
+                client2.ReceiveTimeout = ReadTimeoutMs;
+                var stream2 = client2.GetStream();
+                Assert.That(ReadLine(stream2, ReadTimeoutMs), Does.Contain("FRAMING=1"),
+                    "Second client should receive handshake");
 
-                    string handshake2 = ReadLine(stream2, ReadTimeoutMs);
-                    Assert.That(handshake2, Does.Contain("FRAMING=1"), "Second client should receive handshake");
+                SendFrame(stream2, Encoding.UTF8.GetBytes("ping"));
+                Assert.That(Encoding.UTF8.GetString(ReadFrame(stream2, ReadTimeoutMs)), Does.Contain("pong"),
+                    "Second client should be served while the first is still connected");
 
-                    // Stale-client cleanup runs synchronously in HandleClientAsync before
-                    // the read loop, so by the time we read the handshake it's already done.
-                    // No yield needed — yielding here creates a window for the MCP Python
-                    // server to reconnect and close our test client as stale.
-                    SendFrame(stream2, Encoding.UTF8.GetBytes("ping"));
-                    byte[] pong2Bytes = ReadFrame(stream2, ReadTimeoutMs);
-                    Assert.That(Encoding.UTF8.GetString(pong2Bytes), Does.Contain("pong"),
-                        "Second client should get pong after stale client cleanup");
-
-                    client2.Close();
-                }
-
-                // First client should now be disconnected by the bridge.
-                // A read attempt should throw or return 0 bytes.
-                yield return null;
-                bool firstClientDisconnected = false;
-                try
-                {
-                    SendFrame(stream1, Encoding.UTF8.GetBytes("ping"));
-                    ReadFrame(stream1, 2000);
-                }
-                catch
-                {
-                    firstClientDisconnected = true;
-                }
-
-                Assert.IsTrue(firstClientDisconnected, "First client should be disconnected after second client connects");
+                // The first client must still be alive — a second agent connecting
+                // must not stomp existing connections mid-session.
+                SendFrame(stream1, Encoding.UTF8.GetBytes("ping"));
+                Assert.That(Encoding.UTF8.GetString(ReadFrame(stream1, ReadTimeoutMs)), Does.Contain("pong"),
+                    "First client must remain connected after a second client joins");
             }
             finally
             {
                 try { client1.Close(); } catch { }
+                try { client2.Close(); } catch { }
             }
+        }
+
+        [Test]
+        public void HandshakeBanner_IdentifiesProjectAndPort()
+        {
+            string banner = StdioBridgeHost.BuildHandshakeBanner();
+
+            StringAssert.StartsWith("WELCOME UNITY-MCP 1 FRAMING=1 ", banner);
+            Assert.That(banner, Does.Match(@" PROJECT=[0-9a-f]{8}\b"),
+                "banner must carry the project hash so clients can detect a wrong/stale port");
+            Assert.That(banner, Does.Match(@" PORT=\d+"));
+            Assert.IsTrue(banner.EndsWith("\n"), "banner must be newline-terminated");
         }
 
         #region Frame protocol helpers

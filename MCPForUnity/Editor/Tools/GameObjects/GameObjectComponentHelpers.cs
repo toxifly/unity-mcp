@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Editor.Services.MutationTransactions;
 using MCPForUnity.Editor.Tools;
 using MCPForUnity.Runtime.Serialization;
 using Newtonsoft.Json;
@@ -90,6 +91,9 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     }
                 }
 
+                // Structural edit: the GameObject's m_Component list changed.
+                SceneMutationLedger.Record(targetGo);
+
                 return null;
             }
             catch (Exception e)
@@ -134,6 +138,9 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
             try
             {
+                // Ledger before destroy; the GameObject's m_Component list also changed.
+                SceneMutationLedger.RecordDeletion(componentToRemove);
+                SceneMutationLedger.Record(targetGo);
                 Undo.DestroyObjectImmediate(componentToRemove);
                 return null;
             }
@@ -179,7 +186,20 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     // since ComponentOps doesn't support dot/bracket notation.
                     if (propName.Contains('.') || propName.Contains('['))
                     {
-                        setResult = SetNestedProperty(targetComponent, propName, propValue, InputSerializer, out setError);
+                        setResult = SetNestedProperty(
+                            targetComponent,
+                            propName,
+                            propValue,
+                            InputSerializer,
+                            out setError,
+                            out UnityEngine.Object serializedOwner,
+                            out string serializedStateBefore);
+                        // The write lands in the block of the last UnityEngine.Object the path
+                        // traversed (e.g. the Transform for "transform.position"), not necessarily
+                        // the target component's. Only scope it when its serialized block changed.
+                        if (setResult)
+                            RecordIfSerializedStateChanged(
+                                serializedOwner, propName, serializedStateBefore);
                     }
                     else
                     {
@@ -217,9 +237,18 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
         private static JsonSerializer InputSerializer => UnityJsonSerializer.Instance;
 
-        private static bool SetNestedProperty(object target, string path, JToken value, JsonSerializer inputSerializer, out string error)
+        private static bool SetNestedProperty(
+            object target,
+            string path,
+            JToken value,
+            JsonSerializer inputSerializer,
+            out string error,
+            out UnityEngine.Object serializedOwner,
+            out string serializedStateBefore)
         {
             error = null;
+            serializedOwner = target as UnityEngine.Object;
+            serializedStateBefore = null;
             try
             {
                 string[] pathParts = SplitPropertyPath(path);
@@ -232,6 +261,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 object currentObject = target;
                 Type currentType = currentObject.GetType();
                 BindingFlags flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase;
+                // Reflection returns boxed COPIES of value-type members, so a set landing inside
+                // a struct segment only mutates the box; each segment's slot is remembered so the
+                // boxes can be written back after the final set.
+                var steps = new List<TraversalStep>();
 
                 for (int i = 0; i < pathParts.Length - 1; i++)
                 {
@@ -266,13 +299,15 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                         }
                     }
 
-                    currentObject = propInfo != null ? propInfo.GetValue(currentObject) : fieldInfo.GetValue(currentObject);
+                    object stepParent = currentObject;
+                    currentObject = propInfo != null ? propInfo.GetValue(stepParent) : fieldInfo.GetValue(stepParent);
                     if (currentObject == null)
                     {
                         error = $"Property '{part}' is null in path '{path}', cannot access nested properties.";
                         return false;
                     }
 
+                    System.Collections.IList container = null;
                     if (isArray)
                     {
                         if (currentObject is Material[])
@@ -288,6 +323,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                                 error = $"Material index {arrayIndex} out of range (0-{materials.Length - 1}) in path '{path}'.";
                                 return false;
                             }
+                            container = materials;
                             currentObject = materials[arrayIndex];
                         }
                         else if (currentObject is System.Collections.IList)
@@ -303,6 +339,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                                 error = $"Index {arrayIndex} out of range (0-{list.Count - 1}) in path '{path}'.";
                                 return false;
                             }
+                            container = list;
                             currentObject = list[arrayIndex];
                         }
                         else
@@ -312,10 +349,29 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                         }
                     }
 
+                    steps.Add(new TraversalStep
+                    {
+                        Parent = stepParent,
+                        Property = propInfo,
+                        Field = fieldInfo,
+                        Container = container,
+                        Index = arrayIndex,
+                        Child = currentObject,
+                    });
+
+                    if (currentObject is UnityEngine.Object unityOwner)
+                        serializedOwner = unityOwner;
                     currentType = currentObject.GetType();
                 }
 
                 string finalPart = pathParts[pathParts.Length - 1];
+                serializedStateBefore = CaptureSerializedState(serializedOwner);
+
+                // The caller only undo-records the component the path starts from; a write
+                // landing in a traversed object (e.g. its Transform) must be recorded itself
+                // or dry-run/change-guard rollback would leave it modified.
+                if (serializedOwner != null && !ReferenceEquals(serializedOwner, target))
+                    Undo.RecordObject(serializedOwner, "Set Component Properties");
 
                 if (currentObject is Material material && finalPart.StartsWith("_"))
                 {
@@ -334,7 +390,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     if (convertedValue != null || value.Type == JTokenType.Null)
                     {
                         finalPropInfo.SetValue(currentObject, convertedValue);
-                        return true;
+                        return TryWriteBackValueTypeIntermediates(steps, path, out error);
                     }
                     error = $"Failed to convert value for '{finalPart}' to type '{finalPropInfo.PropertyType.Name}' in path '{path}'.";
                     return false;
@@ -347,7 +403,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     if (convertedValue != null || value.Type == JTokenType.Null)
                     {
                         finalFieldInfo.SetValue(currentObject, convertedValue);
-                        return true;
+                        return TryWriteBackValueTypeIntermediates(steps, path, out error);
                     }
                     error = $"Failed to convert value for '{finalPart}' to type '{finalFieldInfo.FieldType.Name}' in path '{path}'.";
                     return false;
@@ -361,7 +417,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     if (convertedValue != null || value.Type == JTokenType.Null)
                     {
                         serializedField.SetValue(currentObject, convertedValue);
-                        return true;
+                        return TryWriteBackValueTypeIntermediates(steps, path, out error);
                     }
                     error = $"Failed to convert value for '{finalPart}' to type '{serializedField.FieldType.Name}' in path '{path}'.";
                     return false;
@@ -375,6 +431,100 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             }
 
             return false;
+        }
+
+        private static string CaptureSerializedState(UnityEngine.Object serializedOwner)
+        {
+            if (serializedOwner == null)
+                return null;
+
+            try
+            {
+                return EditorJsonUtility.ToJson(serializedOwner, false);
+            }
+            catch
+            {
+                // Preserve conservative legacy behavior for unusual Unity objects that
+                // EditorJsonUtility cannot snapshot: a successful write remains scoped.
+                return null;
+            }
+        }
+
+        private static void RecordIfSerializedStateChanged(
+            UnityEngine.Object serializedOwner,
+            string propertyPath,
+            string serializedStateBefore)
+        {
+            if (serializedOwner == null)
+                return;
+
+            string serializedStateAfter = CaptureSerializedState(serializedOwner);
+            if (serializedStateBefore == null
+                || serializedStateAfter == null
+                || !string.Equals(serializedStateBefore, serializedStateAfter, StringComparison.Ordinal))
+            {
+                SceneMutationLedger.Record(serializedOwner, propertyPath);
+            }
+        }
+
+        /// <summary>How one path segment was reached, so its value can be written back.</summary>
+        private sealed class TraversalStep
+        {
+            public object Parent;                       // object the member was fetched from
+            public PropertyInfo Property;               // exactly one of Property/Field is set
+            public FieldInfo Field;
+            public System.Collections.IList Container;  // non-null when the segment was indexed
+            public int Index;
+            public object Child;                        // the fetched value (the box, for structs)
+        }
+
+        /// <summary>
+        /// Re-assigns boxed value-type segments into their parent slots, deepest first, until a
+        /// reference-type child is reached (a write into one is already live). Fails — before any
+        /// live object has been touched — when the chain crosses a read-only property (or a
+        /// read-only property returning an array copy), the cases the write cannot propagate.
+        /// </summary>
+        private static bool TryWriteBackValueTypeIntermediates(List<TraversalStep> steps, string path, out string error)
+        {
+            error = null;
+            for (int i = steps.Count - 1; i >= 0; i--)
+            {
+                TraversalStep step = steps[i];
+                if (step.Child == null || !step.Child.GetType().IsValueType)
+                    break;
+                if (step.Container != null)
+                {
+                    step.Container[step.Index] = step.Child;
+                    // Some Unity property getters return a fresh COPY of the underlying array
+                    // (renderer.sharedMaterials, mesh.vertices), in which case the element write
+                    // above landed in a dead object. Re-fetching detects that: a live container
+                    // comes back reference-identical, a copy does not.
+                    if (step.Property == null || ReferenceEquals(step.Property.GetValue(step.Parent), step.Container))
+                        break; // Field or live-reference property: the element write took effect.
+                    if (!step.Property.CanWrite)
+                    {
+                        error = $"Cannot set '{path}': property '{step.Property.Name}' returns a copy of its array and is read-only, so the modified copy cannot be applied.";
+                        return false;
+                    }
+                    // Copy-returning property: apply Unity's get-modify-set idiom.
+                    step.Property.SetValue(step.Parent, step.Container);
+                    continue; // The parent may itself be a boxed struct — keep writing back.
+                }
+                if (step.Property != null)
+                {
+                    if (!step.Property.CanWrite)
+                    {
+                        error = $"Cannot set '{path}': property '{step.Property.Name}' is read-only, so the value written into the '{step.Property.PropertyType.Name}' copy cannot be applied.";
+                        return false;
+                    }
+                    step.Property.SetValue(step.Parent, step.Child);
+                }
+                else
+                {
+                    step.Field.SetValue(step.Parent, step.Child);
+                }
+            }
+            return true;
         }
 
         private static string[] SplitPropertyPath(string path)

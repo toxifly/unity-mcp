@@ -4,6 +4,7 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEditorInternal;
 using Newtonsoft.Json.Linq;
+using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Tools.GameObjects;
 
 namespace MCPForUnityTests.Editor.Tools
@@ -449,6 +450,195 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual("MultiModifiedObject", testObjects[0].name);
             Assert.AreEqual(parent.transform, testObjects[0].transform.parent);
             Assert.AreEqual("MainCamera", testObjects[0].tag);
+        }
+
+        #endregion
+
+        #region Nested Component Property Tests
+
+        [Test]
+        public void ComponentOps_SerializedVector_RejectsNonnumericComponents()
+        {
+            Vector3 original = testObjects[0].transform.localPosition;
+
+            bool objectOk = ComponentOps.SetProperty(
+                testObjects[0].transform, "m_LocalPosition",
+                new JObject { ["x"] = "oops" }, out string objectError);
+            bool arrayOk = ComponentOps.SetProperty(
+                testObjects[0].transform, "m_LocalPosition",
+                new JArray("oops", 2), out string arrayError);
+
+            Assert.IsFalse(objectOk);
+            StringAssert.Contains("must be a number", objectError);
+            Assert.IsFalse(arrayOk);
+            StringAssert.Contains("must be a number", arrayError);
+            Assert.AreEqual(original, testObjects[0].transform.localPosition);
+        }
+
+        [Test]
+        public void ComponentOps_SerializedColorArray_RejectsNonnumericComponents()
+        {
+            var renderer = testObjects[0].AddComponent<SpriteRenderer>();
+            Color original = renderer.color;
+
+            bool ok = ComponentOps.SetProperty(
+                renderer, "m_Color", new JArray(1, "oops", 0, 1), out string error);
+
+            Assert.IsFalse(ok);
+            StringAssert.Contains("must be a number", error);
+            Assert.AreEqual(original, renderer.color);
+        }
+
+        [Test]
+        public void ComponentOps_SerializedRectArray_RejectsNonnumericComponents()
+        {
+            var camera = testObjects[0].AddComponent<Camera>();
+            Rect original = camera.rect;
+
+            bool ok = ComponentOps.SetProperty(
+                camera, "m_NormalizedViewPortRect",
+                new JArray(0, 0, "oops", 1), out string error);
+
+            Assert.IsFalse(ok);
+            StringAssert.Contains("must be a number", error);
+            Assert.AreEqual(original, camera.rect);
+        }
+
+        [Test]
+        public void Modify_NestedStructMember_WritesBackToComponent()
+        {
+            var collider = testObjects[0].AddComponent<BoxCollider>();
+
+            var p = new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = testObjects[0].GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["BoxCollider"] = new JObject
+                    {
+                        ["center.x"] = 1.5f
+                    }
+                }
+            };
+
+            var result = ManageGameObject.HandleCommand(p);
+            var resultObj = result as JObject ?? JObject.FromObject(result);
+
+            Assert.IsTrue(resultObj.Value<bool>("success"), resultObj.ToString());
+            Assert.AreEqual(1.5f, collider.center.x,
+                "A write into a struct member must reach the component, not a discarded boxed copy.");
+        }
+
+        [Test]
+        public void Modify_NestedStructMemberOnTraversedObject_WritesBackThroughPropertySetter()
+        {
+            testObjects[0].AddComponent<BoxCollider>();
+
+            var p = new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = testObjects[0].GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["BoxCollider"] = new JObject
+                    {
+                        ["transform.localPosition.x"] = 42.0f
+                    }
+                }
+            };
+
+            var result = ManageGameObject.HandleCommand(p);
+            var resultObj = result as JObject ?? JObject.FromObject(result);
+
+            Assert.IsTrue(resultObj.Value<bool>("success"), resultObj.ToString());
+            Assert.AreEqual(42.0f, testObjects[0].transform.localPosition.x,
+                "A write into a struct returned by a property must be written back through its setter.");
+        }
+
+        [Test]
+        public void Modify_StructElementInCopyReturningArrayProperty_WritesArrayBackThroughSetter()
+        {
+            var holder = testObjects[0].AddComponent<TestNamespace.CopyReturningArrayHolder>();
+
+            var p = new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = testObjects[0].GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["CopyReturningArrayHolder"] = new JObject
+                    {
+                        ["Points[1].x"] = 7.5f
+                    }
+                }
+            };
+
+            var result = ManageGameObject.HandleCommand(p);
+            var resultObj = result as JObject ?? JObject.FromObject(result);
+
+            Assert.IsTrue(resultObj.Value<bool>("success"), resultObj.ToString());
+            Assert.AreEqual(7.5f, holder.Points[1].x,
+                "A struct element written through a copy-returning array property must be applied via the setter.");
+        }
+
+        [Test]
+        public void Modify_StructElementInCopyReturningReadOnlyArrayProperty_FailsInsteadOfSilentlyDroppingTheWrite()
+        {
+            var holder = testObjects[0].AddComponent<TestNamespace.CopyReturningArrayHolder>();
+
+            var p = new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = testObjects[0].GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["CopyReturningArrayHolder"] = new JObject
+                    {
+                        ["ReadOnlyPoints[0].x"] = 1.0f
+                    }
+                }
+            };
+
+            var result = ManageGameObject.HandleCommand(p);
+            var resultObj = result as JObject ?? JObject.FromObject(result);
+
+            Assert.IsFalse(resultObj.Value<bool>("success"),
+                "A write into a copy from a setter-less array property must fail, not report success.");
+            Assert.AreEqual(0f, holder.Points[0].x);
+        }
+
+        [Test]
+        public void Modify_NestedPathThroughReadOnlyStructProperty_FailsInsteadOfSilentlyDroppingTheWrite()
+        {
+            var collider = testObjects[0].AddComponent<BoxCollider>();
+            Vector3 originalCenter = collider.center;
+
+            var p = new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = testObjects[0].GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["BoxCollider"] = new JObject
+                    {
+                        // BoxCollider.bounds is a get-only computed property.
+                        ["bounds.center.x"] = 1.0f
+                    }
+                }
+            };
+
+            var result = ManageGameObject.HandleCommand(p);
+            var resultObj = result as JObject ?? JObject.FromObject(result);
+
+            Assert.IsFalse(resultObj.Value<bool>("success"),
+                "A write that cannot propagate through a read-only struct property must fail, not report success.");
+            Assert.AreEqual(originalCenter, collider.center);
         }
 
         #endregion

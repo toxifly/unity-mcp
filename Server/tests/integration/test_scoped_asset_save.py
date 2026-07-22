@@ -39,7 +39,25 @@ def test_save_scene_scoped_shapes_explicit_scope(monkeypatch):
     assert captured["params"] == {
         "scenePath": "Assets/Scenes/Main.unity",
         "dirtyScenePolicy": "allow",
+        "unscopedChanges": "include",
     }
+
+
+def test_save_scene_scoped_forwards_unscoped_changes_mode(monkeypatch):
+    captured = {}
+
+    async def fake_send(ctx, command, params):
+        captured.update(command=command, params=params)
+        return {"success": True}
+
+    monkeypatch.setattr(scoped_mod, "_send", fake_send)
+    result = run(scoped_mod.save_scene_scoped(
+        object(), scene_name="Main", unscoped_changes="exclude"
+    ))
+
+    assert result["success"] is True
+    assert captured["params"]["unscopedChanges"] == "exclude"
+    assert captured["params"]["sceneName"] == "Main"
 
 
 def test_save_assets_scoped_normalizes_one_path(monkeypatch):
