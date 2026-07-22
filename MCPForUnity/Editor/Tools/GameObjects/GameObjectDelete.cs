@@ -14,7 +14,11 @@ namespace MCPForUnity.Editor.Tools.GameObjects
         internal static object Handle(JToken targetToken, string searchMethod)
         {
             List<GameObject> targets = ManageGameObjectCommon.FindObjectsInternal(targetToken, searchMethod, true);
+            return Handle(targets, targetToken, searchMethod);
+        }
 
+        internal static object Handle(IReadOnlyList<GameObject> targets, JToken targetToken, string searchMethod)
+        {
             if (targets.Count == 0)
             {
                 return new ErrorResponse($"Target GameObject(s) ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");

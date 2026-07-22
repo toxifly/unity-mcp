@@ -75,6 +75,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         private readonly List<string> targetAssetPaths;
         private readonly List<string> initiallyMissingAssetFolders;
         private readonly Dictionary<string, byte[]> assetBytes;
+        private readonly Dictionary<string, string> initialAssetGuids;
         private readonly Dictionary<string, List<AssetObjectState>> initialDirtyAssetContents;
         private readonly Dictionary<string, Fingerprint> before;
         private readonly SceneSetup[] sceneSetup;
@@ -120,6 +121,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             PreflightDirtyAssets();
 
             assetBytes = SnapshotAssetBytes(targetAssetPaths);
+            initialAssetGuids = SnapshotAssetGuids(targetAssetPaths);
             initialDirtyAssetContents = SnapshotDirtyAssetContents(initialDirtyAssets);
             before = CaptureFingerprints(targets, targetScenes, targetAssetPaths);
             ledgerSnapshot = SceneMutationLedger.CaptureSnapshot();
@@ -319,6 +321,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                 {
                     SceneMutationLedger.SuppressUndoRedoClear = false;
                 }
+                RestoreAssetMoves();
                 IReadOnlyCollection<string> importedAssetPaths = RestoreAssetBytes();
                 RestoreDirtyAssetContents(importedAssetPaths);
                 RestoreMissingAssetFolders();
@@ -413,6 +416,62 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     path,
                     ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
             return changedPaths;
+        }
+
+        private void RestoreAssetMoves()
+        {
+            var declaredPaths = new HashSet<string>(targetAssetPaths, StringComparer.Ordinal);
+            foreach (KeyValuePair<string, string> pair in initialAssetGuids)
+            {
+                string originalPath = pair.Key;
+                string originalGuid = pair.Value;
+                if (string.IsNullOrEmpty(originalGuid))
+                    continue;
+
+                string currentPath = AssetDatabase.GUIDToAssetPath(originalGuid);
+                if (string.IsNullOrEmpty(currentPath)
+                    || string.Equals(currentPath, originalPath, StringComparison.Ordinal))
+                    continue;
+                if (!declaredPaths.Contains(currentPath))
+                    throw new InvalidOperationException(
+                        $"Tracked asset '{originalPath}' moved outside the declared transaction scope to '{currentPath}'.");
+
+                string occupantGuid = AssetDatabase.AssetPathToGUID(originalPath);
+                if (!string.IsNullOrEmpty(occupantGuid) && occupantGuid != originalGuid)
+                    throw new InvalidOperationException(
+                        $"Cannot restore tracked asset move to '{originalPath}' because another asset now occupies that path.");
+
+                bool isCaseOnlyRename = string.Equals(currentPath, originalPath, StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(
+                        Path.GetDirectoryName(currentPath),
+                        Path.GetDirectoryName(originalPath),
+                        StringComparison.OrdinalIgnoreCase);
+                string moveError = isCaseOnlyRename
+                    ? AssetDatabase.RenameAsset(
+                        currentPath,
+                        Path.GetFileNameWithoutExtension(originalPath))
+                    : AssetDatabase.MoveAsset(currentPath, originalPath);
+                if (!string.IsNullOrEmpty(moveError))
+                    throw new IOException(
+                        $"Could not restore tracked asset move from '{currentPath}' to '{originalPath}': {moveError}");
+            }
+        }
+
+        private static Dictionary<string, string> SnapshotAssetGuids(IEnumerable<string> assetPaths)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (string path in assetPaths)
+            {
+                string guid = AssetDatabase.AssetPathToGUID(path);
+                if (string.IsNullOrEmpty(guid))
+                    continue;
+                // On case-insensitive file systems, a not-yet-created destination path can
+                // resolve to the source asset when the requested rename changes only casing.
+                // Record only the canonical path that actually owns the GUID at transaction start.
+                if (string.Equals(AssetDatabase.GUIDToAssetPath(guid), path, StringComparison.Ordinal))
+                    result[path] = guid;
+            }
+            return result;
         }
 
         private void RestoreDirtyAssetContents(IReadOnlyCollection<string> importedAssetPaths)

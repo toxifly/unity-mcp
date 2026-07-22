@@ -9,6 +9,7 @@ using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using MCPForUnity.Runtime.Helpers;
@@ -22,7 +23,9 @@ namespace MCPForUnityTests.Editor.Services
         private Scene originalScene;
         private Scene testScene;
         private const string ScenePath = "Assets/Temp/MutationTransactionTests.unity";
+        private const string AdditiveScenePath = "Assets/Temp/MutationTransactionAdditiveTests.unity";
         private const string PrefabPath = "Assets/Temp/AtomicMutationTest.prefab";
+        private const string RenamedPrefabPath = "Assets/Temp/AtomicMutationRenamed.prefab";
         private const string DryRunPrefabFolder = "Assets/Temp/DryRunPrefab/Nested";
         private const string DryRunPrefabPath = DryRunPrefabFolder + "/Preview.prefab";
         private const string DirtyAssetPath = "Assets/Temp/MutationTransactionDirtyAsset.asset";
@@ -66,7 +69,9 @@ namespace MCPForUnityTests.Editor.Services
                     EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             }
             AssetDatabase.DeleteAsset(ScenePath);
+            AssetDatabase.DeleteAsset(AdditiveScenePath);
             AssetDatabase.DeleteAsset(PrefabPath);
+            AssetDatabase.DeleteAsset(RenamedPrefabPath);
             AssetDatabase.DeleteAsset(DirtyAssetPath);
             AssetDatabase.DeleteAsset("Assets/Temp/DryRunPrefab");
         }
@@ -737,6 +742,197 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void ManageGameObject_DeleteDryRunTracksEveryAdditiveSceneMatch()
+        {
+            var sourceMarker = root.AddComponent<AtomicPrefabReferenceHolder>();
+            Scene additiveScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var additiveMatch = new GameObject(root.name);
+            SceneManager.MoveGameObjectToScene(additiveMatch, additiveScene);
+            additiveMatch.AddComponent<AtomicPrefabReferenceHolder>();
+
+            try
+            {
+                Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+                Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
+                string sourceId = GlobalObjectId.GetGlobalObjectIdSlow(root).ToString();
+                string additiveId = GlobalObjectId.GetGlobalObjectIdSlow(additiveMatch).ToString();
+
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "delete",
+                    ["target"] = typeof(AtomicPrefabReferenceHolder).FullName,
+                    ["searchMethod"] = "by_component",
+                    ["dryRun"] = true
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                JToken changes = response["data"]["change_preview"]["changes"];
+                Assert.IsTrue(changes.Any(change => change["ObjectId"].Value<string>() == sourceId));
+                Assert.IsTrue(changes.Any(change => change["ObjectId"].Value<string>() == additiveId));
+                Assert.IsNotNull(root);
+                Assert.IsNotNull(additiveMatch);
+                Assert.IsFalse(testScene.isDirty);
+                Assert.IsFalse(additiveScene.isDirty);
+            }
+            finally
+            {
+                if (sourceMarker != null)
+                    Object.DestroyImmediate(sourceMarker);
+                if (additiveMatch != null)
+                    Object.DestroyImmediate(additiveMatch);
+                if (additiveScene.IsValid() && additiveScene.isLoaded)
+                    EditorSceneManager.CloseScene(additiveScene, true);
+                AssetDatabase.DeleteAsset(AdditiveScenePath);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_ModifyDryRunTracksCrossSceneDestinationParent()
+        {
+            var sourceMarker = root.AddComponent<AtomicPrefabReferenceHolder>();
+            Scene additiveScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var destinationParent = new GameObject("CrossSceneDestinationParent");
+            SceneManager.MoveGameObjectToScene(destinationParent, additiveScene);
+
+            try
+            {
+                Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+                Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
+                Assert.IsTrue(EditorSceneManager.SetActiveScene(additiveScene));
+                string parentTransformId = GlobalObjectId.GetGlobalObjectIdSlow(destinationParent.transform).ToString();
+
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = typeof(AtomicPrefabReferenceHolder).FullName,
+                    ["searchMethod"] = "by_component",
+                    ["parent"] = destinationParent.GetInstanceIDCompat(),
+                    ["dryRun"] = true
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                Assert.IsTrue(response["data"]["change_preview"]["changes"].Any(change =>
+                    change["ObjectId"].Value<string>() == parentTransformId
+                    && change["Property"].Value<string>().StartsWith("m_Children", System.StringComparison.Ordinal)));
+                Assert.IsNull(root.transform.parent);
+                Assert.AreEqual(testScene, root.scene);
+                Assert.AreEqual(0, destinationParent.transform.childCount);
+                Assert.IsFalse(testScene.isDirty);
+                Assert.IsFalse(additiveScene.isDirty);
+            }
+            finally
+            {
+                if (sourceMarker != null)
+                    Object.DestroyImmediate(sourceMarker);
+                if (destinationParent != null)
+                    Object.DestroyImmediate(destinationParent);
+                if (testScene.IsValid() && testScene.isLoaded)
+                    EditorSceneManager.SetActiveScene(testScene);
+                if (additiveScene.IsValid() && additiveScene.isLoaded)
+                    EditorSceneManager.CloseScene(additiveScene, true);
+                AssetDatabase.DeleteAsset(AdditiveScenePath);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_DuplicateDryRunTracksCrossSceneDestinationParent()
+        {
+            var sourceMarker = root.AddComponent<AtomicPrefabReferenceHolder>();
+            Scene additiveScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var destinationParent = new GameObject("CrossSceneDuplicateParent");
+            SceneManager.MoveGameObjectToScene(destinationParent, additiveScene);
+
+            try
+            {
+                Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+                Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
+                Assert.IsTrue(EditorSceneManager.SetActiveScene(additiveScene));
+                string parentTransformId = GlobalObjectId.GetGlobalObjectIdSlow(destinationParent.transform).ToString();
+
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "duplicate",
+                    ["target"] = typeof(AtomicPrefabReferenceHolder).FullName,
+                    ["searchMethod"] = "by_component",
+                    ["parent"] = destinationParent.GetInstanceIDCompat(),
+                    ["new_name"] = "CrossSceneCopy",
+                    ["dryRun"] = true
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                JToken changes = response["data"]["change_preview"]["changes"];
+                Assert.IsTrue(changes.Any(change =>
+                    change["ObjectId"].Value<string>() == parentTransformId
+                    && change["Property"].Value<string>().StartsWith("m_Children", System.StringComparison.Ordinal)));
+                Assert.IsTrue(changes.Any(change =>
+                    change["Kind"].Value<string>() == "added"
+                    && change["ObjectPath"].Value<string>().EndsWith("/CrossSceneCopy", System.StringComparison.Ordinal)));
+                Assert.AreEqual(0, destinationParent.transform.childCount);
+                Assert.IsFalse(testScene.isDirty);
+                Assert.IsFalse(additiveScene.isDirty);
+            }
+            finally
+            {
+                if (sourceMarker != null)
+                    Object.DestroyImmediate(sourceMarker);
+                if (destinationParent != null)
+                    Object.DestroyImmediate(destinationParent);
+                if (testScene.IsValid() && testScene.isLoaded)
+                    EditorSceneManager.SetActiveScene(testScene);
+                if (additiveScene.IsValid() && additiveScene.isLoaded)
+                    EditorSceneManager.CloseScene(additiveScene, true);
+                AssetDatabase.DeleteAsset(AdditiveScenePath);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_DryRunRejectsUnknownTagBeforeProjectSettingsMutation()
+        {
+            string unknownTag = "MCPGuardedTag_" + System.Guid.NewGuid().ToString("N");
+            Assert.IsFalse(InternalEditorUtility.tags.Contains(unknownTag));
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "create",
+                ["name"] = "UnknownTagPreviewObject",
+                ["tag"] = unknownTag,
+                ["dryRun"] = true
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNTRACKED_PROJECT_SETTINGS_MUTATION", response["code"].Value<string>());
+            Assert.IsFalse(InternalEditorUtility.tags.Contains(unknownTag));
+            Assert.IsNull(GameObject.Find("UnknownTagPreviewObject"));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
+        public void ManageGameObject_GuardRejectsUnknownTagBeforeProjectSettingsMutation()
+        {
+            string unknownTag = "MCPGuardedTag_" + System.Guid.NewGuid().ToString("N");
+            Assert.IsFalse(InternalEditorUtility.tags.Contains(unknownTag));
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["tag"] = unknownTag,
+                ["changeGuard"] = new JObject
+                {
+                    ["mode"] = "reject_unexpected",
+                    ["expected_objects"] = new JArray(root.name)
+                }
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNTRACKED_PROJECT_SETTINGS_MUTATION", response["code"].Value<string>());
+            Assert.AreEqual("Untagged", root.tag);
+            Assert.IsFalse(InternalEditorUtility.tags.Contains(unknownTag));
+            Assert.IsFalse(testScene.isDirty);
+        }
+
+        [Test]
         public void ManageGameObject_CreatePrefabDryRunRemovesNewParentFolders()
         {
             Assert.IsFalse(AssetDatabase.IsValidFolder(DryRunPrefabFolder));
@@ -783,6 +979,49 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsFalse(
                 testScene.isDirty,
                 "Rolling back a prefab-instance override must restore the scene's initial clean state.");
+        }
+
+        [Test]
+        public void ManageGameObject_RenamePrefabStageRootDryRunRestoresAssetMoveAndGuid()
+        {
+            var prefabSource = new GameObject("AtomicMutationTest");
+            PrefabUtility.SaveAsPrefabAsset(prefabSource, PrefabPath);
+            Object.DestroyImmediate(prefabSource);
+            string originalGuid = AssetDatabase.AssetPathToGUID(PrefabPath);
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+
+            try
+            {
+                var prefabStage = PrefabStageUtility.OpenPrefab(PrefabPath);
+                Assert.IsNotNull(prefabStage);
+                GameObject prefabRoot = prefabStage.prefabContentsRoot;
+
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = prefabRoot.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["name"] = "AtomicMutationRenamed",
+                    ["dryRun"] = true
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                Assert.IsTrue(response["data"]["change_preview"]["changes"].Any(change =>
+                    change["AssetPath"].Value<string>() == PrefabPath
+                    || change["AssetPath"].Value<string>() == RenamedPrefabPath));
+                Assert.IsNotNull(AssetDatabase.LoadAssetAtPath<GameObject>(PrefabPath));
+                Assert.IsNull(AssetDatabase.LoadAssetAtPath<GameObject>(RenamedPrefabPath));
+                Assert.AreEqual(originalGuid, AssetDatabase.AssetPathToGUID(PrefabPath));
+                Assert.AreEqual(PrefabPath, AssetDatabase.GUIDToAssetPath(originalGuid));
+                Assert.AreEqual(PrefabPath, PrefabStageUtility.GetCurrentPrefabStage()?.assetPath);
+                Assert.AreEqual("AtomicMutationTest", PrefabStageUtility.GetCurrentPrefabStage()?.prefabContentsRoot.name);
+                Assert.IsFalse(File.Exists(Path.Combine(projectRoot, RenamedPrefabPath + ".meta")));
+            }
+            finally
+            {
+                StageUtility.GoToMainStage();
+                AssetDatabase.DeleteAsset(RenamedPrefabPath);
+            }
         }
 
         [Test]
@@ -837,6 +1076,41 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsFalse(testScene.isDirty);
             Object.DestroyImmediate(before);
             Object.DestroyImmediate(owner);
+        }
+
+        [Test]
+        public void ManagePrefabs_CreateAndReplaceNestedWithoutReferencePreservationAllowsParentChildSlot()
+        {
+            var parent = new GameObject("AtomicNestedParent");
+            var before = new GameObject("AtomicNestedBefore");
+            var after = new GameObject("AtomicNestedAfter");
+            before.transform.SetParent(parent.transform, false);
+            root.transform.SetParent(parent.transform, false);
+            after.transform.SetParent(parent.transform, false);
+            int originalIndex = root.transform.GetSiblingIndex();
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            string parentTransformId = GlobalObjectId.GetGlobalObjectIdSlow(parent.transform).ToString();
+
+            JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "create_and_replace",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["prefabPath"] = PrefabPath,
+                ["preserveSceneReferences"] = false
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            root = parent.transform.GetChild(originalIndex).gameObject;
+            Assert.AreEqual(3, parent.transform.childCount);
+            Assert.AreEqual("AtomicNestedBefore", parent.transform.GetChild(0).name);
+            Assert.AreEqual("MutationTransactionRoot", root.name);
+            Assert.AreEqual("AtomicNestedAfter", parent.transform.GetChild(2).name);
+            Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(root));
+            Assert.IsTrue(response["data"]["changes"].Any(change =>
+                change["ObjectId"].Value<string>() == parentTransformId
+                && change["Property"].Value<string>() == $"m_Children.Array.data[{originalIndex}]"));
+            Assert.IsFalse(testScene.isDirty);
         }
 
         [Test]

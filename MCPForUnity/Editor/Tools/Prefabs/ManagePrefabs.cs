@@ -172,6 +172,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             List<ExternalReferenceState> references = preserveSceneReferences
                 ? CaptureExternalReferences(source)
                 : new List<ExternalReferenceState>();
+            HashSet<string> hierarchyKeys = CaptureParentHierarchyKeys(source.transform);
             UnityEngine.Object[] transactionTargets = new UnityEngine.Object[] { source }
                 .Concat(references.Select(reference => reference.Owner))
                 .Where(target => target != null)
@@ -237,7 +238,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                     IReadOnlyList<SerializedChange> changes = transaction.Changes;
                     HashSet<string> referenceKeys = new HashSet<string>(references.Select(item => item.Key), StringComparer.Ordinal);
                     IReadOnlyList<SerializedChange> unexpected = changes.Where(change =>
-                        !IsAtomicChangeInScope(change, sourcePath, sanitizedPath, referenceKeys)).ToArray();
+                        !IsAtomicChangeInScope(change, sourcePath, sanitizedPath, referenceKeys, hierarchyKeys)).ToArray();
                     if (guard != null)
                         unexpected = unexpected.Concat(guard.Unexpected(changes)).Distinct().ToArray();
                     if (unexpected.Count > 0)
@@ -300,13 +301,41 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             }
         }
 
-        private static bool IsAtomicChangeInScope(SerializedChange change, string sourcePath, string prefabPath, HashSet<string> referenceKeys)
+        private static bool IsAtomicChangeInScope(
+            SerializedChange change,
+            string sourcePath,
+            string prefabPath,
+            HashSet<string> referenceKeys,
+            HashSet<string> hierarchyKeys)
         {
             bool inSceneHierarchy = string.Equals(change.ObjectPath, sourcePath, StringComparison.Ordinal)
                 || change.ObjectPath.StartsWith(sourcePath + "/", StringComparison.Ordinal);
             bool inPrefabAsset = string.Equals(change.AssetPath, prefabPath, StringComparison.Ordinal);
             string key = change.ObjectId + "|" + change.ComponentType + "|" + change.Property;
-            return inSceneHierarchy || inPrefabAsset || referenceKeys.Contains(key);
+            return inSceneHierarchy || inPrefabAsset || referenceKeys.Contains(key) || hierarchyKeys.Contains(key);
+        }
+
+        private static HashSet<string> CaptureParentHierarchyKeys(Transform source)
+        {
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            Transform parent = source?.parent;
+            if (parent == null)
+                return keys;
+
+            var serializedParent = new SerializedObject(parent);
+            SerializedProperty children = serializedParent.FindProperty("m_Children");
+            int siblingIndex = source.GetSiblingIndex();
+            if (children == null || !children.isArray || siblingIndex < 0 || siblingIndex >= children.arraySize)
+                return keys;
+
+            SerializedProperty childSlot = children.GetArrayElementAtIndex(siblingIndex);
+            if (childSlot.objectReferenceValue != source)
+                return keys;
+            keys.Add(
+                TransactionObjectId(parent) + "|"
+                + parent.GetType().FullName + "|"
+                + childSlot.propertyPath);
+            return keys;
         }
 
         private static bool TransformMatches(Transform current, AtomicTransformState expected)

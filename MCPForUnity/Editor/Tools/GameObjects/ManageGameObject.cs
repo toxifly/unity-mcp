@@ -6,6 +6,9 @@ using System.Reflection;
 using MCPForUnity.Editor.Helpers; // For Response class
 using MCPForUnity.Editor.Services.MutationTransactions;
 using Newtonsoft.Json.Linq;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEditorInternal;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -96,6 +99,10 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 if (guard == null && !dryRun)
                     return ExecuteAction(action, @params, targetToken, searchMethod);
 
+                ErrorResponse tagError = ValidateGuardedTagMutation(action, @params);
+                if (tagError != null)
+                    return tagError;
+
                 var options = new MutationTransactionOptions
                 {
                     DirtyScenePolicy = dryRun ? DirtyScenePolicy.Preserve : DirtyScenePolicy.Reject
@@ -110,13 +117,35 @@ namespace MCPForUnity.Editor.Tools.GameObjects
 
                 if (action == "create")
                 {
+                    GameObject destinationParent = ResolveDestinationParent(@params);
+                    Func<object> mutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
+                    if (destinationParent != null)
+                    {
+                        return guard != null
+                            ? guard.Execute(new UnityEngine.Object[] { destinationParent }, mutation, options, dryRun)
+                            : MutationChangeGuard.ExecutePreview(new UnityEngine.Object[] { destinationParent }, mutation, options);
+                    }
+
                     Scene scene = SceneManager.GetActiveScene();
                     if (!scene.IsValid() || !scene.isLoaded)
                         return new ErrorResponse("TARGET_NOT_FOUND", new { message = "No loaded active scene is available for guarded creation." });
-                    Func<object> mutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
                     return guard != null
                         ? guard.Execute(scene, options, mutation, dryRun)
                         : MutationChangeGuard.ExecutePreview(scene, options, mutation);
+                }
+
+                if (action == "delete")
+                {
+                    List<GameObject> deleteTargets = ManageGameObjectCommon.FindObjectsInternal(
+                        targetToken,
+                        searchMethod,
+                        true);
+                    if (deleteTargets.Count == 0)
+                        return new ErrorResponse($"Target GameObject(s) ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
+                    Func<object> deleteMutation = () => GameObjectDelete.Handle(deleteTargets, targetToken, searchMethod);
+                    return guard != null
+                        ? guard.Execute(deleteTargets.Cast<UnityEngine.Object>(), deleteMutation, options, dryRun)
+                        : MutationChangeGuard.ExecutePreview(deleteTargets.Cast<UnityEngine.Object>(), deleteMutation, options);
                 }
 
                 GameObject target = ManageGameObjectCommon.FindObjectInternal(
@@ -125,20 +154,94 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     new JObject { ["searchInactive"] = true });
                 if (target == null)
                     return new ErrorResponse($"Target GameObject ('{targetToken}') not found using method '{searchMethod ?? "default"}'.");
+                AddPrefabRenameAssetPaths(action, @params, target, options);
+                var transactionTargets = new List<UnityEngine.Object> { target };
+                if (action == "modify" || action == "duplicate")
+                {
+                    GameObject destinationParent = ResolveDestinationParent(@params);
+                    if (destinationParent != null && destinationParent != target)
+                        transactionTargets.Add(destinationParent);
+                }
                 Func<object> targetMutation = () => ExecuteAction(action, @params, targetToken, searchMethod);
                 return guard != null
-                    ? guard.Execute(new UnityEngine.Object[] { target }, targetMutation, options, dryRun)
-                    : MutationChangeGuard.ExecutePreview(new UnityEngine.Object[] { target }, targetMutation, options);
+                    ? guard.Execute(transactionTargets, targetMutation, options, dryRun)
+                    : MutationChangeGuard.ExecutePreview(transactionTargets, targetMutation, options);
             }
             catch (MutationTransactionException e)
             {
-                return new ErrorResponse(e.Code, new { message = e.Message, committed = false, rolled_back = true });
+                return new ErrorResponse(e.Code, new
+                {
+                    message = e.Message,
+                    committed = false,
+                    rolled_back = e.Code != "ROLLBACK_FAILED"
+                });
             }
             catch (Exception e)
             {
                 McpLog.Error($"[ManageGameObject] Action '{action}' failed: {e}");
                 return new ErrorResponse($"Internal error processing action '{action}': {e.Message}");
             }
+        }
+
+        private static ErrorResponse ValidateGuardedTagMutation(string action, JObject @params)
+        {
+            if (action != "create" && action != "modify")
+                return null;
+
+            JToken tagToken = @params["tag"];
+            if (tagToken == null)
+                return null;
+            string requestedTag = tagToken.ToString();
+            string effectiveTag = string.IsNullOrEmpty(requestedTag) ? "Untagged" : requestedTag;
+            if (effectiveTag == "Untagged" || InternalEditorUtility.tags.Contains(effectiveTag))
+                return null;
+
+            return new ErrorResponse("UNTRACKED_PROJECT_SETTINGS_MUTATION", new
+            {
+                message = $"Tag '{effectiveTag}' does not exist. Guarded operations and dry runs cannot automatically change ProjectSettings/TagManager.asset; create the tag first with manage_editor.",
+                tag = effectiveTag,
+                committed = false,
+                rolled_back = false
+            });
+        }
+
+        private static GameObject ResolveDestinationParent(JObject @params)
+        {
+            JToken parentToken = @params["parent"];
+            if (parentToken == null || parentToken.Type == JTokenType.Null
+                || (parentToken.Type == JTokenType.String && string.IsNullOrEmpty(parentToken.ToString())))
+                return null;
+            return ManageGameObjectCommon.FindObjectInternal(parentToken, "by_id_or_name_or_path");
+        }
+
+        private static void AddPrefabRenameAssetPaths(
+            string action,
+            JObject @params,
+            GameObject target,
+            MutationTransactionOptions options)
+        {
+            if (action != "modify")
+                return;
+            string requestedName = @params["name"]?.ToString()
+                ?? @params["new_name"]?.ToString()
+                ?? @params["newName"]?.ToString();
+            if (string.IsNullOrEmpty(requestedName))
+                return;
+
+            var prefabStage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (prefabStage == null || prefabStage.prefabContentsRoot != target)
+                return;
+            string currentPath = AssetPathUtility.NormalizeSeparators(prefabStage.assetPath);
+            string directory = System.IO.Path.GetDirectoryName(currentPath);
+            string newPath = AssetPathUtility.NormalizeSeparators(
+                System.IO.Path.Combine(directory, requestedName + ".prefab"));
+            if (string.Equals(currentPath, newPath, StringComparison.Ordinal))
+                return;
+
+            options.AdditionalAssetPaths = (options.AdditionalAssetPaths ?? Array.Empty<string>())
+                .Concat(new[] { currentPath, newPath })
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
         }
 
         private static object ExecuteAction(string action, JObject @params, JToken targetToken, string searchMethod)

@@ -72,7 +72,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             // The duplicate's own blocks are new (auto-scoped); the parent it landed under gains
             // an m_Children entry on its Transform.
             Services.MutationTransactions.SceneMutationLedger.Record(duplicatedGo.transform.parent);
-            EditorSceneManager.MarkSceneDirty(EditorSceneManager.GetActiveScene());
+            EditorSceneManager.MarkSceneDirty(duplicatedGo.scene);
 
             Selection.activeGameObject = duplicatedGo;
 
