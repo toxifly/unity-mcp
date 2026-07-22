@@ -67,6 +67,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1118,24 +1119,51 @@ def run_smoke_leg(instance_id: str, junit_path: Path, max_retries: int, retry_ms
 def _start_utf(send, mode: str, instance_id: str, init_timeout_ms: int | None,
                max_retries: int, retry_ms: int) -> tuple[str | None, dict[str, Any] | Any]:
     """Issue run_tests; return (job_id, raw_start_response). Gates on result.success."""
-    params: dict[str, Any] = {"mode": mode, "includeFailedTests": True}
+    request_token = uuid.uuid4().hex
+    params: dict[str, Any] = {
+        "mode": mode,
+        "includeFailedTests": True,
+        "requestToken": request_token,
+    }
     if init_timeout_ms is not None:
         params["initTimeout"] = init_timeout_ms
     # tests_running back-off: a "tests already running" reply is an ErrorResponse
     # (success:false), so it must be detected BEFORE the _ok() gate, not after.
+    start_reply_may_be_lost = False
     for _ in range(5):
         try:
             start = send("run_tests", params, instance_id=instance_id,
                          max_retries=max_retries, retry_ms=retry_ms, retry_on_reload=True)
-        except Exception:
+        except Exception as exc:
             # Transport hiccup starting the job (editor briefly busy / reloading);
-            # back off and retry rather than crashing.
+            # only a failure tagged after sendall proves the request may have reached
+            # Unity. Connection discovery and preflight failures are safe to retry but
+            # must not authorize adopting another client's running job.
+            if getattr(exc, "request_may_have_reached_unity", False):
+                start_reply_may_be_lost = True
             time.sleep(min(float(retry_ms) / 1000.0 * 2, 2.0))
             continue
         err = None
         if isinstance(start, dict):
             err = start.get("error") or start.get("code") or _dig(start, "error")
         if err == "tests_running":
+            # Only adopt after a prior delivery-uncertain attempt and an exact request-token
+            # match. Mode and timing alone cannot distinguish another concurrent client's job.
+            running_id = _dig(start, "job_id")
+            running_token = _dig(start, "request_token")
+            if (start_reply_may_be_lost and running_id
+                    and str(running_token or "") == request_token):
+                try:
+                    probe = send("get_test_job", {"job_id": str(running_id)},
+                                 instance_id=instance_id, max_retries=max_retries,
+                                 retry_ms=retry_ms, retry_on_reload=True)
+                except Exception:
+                    probe = None
+                if (_ok(probe)
+                        and str(_dig(probe, "mode") or "") == mode
+                        and str(_dig(probe, "request_token") or "") == request_token):
+                    print(f"::notice:: adopted already-running {mode} job {running_id}")
+                    return str(running_id), probe
             back = _dig(start, "retry_after_ms") or 1000
             time.sleep(min(float(back) / 1000.0, 5.0))
             continue

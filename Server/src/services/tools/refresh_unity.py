@@ -121,18 +121,32 @@ async def wait_for_editor_ready(
     *,
     baseline_compile_started_ms: int | None = None,
     require_compile_observation: bool = False,
+    baseline_domain_reload_after_ms: int | None = None,
+    require_reload_observation: bool = False,
 ) -> EditorReadyResult:
     """Poll editor_state until Unity is ready for tool calls.
 
     Returns (ready, elapsed_seconds).  Treats exceptions from
     get_editor_state as "not ready yet" so the loop survives transient
     connection errors during domain reload.
+
+    When require_reload_observation is set, readiness additionally requires
+    the domain reload that follows a successful compile to have completed.
+    For an observed compile, the reload completion timestamp must be newer
+    than that compile's start timestamp; an older reload that completed while
+    the command was waiting in transport preflight cannot satisfy the gate.
+    Between compile-finish and reload-start Unity briefly reports an idle
+    state, so without this a compile=request refresh can be declared ready
+    moments before the editor tears down every connection for the reload. A
+    compile that finishes with errors never reloads, so it satisfies the gate.
     """
     start = time.monotonic()
     ready_ticks: set[Any] = set()
     last_state: dict[str, Any] | None = None
     observed_busy = False
     observed_compile = False
+    observed_reload = False
+    requested_compile_started_ms: int | None = None
     while time.monotonic() - start < timeout_s:
         try:
             data = await _read_editor_state(ctx)
@@ -148,18 +162,51 @@ async def wait_for_editor_ready(
                     baseline_compile_started_ms is None or compile_started > baseline_compile_started_ms
                 ):
                     observed_compile = True
+                    if (requested_compile_started_ms is None
+                            or compile_started > requested_compile_started_ms):
+                        requested_compile_started_ms = compile_started
+                        # A reload observed before this compile began belongs to
+                        # earlier work and cannot satisfy this compile's gate.
+                        observed_reload = False
+                reload_after = compilation.get("last_domain_reload_after_unix_ms")
+                if require_compile_observation:
+                    reload_is_new = (
+                        isinstance(reload_after, int)
+                        and requested_compile_started_ms is not None
+                        and reload_after > requested_compile_started_ms
+                    )
+                else:
+                    reload_is_new = (
+                        isinstance(reload_after, int)
+                        and (baseline_domain_reload_after_ms is None
+                             or reload_after > baseline_domain_reload_after_ms)
+                    )
+                if reload_is_new:
+                    observed_reload = True
                 if blocking & _REAL_BLOCKING_REASONS:
                     observed_busy = True
                     ready_ticks.clear()
-                elif not require_compile_observation or observed_compile:
-                    tick = data.get("update_tick", data.get("sequence"))
-                    if tick is None:
-                        tick = ("poll", len(ready_ticks))
-                    ready_ticks.add(tick)
-                    if len(ready_ticks) >= 2:
-                        return EditorReadyResult(
-                            True, time.monotonic() - start, data, observed_busy, observed_compile
-                        )
+                else:
+                    compile_satisfied = not require_compile_observation or observed_compile
+                    compile_failed = (
+                        observed_compile
+                        and (not require_compile_observation
+                             or requested_compile_started_ms is not None)
+                        and compilation.get("is_compiling") is not True
+                        and int(compilation.get("last_compile_errors") or 0) > 0
+                    )
+                    reload_satisfied = (
+                        not require_reload_observation or observed_reload or compile_failed
+                    )
+                    if compile_satisfied and reload_satisfied:
+                        tick = data.get("update_tick", data.get("sequence"))
+                        if tick is None:
+                            tick = ("poll", len(ready_ticks))
+                        ready_ticks.add(tick)
+                        if len(ready_ticks) >= 2:
+                            return EditorReadyResult(
+                                True, time.monotonic() - start, data, observed_busy, observed_compile
+                            )
         except Exception:
             pass  # not ready yet — keep polling
         await asyncio.sleep(0.25)
@@ -318,6 +365,8 @@ async def refresh_unity(
             timeout_s=60.0,
             baseline_compile_started_ms=job.get("baseline_compile_started_ms"),
             require_compile_observation=bool(job.get("compile_requested")),
+            baseline_domain_reload_after_ms=job.get("baseline_domain_reload_after_ms"),
+            require_reload_observation=bool(job.get("compile_requested")),
         )
         if not result.ready:
             return MCPResponse(
@@ -349,10 +398,14 @@ async def refresh_unity(
         # Prevent an old terminal compile record from satisfying a request when
         # the baseline snapshot was incomplete.
         baseline_compile_started_ms = int(time.time() * 1000) - 1000
+    baseline_domain_reload_after_ms = baseline_compilation.get("last_domain_reload_after_unix_ms")
+    if compile == "request" and not isinstance(baseline_domain_reload_after_ms, int):
+        baseline_domain_reload_after_ms = int(time.time() * 1000) - 1000
     refresh_job_id = str(uuid.uuid4())
     _register_refresh_job(refresh_job_id, {
         "unity_instance": unity_instance,
         "baseline_compile_started_ms": baseline_compile_started_ms,
+        "baseline_domain_reload_after_ms": baseline_domain_reload_after_ms,
         "compile_requested": compile == "request",
     })
 
@@ -384,6 +437,14 @@ async def refresh_unity(
         hint = response_dict.get("hint")
         err = (response_dict.get("error") or response_dict.get("message") or "").lower()
         reason = _extract_response_reason(response_dict)
+        response_data = response_dict.get("data")
+        response_stage = response_data.get("stage") if isinstance(response_data, dict) else None
+
+        if response_stage == "preflight":
+            # The transport exhausted its reload wait before dispatching the command.
+            # A polling-only job cannot resume work that Unity never received.
+            _REFRESH_JOBS.pop(refresh_job_id, None)
+            return MCPResponse(**response_dict)
 
         # Connection closed/timeout during compile = refresh was triggered, Unity is reloading
         # This is SUCCESS, not failure - don't return error to prevent Claude Code from retrying
@@ -392,7 +453,7 @@ async def refresh_unity(
             or "disconnected" in err
             or "aborted" in err  # WinError 10053: connection aborted
             or "timeout" in err
-            or reason == "reloading"
+            or (reason == "reloading" and response_stage != "preflight")
         )
 
         if is_connection_lost and compile == "request":
@@ -404,7 +465,7 @@ async def refresh_unity(
             logger.info("refresh_unity: Connection lost during compile (expected - domain reload triggered)")
             recovered_from_disconnect = True
         elif hint == "retry" or "could not connect" in err:
-            # Retryable error - proceed to wait loop if wait_for_ready
+            # A retryable failure after dispatch can proceed to the readiness loop.
             if not wait_for_ready:
                 _REFRESH_JOBS.pop(refresh_job_id, None)
                 return MCPResponse(**response_dict)
@@ -425,6 +486,8 @@ async def refresh_unity(
             timeout_s=60.0,
             baseline_compile_started_ms=baseline_compile_started_ms,
             require_compile_observation=compile == "request",
+            baseline_domain_reload_after_ms=baseline_domain_reload_after_ms,
+            require_reload_observation=compile == "request",
         )
         ready_confirmed = ready_result.ready
 

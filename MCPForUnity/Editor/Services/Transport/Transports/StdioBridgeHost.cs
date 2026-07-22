@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Constants;
@@ -62,6 +63,34 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private static readonly Stopwatch _uptime = Stopwatch.StartNew();
         private static volatile int _consecutiveTimeouts = 0;
         private static bool _processCommandsHooked = false;
+
+#if UNITY_EDITOR_WIN
+        private const uint HANDLE_FLAG_INHERIT = 0x1;
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetHandleInformation(IntPtr hObject, uint dwMask, uint dwFlags);
+#endif
+
+        /// <summary>
+        /// Marks a socket handle non-inheritable on Windows. Unity spawns child processes
+        /// (asset import workers, the crash handler) with handle inheritance; an inherited
+        /// socket outlives this editor as a zombie — a listener that accepts connections
+        /// nothing ever services, or a half-dead client connection. No-op elsewhere.
+        /// </summary>
+        private static void PreventHandleInheritance(Socket socket)
+        {
+#if UNITY_EDITOR_WIN
+            try { SetHandleInformation(socket.Handle, HANDLE_FLAG_INHERIT, 0); } catch { }
+#endif
+        }
+
+        /// <summary>
+        /// Handshake banner sent to every client on accept. Space-delimited KEY=VALUE tokens
+        /// after the fixed prefix; values never contain spaces. PROJECT carries the same
+        /// 8-char project hash used in the status file name, so a client can detect that it
+        /// reached the wrong editor (stale port registry) or a zombie socket.
+        /// </summary>
+        public static string BuildHandshakeBanner() =>
+            $"WELCOME UNITY-MCP 1 FRAMING=1 PROJECT={ComputeProjectHash(Application.dataPath)} PORT={currentUnityPort}\n";
 
         private static void IoInfo(string s) { McpLog.Info(s, always: false); }
 
@@ -373,6 +402,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private static TcpListener CreateConfiguredListener(int port)
         {
             var newListener = new TcpListener(IPAddress.Loopback, port);
+            PreventHandleInheritance(newListener.Server);
 #if UNITY_EDITOR_OSX
             // SO_REUSEADDR is intentionally NOT set. On macOS it allows multiple
             // processes (including AssetImportWorkers) to bind the same port,
@@ -473,6 +503,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 try
                 {
                     TcpClient client = await listener.AcceptTcpClientAsync();
+                    PreventHandleInheritance(client.Client);
                     client.Client.SetSocketOption(
                         SocketOptionLevel.Socket,
                         SocketOptionName.KeepAlive,
@@ -530,7 +561,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                     catch { }
                     try
                     {
-                        string handshake = "WELCOME UNITY-MCP 1 FRAMING=1\n";
+                        string handshake = BuildHandshakeBanner();
                         byte[] handshakeBytes = System.Text.Encoding.ASCII.GetBytes(handshake);
                         using var cts = new CancellationTokenSource(FrameIOTimeoutMs);
 #if NETSTANDARD2_1 || NET6_0_OR_GREATER
@@ -546,22 +577,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         return;
                     }
 
-                    // In stdio transport there is only ever one active Python server.
-                    // A new connection means the old one is dead — close stale clients so
-                    // their hung ReadFrameAsUtf8Async calls throw and exit cleanly.
-                    TcpClient[] staleClients;
-                    lock (clientsLock)
-                    {
-                        staleClients = activeClients.Where(c => c != client).ToArray();
-                    }
-                    if (staleClients.Length > 0)
-                    {
-                        McpLog.Info($"Closing {staleClients.Length} stale client(s) after new connection", always: false);
-                        foreach (var stale in staleClients)
-                        {
-                            try { stale.Close(); } catch { }
-                        }
-                    }
+                    // Concurrent clients are served independently: several agents (or a test
+                    // harness next to a resident MCP server) may hold connections at once, and
+                    // a new connection must not kill the others mid-request. Dead or idle
+                    // connections self-reap — ReadFrameAsUtf8Async times out after
+                    // FrameIOTimeoutMs and the handler exits.
 
                     while (isRunning && !token.IsCancellationRequested)
                     {

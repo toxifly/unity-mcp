@@ -37,8 +37,13 @@ async def _send(
 @mcp_for_unity_tool(
     group="core",
     description=(
-        "Save exactly one loaded Unity scene through the mutation transaction boundary. "
-        "The save rolls back if serialization introduces property changes beyond the pre-save state."
+        "Save exactly one loaded Unity scene. By default (unscoped_changes=include) the whole "
+        "scene is saved. With unscoped_changes=exclude the scene is instead merged into the "
+        "on-disk file at object-block granularity: new objects and objects mutated through "
+        "ledger-instrumented MCP tools (component add/remove/set-property and the GameObject "
+        "tools) are written; everything else — ambient drift (ExecuteAlways previews, "
+        "layout-driven RectTransforms, TMP re-baking) but also Inspector, execute_code, and "
+        "not-yet-instrumented MCP tool edits — is reported but NOT baked into the file."
     ),
     annotations=ToolAnnotations(title="Save Scene Scoped", destructiveHint=True),
 )
@@ -48,12 +53,27 @@ async def save_scene_scoped(
     scene_name: Annotated[str | None, Field(description="Name of a loaded scene; use scene_path when names are ambiguous.")] = None,
     dirty_scene_policy: Annotated[
         Literal["reject", "preserve", "allow"],
-        Field(description="How to handle a scene that is already dirty. Saving defaults to allow."),
+        Field(description="How to handle a scene that is already dirty. Saving defaults to allow. Only applies to unscoped_changes=include."),
     ] = "allow",
+    unscoped_changes: Annotated[
+        Literal["exclude", "include", "reject"],
+        Field(
+            description=(
+                "What to do with in-memory changes not tracked as intentional edits: "
+                "'include' (default) performs a whole-scene save (bakes everything); "
+                "'exclude' keeps their on-disk bytes and reports them as suppressed drift — "
+                "only safe when all edits went through ledger-instrumented tools; "
+                "'reject' fails the save if any unscoped drift exists."
+            )
+        ),
+    ] = "include",
 ) -> dict[str, Any]:
     if not scene_path and not scene_name:
         return {"success": False, "message": "Provide scene_path or scene_name."}
-    params: dict[str, Any] = {"dirtyScenePolicy": dirty_scene_policy}
+    params: dict[str, Any] = {
+        "dirtyScenePolicy": dirty_scene_policy,
+        "unscopedChanges": unscoped_changes,
+    }
     if scene_path:
         params["scenePath"] = scene_path
     if scene_name:

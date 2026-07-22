@@ -163,6 +163,218 @@ async def test_send_command_for_instance_fails_fast_on_stale_when_retry_disabled
     send_mock.assert_not_awaited()
 
 
+def test_reload_retry_default_count_spans_time_budget(monkeypatch):
+    """The default retry count must not cap the reload wait below UNITY_MCP_RELOAD_MAX_WAIT_S.
+
+    Sleeps are clamped to <=250ms, so the old default of 40 retries silently
+    capped the wait at 10s against a 20s budget; a domain reload longer than
+    10s then surfaced 'Unity is reloading; please retry' to the client.
+    """
+    from transport.legacy import unity_connection as mod
+
+    calls = [0]
+
+    class StubConn:
+        def send_command(self, command_type, params, **kwargs):
+            calls[0] += 1
+            return {"state": "reloading"}
+
+    monkeypatch.setattr(mod, "get_unity_connection", lambda instance_id=None: StubConn())
+    monkeypatch.delenv("UNITY_MCP_RELOAD_MAX_WAIT_S", raising=False)
+
+    clock = [0.0]
+    monkeypatch.setattr(mod.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: clock.__setitem__(0, clock[0] + max(seconds, 0.25)))
+
+    response = mod.send_command_with_retry("read_console", {})
+
+    payload = response.model_dump() if hasattr(response, "model_dump") else response
+    assert payload["success"] is False
+    assert payload["hint"] == "retry"
+    # 1 initial send + enough retries to span the full 20s budget at 250ms each.
+    assert calls[0] > 41, f"retry count capped the wait too early (sends={calls[0]})"
+
+
+def test_success_response_never_classified_as_reloading(monkeypatch):
+    """A successful response must be returned as-is even if its message embeds 'reload'.
+
+    Regression: creating a GameObject named 'ReloadProbe' yielded the success
+    message "GameObject 'ReloadProbe' created successfully in scene.", which the
+    substring sniff classified as reloading — so the retry loop re-executed the
+    create every 250ms for the full 20s budget (80 duplicate objects) and then
+    discarded the result as 'Unity is reloading; please retry'.
+    """
+    from transport.legacy import unity_connection as mod
+
+    calls = [0]
+    success = {
+        "success": True,
+        "message": "GameObject 'ReloadProbe_1' created successfully in scene.",
+        "data": {"name": "ReloadProbe_1", "instanceID": -100},
+    }
+
+    class StubConn:
+        def send_command(self, command_type, params, **kwargs):
+            calls[0] += 1
+            return dict(success)
+
+    monkeypatch.setattr(mod, "get_unity_connection", lambda instance_id=None: StubConn())
+
+    response = mod.send_command_with_retry(
+        "manage_gameobject", {"action": "create", "name": "ReloadProbe_1"})
+
+    assert calls[0] == 1, f"success response was retried (sends={calls[0]})"
+    assert response["success"] is True
+    assert response["data"]["instanceID"] == -100
+
+
+def test_preflight_reads_status_from_env_dir_for_matching_instance(monkeypatch, tmp_path):
+    """The preflight status check honors UNITY_MCP_STATUS_DIR and rejects
+    before connecting when the target instance reports reloading."""
+    from transport.legacy.unity_connection import UnityConnection
+
+    (tmp_path / "unity-mcp-status-aaaa.json").write_text(
+        '{"reloading": true, "reason": "reloading"}', encoding="utf-8")
+    monkeypatch.setenv("UNITY_MCP_STATUS_DIR", str(tmp_path))
+
+    conn = UnityConnection(port=6400, instance_id="Proj@aaaa")
+    conn.connect = lambda: pytest.fail("must not connect while instance is reloading")
+
+    response = conn.send_command("read_console", {}, max_attempts=0)
+
+    assert response.success is False
+    assert response.hint == "retry"
+    assert response.data == {"reason": "reloading", "stage": "preflight"}
+
+
+def test_preflight_ignores_other_instances_status_file(monkeypatch, tmp_path):
+    """A reloading status file from a DIFFERENT editor must not gate this
+    instance (regression: fallback returned the most recent status file
+    regardless of hash, so one editor's reload blocked commands to another)."""
+    from transport.legacy.unity_connection import UnityConnection
+
+    (tmp_path / "unity-mcp-status-aaaa.json").write_text(
+        '{"reloading": true, "reason": "reloading"}', encoding="utf-8")
+    monkeypatch.setenv("UNITY_MCP_STATUS_DIR", str(tmp_path))
+
+    conn = UnityConnection(port=1, instance_id="Other@bbbb")
+    conn.connect = lambda: False
+    conn._ensure_live_connection = lambda: None
+
+    # Preflight must pass (no status file for bbbb) and proceed to the
+    # (stubbed, failing) connect instead of returning a reloading rejection.
+    with pytest.raises(ConnectionError):
+        conn.send_command("read_console", {}, max_attempts=0)
+
+
+def test_preflight_rejection_retried_even_when_retry_on_reload_disabled(monkeypatch):
+    """A preflight-stage rejection means the command never reached Unity, so it
+    is safe to wait and re-send even for commands with retry_on_reload=False."""
+    from models.models import MCPResponse
+    from transport.legacy import unity_connection as mod
+
+    calls = [0]
+    preflight_rejection = MCPResponse(
+        success=False,
+        error="Unity is reloading; please retry",
+        hint="retry",
+        data={"reason": "reloading", "stage": "preflight"},
+    )
+
+    class StubConn:
+        def send_command(self, command_type, params, **kwargs):
+            calls[0] += 1
+            if calls[0] < 3:
+                return preflight_rejection
+            return {"success": True, "message": "Refresh requested."}
+
+    monkeypatch.setattr(mod, "get_unity_connection", lambda instance_id=None: StubConn())
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    response = mod.send_command_with_retry(
+        "refresh_unity", {"mode": "force"}, retry_on_reload=False)
+
+    assert calls[0] == 3
+    assert response["success"] is True
+
+
+def test_preflight_stage_preserved_when_reload_wait_exhausts(monkeypatch):
+    """An exhausted preflight wait must still say the command was never sent."""
+    from models.models import MCPResponse
+    from transport.legacy import unity_connection as mod
+
+    preflight_rejection = MCPResponse(
+        success=False,
+        error="Unity is reloading; please retry",
+        hint="retry",
+        data={"reason": "reloading", "stage": "preflight"},
+    )
+
+    class StubConn:
+        def send_command(self, command_type, params, **kwargs):
+            return preflight_rejection
+
+    monkeypatch.setattr(mod, "get_unity_connection", lambda instance_id=None: StubConn())
+    monkeypatch.setattr(mod.time, "sleep", lambda seconds: None)
+
+    response = mod.send_command_with_retry(
+        "refresh_unity", {"mode": "force"}, max_retries=1,
+        retry_on_reload=False,
+    )
+
+    assert response.success is False
+    assert response.data["reason"] == "reloading"
+    assert response.data["stage"] == "preflight"
+
+
+def test_unity_reloading_error_not_retried_when_retry_on_reload_disabled(monkeypatch):
+    """A reloading error from Unity itself (command was sent) must NOT be
+    re-sent when retry_on_reload=False — re-sending could re-trigger a reload."""
+    from transport.legacy import unity_connection as mod
+
+    calls = [0]
+
+    class StubConn:
+        def send_command(self, command_type, params, **kwargs):
+            calls[0] += 1
+            return {"success": False, "error": "Unity is reloading; please retry",
+                    "data": {"reason": "reloading"}}
+
+    monkeypatch.setattr(mod, "get_unity_connection", lambda instance_id=None: StubConn())
+
+    response = mod.send_command_with_retry(
+        "refresh_unity", {"mode": "force"}, retry_on_reload=False)
+
+    assert calls[0] == 1
+    assert response["success"] is False
+
+
+def test_extract_response_reason_word_boundaries():
+    """The reload sniff matches the word, not identifiers that embed it."""
+    from transport.legacy.unity_connection import _extract_response_reason
+
+    # Genuine reloading signals still classify.
+    assert _extract_response_reason({"state": "reloading"}) == "reloading"
+    assert _extract_response_reason(
+        {"success": False, "error": "Unity is reloading; please retry"}) == "reloading"
+    assert _extract_response_reason(
+        {"success": False, "error": "compiling_or_reloading"}) == "reloading"
+    assert _extract_response_reason(
+        {"success": False, "error": "Editor busy: domain reload in progress"}) == "reloading"
+
+    # Identifiers merely containing 'reload' do not.
+    assert _extract_response_reason(
+        {"success": False, "error": "GameObject 'ReloadProbe_1' not found"}) is None
+    assert _extract_response_reason(
+        {"success": False, "error": "GameObject 'Reload2' not found"}) is None
+    assert _extract_response_reason(
+        {"success": False, "error": "GameObject '2Reload' not found"}) is None
+
+    # Successful responses never yield a reason, whatever the message says.
+    assert _extract_response_reason(
+        {"success": True, "message": "Domain reload finished."}) is None
+
+
 @pytest.mark.asyncio
 async def test_read_console_during_simulated_reload(monkeypatch):
     """

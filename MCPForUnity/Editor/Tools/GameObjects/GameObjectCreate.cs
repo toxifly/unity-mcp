@@ -180,7 +180,15 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     UnityEngine.Object.DestroyImmediate(newGo);
                     return new ErrorResponse($"Parent specified ('{parentToken}') but not found.");
                 }
-                newGo.transform.SetParent(parentGo.transform, true);
+                // worldPositionStays: false — a freshly created object has no meaningful world pose
+                // to preserve; keeping it would bake the parent's inverse transform into the local
+                // values (e.g. a prefab parented under a CanvasScaler-scaled Canvas arrives with
+                // localScale 0.5 and a huge localPosition instead of its authored layout values).
+                newGo.transform.SetParent(parentGo.transform, false);
+                // The new object's own blocks need no ledger entry (new blocks are scoped
+                // automatically), but the parent's Transform gains an m_Children entry — and a
+                // prefab-instance parent gains m_AddedGameObjects on its PrefabInstance block.
+                Services.MutationTransactions.SceneMutationLedger.Record(parentGo.transform);
             }
 
             // Set Transform

@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Reflection;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -24,13 +25,28 @@ namespace MCPForUnityTests.Editor.Tools
 
             var currentJobIdField = testJobManagerType.GetField("_currentJobId", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(currentJobIdField, "Could not locate TestJobManager._currentJobId field");
+            var jobsField = testJobManagerType.GetField("Jobs", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(jobsField, "Could not locate TestJobManager.Jobs field");
+            var jobs = jobsField.GetValue(null) as IDictionary;
+            Assert.NotNull(jobs, "Could not access TestJobManager.Jobs dictionary");
+
+            var testJobType = asm.GetType("MCPForUnity.Editor.Services.TestJob");
+            Assert.NotNull(testJobType, "Could not locate TestJob type via reflection");
+            object busyJob = Activator.CreateInstance(testJobType, true);
+            testJobType.GetProperty("JobId")?.SetValue(busyJob, "busy-test-job-id");
+            testJobType.GetProperty("RequestToken")?.SetValue(busyJob, "busy-owner-token");
 
             var originalJobId = currentJobIdField.GetValue(null) as string;
+            object originalJob = jobs.Contains("busy-test-job-id") ? jobs["busy-test-job-id"] : null;
+            jobs["busy-test-job-id"] = busyJob;
             currentJobIdField.SetValue(null, "busy-test-job-id");
 
             try
             {
-                var resultObj = MCPForUnity.Editor.Tools.RunTests.HandleCommand(new JObject()).GetAwaiter().GetResult();
+                var resultObj = MCPForUnity.Editor.Tools.RunTests.HandleCommand(new JObject
+                {
+                    ["requestToken"] = "new-caller-token"
+                }).GetAwaiter().GetResult();
 
                 Assert.IsInstanceOf<ErrorResponse>(resultObj);
                 var err = (ErrorResponse)resultObj;
@@ -41,10 +57,18 @@ namespace MCPForUnityTests.Editor.Tools
                 Assert.NotNull(data, "Expected data payload on tests_running error");
                 Assert.AreEqual("tests_running", data["reason"]?.ToString());
                 Assert.GreaterOrEqual(data["retry_after_ms"]?.Value<int>() ?? 0, 500);
+                Assert.AreEqual("busy-test-job-id", data["job_id"]?.ToString(),
+                    "the active job id must be surfaced so callers can adopt their own lost-reply run");
+                Assert.AreEqual("busy-owner-token", data["request_token"]?.ToString(),
+                    "the active job's token, not the retrying caller's token, must establish ownership");
             }
             finally
             {
                 currentJobIdField.SetValue(null, originalJobId);
+                if (originalJob != null)
+                    jobs["busy-test-job-id"] = originalJob;
+                else
+                    jobs.Remove("busy-test-job-id");
             }
         }
 

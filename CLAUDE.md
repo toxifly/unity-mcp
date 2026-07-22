@@ -36,7 +36,7 @@ MCP tools call Unity via WebSocket (`send_with_unity_instance`). CLI commands ca
 
 ### Transport Modes
 
-- **Stdio**: Single-agent only. Separate Python process per client. Legacy TCP bridge to Unity. New connections stomp old ones.
+- **Stdio**: Separate Python process per client. Legacy TCP bridge to Unity serves concurrent connections independently (dead ones self-reap via the frame-read timeout); the handshake banner carries the project hash so clients reject a stale/wrong port.
 - **HTTP**: Multi-agent ready. Single shared Python server. WebSocket hub at `/hub/plugin`. Session isolation via `client_id`.
 
 ## Code Philosophy
@@ -175,6 +175,13 @@ python tools/local_harness.py
 ```
 
 Key flags: `--legs smoke,editmode,playmode` (subset to run), `--project-path` (target project, default `TestProjects/UnityMCPTests`), `--reuse` (attach to an already-resident bridge instead of booting one), `--keep-alive` (leave the Editor running after the legs), `--no-warmup` (skip the warm-up import phase).
+
+If a leg fails with `run_tests start failed` / `tests_running (exhausted)`, the harness likely lost the reply to its own `run_tests` (editor busy right after boot), mistook its own job for a conflicting run, and killed the editor mid-run — which makes UTF silently resume that run on the next boot and can leave the bridge unresponsive. Don't keep re-running the harness; fall back to driving UTF directly (no bridge involved, exit 0 = pass, 2 = failures):
+
+```bash
+Unity.exe -batchmode -nographics -projectPath TestProjects/UnityMCPTests \
+  -runTests -testPlatform EditMode -testResults <abs>/results.xml -logFile <abs>/utf.log
+```
 
 Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setup failure, `3` project does not compile, `4` no Unity license / Hub seat, `5` Editor binary/version not found. Requires a Hub-activated Editor locally (no ULF/serial).
 

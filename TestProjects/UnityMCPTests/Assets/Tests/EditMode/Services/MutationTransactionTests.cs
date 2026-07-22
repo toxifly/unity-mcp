@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Services.MutationTransactions;
 using MCPForUnity.Editor.Tools;
 using MCPForUnity.Editor.Tools.GameObjects;
@@ -11,6 +12,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using MCPForUnity.Runtime.Helpers;
+using TestNamespace;
 
 namespace MCPForUnityTests.Editor.Services
 {
@@ -150,6 +152,306 @@ namespace MCPForUnityTests.Editor.Services
             }
 
             Assert.IsFalse(root.activeSelf);
+        }
+
+        [Test]
+        public void Rollback_DiscardsLedgerRecordsFromTheRolledBackMutation()
+        {
+            var preexisting = new GameObject("LedgerPreexisting");
+            try
+            {
+                // Saving assigns a fileID (Record skips unsaved objects) and clears the ledger.
+                Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+                string preexistingId = GlobalObjectId.GetGlobalObjectIdSlow(preexisting).ToString();
+                SceneMutationLedger.Record(preexisting);
+
+                using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
+                {
+                    root.SetActive(false);
+                    SceneMutationLedger.Record(root);
+                    transaction.Rollback();
+                }
+
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.AreEquivalent(new[] { preexistingId }, touched,
+                    "Rollback must discard the mutation's ledger records but keep pre-transaction ones.");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+                Object.DestroyImmediate(preexisting);
+            }
+        }
+
+        [Test]
+        public void CommitWithoutSave_KeepsLedgerRecordsFromTheMutation()
+        {
+            string rootId = GlobalObjectId.GetGlobalObjectIdSlow(root).ToString();
+            try
+            {
+                using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
+                {
+                    root.SetActive(false);
+                    SceneMutationLedger.Record(root);
+                    transaction.Commit(save: false);
+                }
+
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(touched, rootId);
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void UnityUndoAndRedo_InvalidateLedgerRecordsFromCommittedMutation()
+        {
+            string rootId = GlobalObjectId.GetGlobalObjectIdSlow(root).ToString();
+            try
+            {
+                using (MutationTransaction transaction = MutationTransaction.Begin(new Object[] { root }))
+                {
+                    root.SetActive(false);
+                    SceneMutationLedger.Record(root);
+                    transaction.Commit(save: false);
+                }
+
+                var (beforeUndo, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(beforeUndo, rootId);
+
+                Undo.PerformUndo();
+
+                Assert.IsTrue(root.activeSelf, "the committed mutation should be undoable");
+                var (afterUndo, deleted) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                Assert.IsEmpty(afterUndo, "Undo must invalidate stale touched scopes");
+                Assert.IsEmpty(deleted, "Undo must invalidate stale deletion scopes");
+
+                SceneMutationLedger.Record(root);
+                CollectionAssert.Contains(
+                    SceneMutationLedger.SnapshotForScene(testScene.path).touched, rootId);
+
+                Undo.PerformRedo();
+
+                Assert.IsFalse(root.activeSelf, "the undone mutation should be redoable");
+                var (afterRedo, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                Assert.IsEmpty(afterRedo, "Redo must invalidate stale touched scopes");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_ModifyGameObjectFieldOnly_DoesNotLedgerTransform()
+        {
+            string rootId = GlobalObjectId.GetGlobalObjectIdSlow(root).ToString();
+            string transformId = GlobalObjectId.GetGlobalObjectIdSlow(root.transform).ToString();
+            try
+            {
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = root.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["setActive"] = false
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(touched, rootId);
+                CollectionAssert.DoesNotContain(touched, transformId,
+                    "A GameObject-field-only modify must not mark the Transform block as intentional, " +
+                    "or the scoped save bakes the Transform's ambient in-memory drift.");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ComponentOps_NoOpAssignment_DoesNotLedgerComponent()
+        {
+            var audioSource = root.AddComponent<AudioSource>();
+            audioSource.volume = 0.5f;
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+            string audioSourceId = GlobalObjectId.GetGlobalObjectIdSlow(audioSource).ToString();
+
+            try
+            {
+                bool success = ComponentOps.SetProperty(
+                    audioSource, "volume", new JValue(0.5f), out string error);
+
+                Assert.IsTrue(success, error);
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.DoesNotContain(touched, audioSourceId,
+                    "assigning the existing value must not scope ambient drift in the component block");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_NoOpNestedAssignment_DoesNotLedgerAmbientComponentDrift()
+        {
+            var collider = root.AddComponent<BoxCollider>();
+            collider.center = Vector3.zero;
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+            string colliderId = GlobalObjectId.GetGlobalObjectIdSlow(collider).ToString();
+
+            // Simulate unrelated in-memory drift that an exclude-unscoped save must not bake.
+            collider.size = new Vector3(9f, 8f, 7f);
+
+            try
+            {
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = root.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["componentProperties"] = new JObject
+                    {
+                        ["BoxCollider"] = new JObject
+                        {
+                            ["center.x"] = 0f
+                        }
+                    }
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.DoesNotContain(touched, colliderId,
+                    "repeating a nested serialized value must not scope unrelated ambient drift");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ComponentOps_ChangedAssignment_LedgersComponent()
+        {
+            var audioSource = root.AddComponent<AudioSource>();
+            audioSource.volume = 0.5f;
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+            string audioSourceId = GlobalObjectId.GetGlobalObjectIdSlow(audioSource).ToString();
+
+            try
+            {
+                bool success = ComponentOps.SetProperty(
+                    audioSource, "volume", new JValue(0.25f), out string error);
+
+                Assert.IsTrue(success, error);
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(touched, audioSourceId,
+                    "a serialized value change must still be scoped");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_ModifyTransformOnly_DoesNotLedgerGameObject()
+        {
+            string rootId = GlobalObjectId.GetGlobalObjectIdSlow(root).ToString();
+            string transformId = GlobalObjectId.GetGlobalObjectIdSlow(root.transform).ToString();
+            try
+            {
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = root.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["position"] = new JArray { 1.0f, 2.0f, 3.0f }
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(touched, transformId);
+                CollectionAssert.DoesNotContain(touched, rootId,
+                    "A transform-only modify must not mark the GameObject block as intentional, " +
+                    "or the scoped save bakes the GameObject block's ambient in-memory drift.");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_NestedComponentPropertyPath_LedgersTheTraversedObject()
+        {
+            var collider = root.AddComponent<BoxCollider>();
+            // Re-save so the collider gets a fileID (Record skips unsaved objects); saving clears the ledger.
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+            string colliderId = GlobalObjectId.GetGlobalObjectIdSlow(collider).ToString();
+            string transformId = GlobalObjectId.GetGlobalObjectIdSlow(root.transform).ToString();
+            try
+            {
+                JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "modify",
+                    ["target"] = root.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["componentProperties"] = new JObject
+                    {
+                        ["BoxCollider"] = new JObject
+                        {
+                            ["transform.localPosition"] = new JArray { 4.0f, 5.0f, 6.0f }
+                        }
+                    }
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                Assert.AreEqual(new Vector3(4f, 5f, 6f), root.transform.localPosition);
+                var (touched, _) = SceneMutationLedger.SnapshotForScene(testScene.path);
+                CollectionAssert.Contains(touched, transformId,
+                    "A nested path that traverses to another object must ledger the object the write lands in.");
+                CollectionAssert.DoesNotContain(touched, colliderId,
+                    "The component the path started from was not serialized-changed and must not be ledgered.");
+            }
+            finally
+            {
+                SceneMutationLedger.Clear(testScene.path);
+            }
+        }
+
+        [Test]
+        public void ManageGameObject_NestedComponentPropertyPathDryRun_RollsBackTraversedObject()
+        {
+            root.AddComponent<BoxCollider>();
+            // Re-save so the scene starts clean for the post-rollback dirty check.
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene));
+            Vector3 originalPosition = root.transform.localPosition;
+
+            JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
+            {
+                ["action"] = "modify",
+                ["target"] = root.GetInstanceIDCompat(),
+                ["searchMethod"] = "by_id",
+                ["componentProperties"] = new JObject
+                {
+                    ["BoxCollider"] = new JObject
+                    {
+                        ["transform.localPosition"] = new JArray { 7.0f, 8.0f, 9.0f }
+                    }
+                },
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsTrue(response["data"]["change_preview"]["rolled_back"].Value<bool>());
+            Assert.AreEqual(originalPosition, root.transform.localPosition,
+                "Rolling back a dry-run must restore objects written through nested property paths.");
+            Assert.IsFalse(testScene.isDirty);
         }
 
         [Test]
@@ -650,6 +952,59 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void SaveSceneScoped_ExcludeWritesLedgeredChangeAndSuppressesDrift()
+        {
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+
+            root.name = "ScopedRenamedRoot";
+            SceneMutationLedger.Record(root);
+            drift.name = "DriftRenamedObject";
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath,
+                ["unscopedChanges"] = "exclude"
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("merge_scoped", response["data"]["save_mode"].Value<string>());
+            Assert.AreEqual(ScenePath, response["data"]["assets_saved"][0].Value<string>());
+            Assert.AreEqual(1, response["data"]["blocks"]["scoped"].Value<int>());
+            Assert.GreaterOrEqual(response["data"]["blocks"]["drift_suppressed"].Value<int>(), 1);
+            Assert.IsTrue(response["data"]["scene_still_dirty_in_memory"].Value<bool>());
+
+            string savedText = File.ReadAllText(ScenePath);
+            StringAssert.Contains("ScopedRenamedRoot", savedText);
+            StringAssert.DoesNotContain("DriftRenamedObject", savedText);
+            StringAssert.Contains("DriftObject", savedText);
+
+            var (touched, _) = SceneMutationLedger.SnapshotForScene(ScenePath);
+            Assert.IsEmpty(touched, "A merge save must clear the scene's ledger entries.");
+        }
+
+        [Test]
+        public void SaveSceneScoped_RejectFailsWhenUnscopedDriftExists()
+        {
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+
+            drift.name = "DriftRenamedObject";
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath,
+                ["unscopedChanges"] = "reject"
+            }));
+
+            Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("UNSCOPED_CHANGES", response["code"].Value<string>());
+            StringAssert.DoesNotContain("DriftRenamedObject", File.ReadAllText(ScenePath));
+        }
+
+        [Test]
         public void PreviewAssetChanges_LeavesDirtySceneUnsaved()
         {
             root.SetActive(false);
@@ -668,13 +1023,4 @@ namespace MCPForUnityTests.Editor.Services
         }
     }
 
-    public sealed class AtomicPrefabReferenceHolder : MonoBehaviour
-    {
-        public GameObject Target;
-    }
-
-    public sealed class MutationTransactionDirtyAsset : ScriptableObject
-    {
-        public string Value;
-    }
 }

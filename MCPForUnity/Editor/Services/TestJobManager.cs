@@ -48,6 +48,7 @@ namespace MCPForUnity.Editor.Services
     internal sealed class TestJob
     {
         public string JobId { get; set; }
+        public string RequestToken { get; set; }
         public TestJobStatus Status { get; set; }
         public string Mode { get; set; }
         public long StartedUnixMs { get; set; }
@@ -100,6 +101,20 @@ namespace MCPForUnity.Editor.Services
         public static string CurrentJobId
         {
             get { lock (LockObj) return _currentJobId; }
+        }
+
+        public static string CurrentRequestToken
+        {
+            get
+            {
+                lock (LockObj)
+                {
+                    return !string.IsNullOrEmpty(_currentJobId)
+                        && Jobs.TryGetValue(_currentJobId, out var job)
+                            ? job.RequestToken
+                            : null;
+                }
+            }
         }
 
         public static bool HasRunningJob
@@ -158,6 +173,7 @@ namespace MCPForUnity.Editor.Services
         private sealed class PersistedJob
         {
             public string job_id { get; set; }
+            public string request_token { get; set; }
             public string status { get; set; }
             public string mode { get; set; }
             public long started_unix_ms { get; set; }
@@ -226,6 +242,7 @@ namespace MCPForUnity.Editor.Services
                         Jobs[pj.job_id] = new TestJob
                         {
                             JobId = pj.job_id,
+                            RequestToken = pj.request_token,
                             Status = ParseStatus(pj.status),
                             Mode = pj.mode,
                             StartedUnixMs = pj.started_unix_ms,
@@ -304,6 +321,7 @@ namespace MCPForUnity.Editor.Services
                         .Select(j => new PersistedJob
                         {
                             job_id = j.JobId,
+                            request_token = j.RequestToken,
                             status = j.Status.ToString().ToLowerInvariant(),
                             mode = j.Mode,
                             started_unix_ms = j.StartedUnixMs,
@@ -342,7 +360,11 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
-        public static string StartJob(TestMode mode, TestFilterOptions filterOptions = null, long initTimeoutMs = 0)
+        public static string StartJob(
+            TestMode mode,
+            TestFilterOptions filterOptions = null,
+            long initTimeoutMs = 0,
+            string requestToken = null)
         {
             // Clamp to valid range: non-positive values mean "use default", cap at 10 minutes
             if (initTimeoutMs < 0) initTimeoutMs = 0;
@@ -355,6 +377,7 @@ namespace MCPForUnity.Editor.Services
             var job = new TestJob
             {
                 JobId = jobId,
+                RequestToken = string.IsNullOrWhiteSpace(requestToken) ? null : requestToken.Trim(),
                 Status = TestJobStatus.Running,
                 Mode = modeStr,
                 StartedUnixMs = started,
@@ -692,6 +715,7 @@ namespace MCPForUnity.Editor.Services
             return new
             {
                 job_id = job.JobId,
+                request_token = job.RequestToken,
                 status = job.Status.ToString().ToLowerInvariant(),
                 mode = job.Mode,
                 started_unix_ms = job.StartedUnixMs,

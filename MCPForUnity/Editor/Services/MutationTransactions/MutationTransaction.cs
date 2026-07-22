@@ -82,6 +82,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
         private readonly string prefabStageAssetPath;
         private readonly Dictionary<string, bool> initialDirtyScenes;
         private readonly Dictionary<string, bool> initialDirtyAssets;
+        private readonly SceneMutationLedger.Snapshot ledgerSnapshot;
         private readonly int undoGroup;
         private bool finished;
 
@@ -121,6 +122,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             assetBytes = SnapshotAssetBytes(targetAssetPaths);
             initialDirtyAssetContents = SnapshotDirtyAssetContents(initialDirtyAssets);
             before = CaptureFingerprints(targets, targetScenes, targetAssetPaths);
+            ledgerSnapshot = SceneMutationLedger.CaptureSnapshot();
 
             Undo.IncrementCurrentGroup();
             undoGroup = Undo.GetCurrentGroup();
@@ -305,7 +307,18 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             Exception failure = null;
             try
             {
-                Undo.RevertAllDownToGroup(undoGroup);
+                // Restore before RestoreEditorSetup: a scene reloaded from disk during setup
+                // restore fires sceneOpened, which must clear the restored entries, not stale ones.
+                SceneMutationLedger.RestoreSnapshot(ledgerSnapshot);
+                SceneMutationLedger.SuppressUndoRedoClear = true;
+                try
+                {
+                    Undo.RevertAllDownToGroup(undoGroup);
+                }
+                finally
+                {
+                    SceneMutationLedger.SuppressUndoRedoClear = false;
+                }
                 IReadOnlyCollection<string> importedAssetPaths = RestoreAssetBytes();
                 RestoreDirtyAssetContents(importedAssetPaths);
                 RestoreMissingAssetFolders();
