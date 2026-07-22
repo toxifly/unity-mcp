@@ -238,7 +238,9 @@ def test_preflight_reads_status_from_env_dir_for_matching_instance(monkeypatch, 
     monkeypatch.setenv("UNITY_MCP_STATUS_DIR", str(tmp_path))
 
     conn = UnityConnection(port=6400, instance_id="Proj@aaaa")
-    conn.connect = lambda: pytest.fail("must not connect while instance is reloading")
+    conn.connect = lambda *_args, **_kwargs: pytest.fail(
+        "must not connect while instance is reloading"
+    )
 
     response = conn.send_command("read_console", {}, max_attempts=0)
 
@@ -258,7 +260,7 @@ def test_preflight_ignores_other_instances_status_file(monkeypatch, tmp_path):
     monkeypatch.setenv("UNITY_MCP_STATUS_DIR", str(tmp_path))
 
     conn = UnityConnection(port=1, instance_id="Other@bbbb")
-    conn.connect = lambda: False
+    conn.connect = lambda *_args, **_kwargs: False
     conn._ensure_live_connection = lambda: None
 
     # Preflight must pass (no status file for bbbb) and proceed to the

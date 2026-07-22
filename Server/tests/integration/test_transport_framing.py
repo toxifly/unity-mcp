@@ -241,12 +241,19 @@ class _DeliveryStageSocket:
         self.fail_send_number = fail_send_number
         self.send_count = 0
         self.closed = False
+        self.timeout = None
 
     def getblocking(self):
         return True
 
     def setblocking(self, _value):
         pass
+
+    def gettimeout(self):
+        return self.timeout
+
+    def settimeout(self, value):
+        self.timeout = value
 
     def recv(self, *_args):
         raise BlockingIOError()
