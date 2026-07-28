@@ -103,15 +103,18 @@ namespace MCPForUnityTests.Editor.Tools
         // Volume Actions
         // =====================================================================
 
-        private void AssumeVolumeSystem()
+        // Assert.Ignore, not Assume.That: Assume yields Inconclusive, which the Test Runner
+        // window renders as a failure and which leaves the run's resultState non-Passed.
+        private void RequireVolumeSystem()
         {
-            Assume.That(_hasVolumeSystem, "Volume system not available — skipping.");
+            if (!_hasVolumeSystem)
+                Assert.Ignore("Volume system not available — skipping.");
         }
 
         [Test]
         public void VolumeCreate_Global_CreatesVolume()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
                 ["action"] = "volume_create",
@@ -127,7 +130,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeCreate_WithEffects_AddsEffects()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
                 ["action"] = "volume_create",
@@ -147,7 +150,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeCreate_Local_CreatesNonGlobal()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
                 ["action"] = "volume_create",
@@ -161,7 +164,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeAddEffect_AddsEffect()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_AddFx");
 
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
@@ -178,7 +181,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeAddEffect_Duplicate_ReturnsError()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_DupFx");
             ManageGraphics.HandleCommand(new JObject
             {
@@ -200,7 +203,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeAddEffect_InvalidEffect_ReturnsError()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_BadFx");
 
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
@@ -216,7 +219,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeSetEffect_SetsParameters()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_SetFx");
             ManageGraphics.HandleCommand(new JObject
             {
@@ -242,7 +245,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeSetEffect_InvalidParam_ReportsFailed()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_BadParam");
             ManageGraphics.HandleCommand(new JObject
             {
@@ -267,7 +270,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeRemoveEffect_RemovesEffect()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_RmFx");
             ManageGraphics.HandleCommand(new JObject
             {
@@ -298,7 +301,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeRemoveEffect_NonExistent_ReturnsError()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_RmMissing");
 
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
@@ -314,7 +317,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeGetInfo_ReturnsEffectList()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_Info");
             ManageGraphics.HandleCommand(new JObject
             {
@@ -340,7 +343,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeGetInfo_NonExistentTarget_ReturnsError()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
                 ["action"] = "volume_get_info",
@@ -352,7 +355,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeSetProperties_UpdatesWeightAndPriority()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             CreateTestVolume("GfxTest_Props");
 
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
@@ -380,7 +383,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeListEffects_ReturnsAvailableTypes()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             var result = ToJObject(ManageGraphics.HandleCommand(
                 new JObject { ["action"] = "volume_list_effects" }));
             Assert.IsTrue(result.Value<bool>("success"), result.ToString());
@@ -393,7 +396,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void VolumeCreateProfile_CreatesAsset()
         {
-            AssumeVolumeSystem();
+            RequireVolumeSystem();
             string path = $"{TempRoot}/TestProfile";
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
@@ -623,7 +626,8 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void PipelineGetSettings_ReturnsSettings()
         {
-            Assume.That(_hasURP || _hasHDRP, "Built-in pipeline has no settings asset — skipping.");
+            if (!_hasURP && !_hasHDRP)
+                Assert.Ignore("Built-in pipeline has no settings asset — skipping.");
             var result = ToJObject(ManageGraphics.HandleCommand(
                 new JObject { ["action"] = "pipeline_get_settings" }));
             Assert.IsTrue(result.Value<bool>("success"), result.ToString());
@@ -648,15 +652,16 @@ namespace MCPForUnityTests.Editor.Tools
         // Renderer Feature Actions (URP only)
         // =====================================================================
 
-        private void AssumeURP()
+        private void RequireURP()
         {
-            Assume.That(_hasURP, "URP not available — skipping.");
+            if (!_hasURP)
+                Assert.Ignore("URP not available — skipping.");
         }
 
         [Test]
         public void FeatureList_ReturnsFeatures()
         {
-            AssumeURP();
+            RequireURP();
             var result = ToJObject(ManageGraphics.HandleCommand(
                 new JObject { ["action"] = "feature_list" }));
             Assert.IsTrue(result.Value<bool>("success"), result.ToString());
@@ -667,7 +672,7 @@ namespace MCPForUnityTests.Editor.Tools
         [Test]
         public void FeatureAdd_InvalidType_ReturnsError()
         {
-            AssumeURP();
+            RequireURP();
             var result = ToJObject(ManageGraphics.HandleCommand(new JObject
             {
                 ["action"] = "feature_add",
