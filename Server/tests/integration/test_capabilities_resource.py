@@ -36,8 +36,8 @@ def test_capabilities_manifest_is_compact_and_matches_registered_tools():
     assert result["schema_version"] == 1
     assert result["workflow_resource"] == "mcpforunity://workflow"
     assert result["tools"] == {
-        "measure_ui": {"version": 1},
-        "inspect_serialized": {"version": 1},
+        "measure_ui": {"version": 2},
+        "inspect_serialized": {"version": 2},
         "inspect_provenance": {"version": 1},
         "mutation_transactions": {"version": 1},
         "scoped_saves": {"version": 1},

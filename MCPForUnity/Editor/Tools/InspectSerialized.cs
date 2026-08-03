@@ -51,10 +51,34 @@ namespace MCPForUnity.Editor.Tools
                 requests.Add(request);
             }
 
+            string requestedPrefabPath = p.Get("prefabPath") ?? p.Get("prefab_path");
+            PrefabAssetScope prefabScope = null;
+            if (!string.IsNullOrWhiteSpace(requestedPrefabPath)
+                && !PrefabAssetScope.TryOpen(requestedPrefabPath, out prefabScope, out string code, out string message))
+                return Error(code, message, new { prefab_path = requestedPrefabPath });
+
+            using (prefabScope)
+            {
+                return Inspect(requests, properties, includeInactive, includePrefab, includeMissing,
+                    pageSize, offset, prefabScope);
+            }
+        }
+
+        private static object Inspect(
+            List<TargetRequest> requests,
+            string[] properties,
+            bool includeInactive,
+            bool includePrefab,
+            bool includeMissing,
+            int pageSize,
+            int offset,
+            PrefabAssetScope prefabScope)
+        {
             var findings = new List<object>();
             foreach (TargetRequest request in requests)
             {
-                if (!TryResolve(request.Requested, includeInactive, out UnityEngine.Object target, out string code, out string message))
+                if (!TryResolve(request.Requested, includeInactive, prefabScope,
+                    out UnityEngine.Object target, out string code, out string message))
                     return Error(code, message, new { target = request.Requested });
 
                 List<UnityEngine.Object> serializedTargets = ResolveSerializedTargets(target, request.ComponentType, out string componentError);
@@ -76,13 +100,14 @@ namespace MCPForUnity.Editor.Tools
                         if (property == null) continue;
 
                         foundProperty = true;
-                        object finding = BuildFinding(request.Requested, serializedTarget, property, includePrefab);
+                        object finding = BuildFinding(request.Requested, serializedTarget, property,
+                            includePrefab, prefabScope);
                         bool brokenReference = IsMissingObjectReference(property);
                         if (!brokenReference || includeMissing)
                             findings.Add(finding);
                     }
                     if (!foundProperty && propertyTargets.Count > 0)
-                        findings.Add(NotFoundFinding(request.Requested, propertyTargets[0], propertyPath));
+                        findings.Add(NotFoundFinding(request.Requested, propertyTargets[0], propertyPath, prefabScope));
                 }
             }
 
@@ -93,6 +118,7 @@ namespace MCPForUnity.Editor.Tools
                 $"Inspected {page.Length} serialized finding(s).",
                 new
                 {
+                    prefab_path = prefabScope?.AssetPath,
                     findings = page,
                     total = findings.Count,
                     next_cursor = nextCursor,
@@ -123,6 +149,7 @@ namespace MCPForUnity.Editor.Tools
         private static bool TryResolve(
             string requested,
             bool includeInactive,
+            PrefabAssetScope prefabScope,
             out UnityEngine.Object target,
             out string code,
             out string message)
@@ -130,6 +157,34 @@ namespace MCPForUnity.Editor.Tools
             target = null;
             code = null;
             message = null;
+
+            if (prefabScope != null)
+            {
+                if (prefabScope.TryResolveGlobalObjectId(requested, out target, out bool parsedGlobalId))
+                    return true;
+                if (parsedGlobalId)
+                {
+                    code = "TARGET_NOT_FOUND";
+                    message = $"GlobalObjectId '{requested}' does not identify an object in prefab '{prefabScope.AssetPath}'.";
+                    return false;
+                }
+
+                List<GameObject> prefabMatches = prefabScope.FindGameObjects(requested, includeInactive, 2);
+                if (prefabMatches.Count == 0)
+                {
+                    code = "TARGET_NOT_FOUND";
+                    message = $"Serialized target '{requested}' was not found in prefab '{prefabScope.AssetPath}'.";
+                    return false;
+                }
+                if (prefabMatches.Count > 1)
+                {
+                    code = "TARGET_AMBIGUOUS";
+                    message = $"Serialized target '{requested}' matched multiple objects in prefab '{prefabScope.AssetPath}'; use a hierarchy path.";
+                    return false;
+                }
+                target = prefabMatches[0];
+                return true;
+            }
 
             if (GlobalObjectId.TryParse(requested, out GlobalObjectId globalId))
             {
@@ -235,10 +290,14 @@ namespace MCPForUnity.Editor.Tools
             string requested,
             UnityEngine.Object serializedTarget,
             SerializedProperty property,
-            bool includePrefab)
+            bool includePrefab,
+            PrefabAssetScope prefabScope)
         {
             bool isObjectReference = property.propertyType == SerializedPropertyType.ObjectReference;
             UnityEngine.Object referenced = isObjectReference ? property.objectReferenceValue : null;
+            UnityEngine.Object stableReferenced = prefabScope != null
+                ? prefabScope.StableAssetObjectFor(referenced)
+                : referenced;
             bool missing = IsMissingObjectReference(property);
             bool isNull = isObjectReference && referenced == null && !missing;
             GameObject owner = OwnerGameObject(serializedTarget);
@@ -247,7 +306,7 @@ namespace MCPForUnity.Editor.Tools
             {
                 target = requested,
                 path = owner != null ? GameObjectLookup.GetGameObjectPath(owner) : AssetDatabase.GetAssetPath(serializedTarget),
-                global_object_id = GlobalIdOf(serializedTarget),
+                global_object_id = GlobalIdOf(serializedTarget, prefabScope),
                 component = serializedTarget.GetType().FullName,
                 property = property.propertyPath,
                 found = true,
@@ -255,21 +314,25 @@ namespace MCPForUnity.Editor.Tools
                 value = isObjectReference ? null : ReadValue(property),
                 referenced_object = referenced != null ? referenced.name : null,
                 referenced_type = referenced != null ? referenced.GetType().FullName : null,
-                referenced_global_object_id = referenced != null ? GlobalIdOf(referenced) : null,
-                referenced_asset_path = referenced != null ? AssetDatabase.GetAssetPath(referenced) : null,
+                referenced_global_object_id = GlobalIdOf(stableReferenced, prefabScope),
+                referenced_asset_path = stableReferenced != null ? AssetDatabase.GetAssetPath(stableReferenced) : null,
                 is_null = isNull,
                 missing,
                 prefab = includePrefab ? PrefabInfo(serializedTarget, property) : null
             };
         }
 
-        private static object NotFoundFinding(string requested, UnityEngine.Object target, string property) => new
+        private static object NotFoundFinding(
+            string requested,
+            UnityEngine.Object target,
+            string property,
+            PrefabAssetScope prefabScope) => new
         {
             target = requested,
             path = OwnerGameObject(target) != null
                 ? GameObjectLookup.GetGameObjectPath(OwnerGameObject(target))
                 : AssetDatabase.GetAssetPath(target),
-            global_object_id = GlobalIdOf(target),
+            global_object_id = GlobalIdOf(target, prefabScope),
             component = target.GetType().FullName,
             property,
             found = false,
@@ -312,10 +375,17 @@ namespace MCPForUnity.Editor.Tools
 #endif
         }
 
-        private static string GlobalIdOf(UnityEngine.Object target)
+        private static string GlobalIdOf(UnityEngine.Object target, PrefabAssetScope prefabScope = null)
         {
             if (target == null) return null;
-            return GlobalObjectId.GetGlobalObjectIdSlow(target).ToString();
+            if (prefabScope != null && !AssetDatabase.Contains(target))
+                target = prefabScope.StableAssetObjectFor(target);
+            if (target == null) return null;
+
+            GlobalObjectId globalId = GlobalObjectId.GetGlobalObjectIdSlow(target);
+            return prefabScope != null && globalId.identifierType == 0
+                ? null
+                : globalId.ToString();
         }
 
         private static string SerializedKind(SerializedProperty property) =>

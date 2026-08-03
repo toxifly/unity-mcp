@@ -26,7 +26,11 @@ from transport.legacy.unity_connection import async_send_command_with_retry
         "Read uGUI RectTransform bounds without mutating scene state. Returns each target's "
         "rectangle in an explicit canvas, local, world, or screen-pixel coordinate space. "
         "Targets are GameObject names, or hierarchy paths ('Canvas/Panel/Button') for "
-        "disambiguation. Set include_children to also measure each target's immediate "
+        "disambiguation. Set prefab_path to inspect a prefab asset headlessly instead of "
+        "the loaded scene; a matching open Prefab Stage is reused so unsaved edits are visible. "
+        "Prefab layout groups are rebuilt before measurement, canvas space falls back to the "
+        "prefab's root RectTransform, and screen_pixels/on_screen/not_clipped are unavailable for prefab assets. "
+        "Set include_children to also measure each target's immediate "
         "RectTransform children. Inactive objects are "
         "included by default. Geometry assertions can be evaluated in the same call."
     )
@@ -61,6 +65,10 @@ async def measure_ui(
         list[dict[str, Any]] | None,
         Field(default=None, description="Optional geometry assertions evaluated in the declared coordinate space.")
     ] = None,
+    prefab_path: Annotated[
+        str | None,
+        Field(default=None, description="Optional project-relative .prefab asset path under Assets/ or Packages/. All target and reference lookups are scoped to this prefab."),
+    ] = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
 
@@ -77,6 +85,8 @@ async def measure_ui(
         params["targets"] = targets
     if container is not None:
         params["container"] = container
+    if prefab_path is not None:
+        params["prefabPath"] = prefab_path
     if reference is not None:
         params["reference"] = reference
     if include_children is not None:

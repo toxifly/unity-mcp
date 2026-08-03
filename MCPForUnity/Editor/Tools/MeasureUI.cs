@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using MCPForUnity.Editor.Helpers;
+using MCPForUnity.Runtime.Helpers;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -54,9 +56,29 @@ namespace MCPForUnity.Editor.Tools
                 return Error("INVALID_PARAMS", "Parameters cannot be null.");
 
             var p = new ToolParams(@params);
+            string requestedPrefabPath = p.Get("prefabPath") ?? p.Get("prefab_path");
+            PrefabAssetScope prefabScope = null;
+            if (!string.IsNullOrWhiteSpace(requestedPrefabPath)
+                && !PrefabAssetScope.TryOpen(requestedPrefabPath, out prefabScope, out string code, out string message))
+                return Error(code, message, new { prefab_path = requestedPrefabPath });
+
+            using (prefabScope)
+            {
+                return Measure(p, prefabScope);
+            }
+        }
+
+        private static object Measure(ToolParams p, PrefabAssetScope prefabScope)
+        {
             string space = NormalizeSpace(p.Get("space", "canvas"));
             if (space == null)
                 return Error("INVALID_COORDINATE_SPACE", "'space' must be one of: canvas, local, world, screen_pixels.");
+            if (prefabScope != null && space == "screen_pixels")
+                return Error(
+                    "UNSUPPORTED_COORDINATE_SPACE",
+                    "Prefab-asset measurement does not support 'screen_pixels' because the prefab has no rendered screen or camera.");
+            if (prefabScope != null && !TryRebuildPrefabLayout(prefabScope.Root, out string layoutError))
+                return Error("PREFAB_LAYOUT_FAILED", layoutError, new { prefab_path = prefabScope.AssetPath });
 
             bool includeInactive = p.GetBool("includeInactive", true);
             bool includeChildren = p.GetBool("includeChildren", false);
@@ -72,6 +94,13 @@ namespace MCPForUnity.Editor.Tools
             {
                 if (!(assertion is JObject assertionObject))
                     return Error("INVALID_PARAMS", "Each assertion must be an object.");
+                string assertionType = assertionObject.Value<string>("type")?.Trim();
+                if (prefabScope != null
+                    && (string.Equals(assertionType, "on_screen", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(assertionType, "not_clipped", StringComparison.OrdinalIgnoreCase)))
+                    return Error(
+                        "UNSUPPORTED_ASSERTION",
+                        $"Prefab-asset measurement does not support '{assertionType}' assertions because the prefab is not rendered.");
                 foreach (string assertionTarget in ReadAssertionTargets(assertionObject))
                 {
                     if (!requestedTargets.Contains(assertionTarget)) requestedTargets.Add(assertionTarget);
@@ -81,18 +110,17 @@ namespace MCPForUnity.Editor.Tools
             var resolved = new List<(string requested, GameObject go)>();
             foreach (string target in requestedTargets)
             {
-                var go = Resolve(target, includeInactive);
-                if (go == null)
-                    return Error("TARGET_NOT_FOUND", $"UI target '{target}' was not found.", new { target });
+                if (!TryResolve(target, includeInactive, prefabScope, out GameObject go, out string code, out string message))
+                    return Error(code, message, new { target });
                 resolved.Add((target, go));
             }
 
             GameObject container = null;
             if (!string.IsNullOrWhiteSpace(containerName))
             {
-                container = Resolve(containerName, includeInactive);
-                if (container == null)
-                    return Error("TARGET_NOT_FOUND", $"UI container '{containerName}' was not found.", new { target = containerName });
+                if (!TryResolve(containerName, includeInactive, prefabScope,
+                    out container, out string code, out string message))
+                    return Error(code, message, new { target = containerName });
                 if (resolved.All(item => item.go != container))
                     resolved.Add((containerName, container));
             }
@@ -108,12 +136,19 @@ namespace MCPForUnity.Editor.Tools
             }
 
             string referenceName = p.Get("reference");
-            GameObject referenceGo = string.IsNullOrWhiteSpace(referenceName)
-                ? DefaultReference(resolved.Select(item => item.go))
-                : Resolve(referenceName, includeInactive);
+            GameObject referenceGo;
+            if (string.IsNullOrWhiteSpace(referenceName))
+            {
+                referenceGo = DefaultReference(resolved.Select(item => item.go));
+                if (referenceGo == null && prefabScope != null)
+                    referenceGo = DefaultPrefabReference(prefabScope.Root, resolved.Select(item => item.go));
+            }
+            else if (!TryResolve(referenceName, includeInactive, prefabScope,
+                out referenceGo, out string code, out string message))
+            {
+                return Error(code, message, new { target = referenceName });
+            }
 
-            if (!string.IsNullOrWhiteSpace(referenceName) && referenceGo == null)
-                return Error("TARGET_NOT_FOUND", $"Coordinate reference '{referenceName}' was not found.", new { target = referenceName });
             if (space == "local" && string.IsNullOrWhiteSpace(referenceName))
                 return Error("COORDINATE_REFERENCE_REQUIRED", "Local-space measurement requires an explicit RectTransform 'reference'.");
             if (space == "canvas" && referenceGo == null)
@@ -154,6 +189,7 @@ namespace MCPForUnity.Editor.Tools
             int failed = assertionResults.Count(result => !result.Passed);
             return new SuccessResponse($"Measured {measurements.Count} UI element(s); {failed} assertion(s) failed.", new
             {
+                prefab_path = prefabScope?.AssetPath,
                 space,
                 reference = referencePath,
                 measurements = measurements.Select(measurement => measurement.ToResponse()).ToArray(),
@@ -365,11 +401,136 @@ namespace MCPForUnity.Editor.Tools
             return null;
         }
 
-        private static GameObject Resolve(string target, bool includeInactive)
+        private static bool TryResolve(
+            string requested,
+            bool includeInactive,
+            PrefabAssetScope prefabScope,
+            out GameObject target,
+            out string code,
+            out string message)
         {
-            if (string.IsNullOrWhiteSpace(target)) return null;
-            string method = target.Contains("/") ? "by_path" : "by_name";
-            return GameObjectLookup.FindByTarget(target, method, includeInactive);
+            target = null;
+            code = null;
+            message = null;
+            if (string.IsNullOrWhiteSpace(requested))
+            {
+                code = "TARGET_NOT_FOUND";
+                message = "UI target was empty.";
+                return false;
+            }
+
+            List<GameObject> matches;
+            if (prefabScope != null)
+            {
+                matches = prefabScope.FindGameObjects(requested, includeInactive, 2);
+            }
+            else
+            {
+                string method = requested.Contains("/") ? "by_path" : "by_name";
+                matches = GameObjectLookup.SearchGameObjects(method, requested, includeInactive, 2)
+                    .Select(GameObjectLookup.FindById)
+                    .Where(item => item != null)
+                    .ToList();
+            }
+
+            if (matches.Count == 0)
+            {
+                code = "TARGET_NOT_FOUND";
+                message = prefabScope != null
+                    ? $"UI target '{requested}' was not found in prefab '{prefabScope.AssetPath}'."
+                    : $"UI target '{requested}' was not found.";
+                return false;
+            }
+            if (matches.Count > 1)
+            {
+                code = "TARGET_AMBIGUOUS";
+                message = prefabScope != null
+                    ? $"UI target '{requested}' matched multiple objects in prefab '{prefabScope.AssetPath}'; use a unique hierarchy path."
+                    : $"UI target '{requested}' matched multiple objects; use a unique hierarchy path.";
+                return false;
+            }
+
+            target = matches[0];
+            return true;
+        }
+
+        private static GameObject DefaultPrefabReference(GameObject prefabRoot, IEnumerable<GameObject> targets)
+        {
+            if (prefabRoot.transform is RectTransform)
+                return prefabRoot;
+
+            foreach (GameObject target in targets)
+            {
+                RectTransform topmost = target?.transform as RectTransform;
+                if (topmost == null) continue;
+                while (topmost.parent is RectTransform parentRect && parentRect.IsChildOf(prefabRoot.transform))
+                    topmost = parentRect;
+                return topmost.gameObject;
+            }
+            return null;
+        }
+
+        private static MethodInfo _forceRebuildLayoutImmediate;
+        private static bool _probedLayoutRebuilder;
+
+        /// <summary>
+        /// uGUI is an optional package and is not referenced by this assembly, so
+        /// LayoutRebuilder is bound reflectively once and cached.
+        /// </summary>
+        private static MethodInfo ForceRebuildLayoutImmediate
+        {
+            get
+            {
+                if (_probedLayoutRebuilder) return _forceRebuildLayoutImmediate;
+                _probedLayoutRebuilder = true;
+
+                Type layoutRebuilderType = Type.GetType("UnityEngine.UI.LayoutRebuilder, UnityEngine.UI")
+                    ?? UnityAssembliesCompat.GetLoadedAssemblies()
+                        .Select(assembly => assembly.GetType("UnityEngine.UI.LayoutRebuilder", false))
+                        .FirstOrDefault(type => type != null);
+                _forceRebuildLayoutImmediate = layoutRebuilderType?.GetMethod(
+                    "ForceRebuildLayoutImmediate",
+                    BindingFlags.Public | BindingFlags.Static,
+                    null,
+                    new[] { typeof(RectTransform) },
+                    null);
+                return _forceRebuildLayoutImmediate;
+            }
+        }
+
+        private static bool TryRebuildPrefabLayout(GameObject prefabRoot, out string error)
+        {
+            error = null;
+            try
+            {
+                RectTransform[] rects = prefabRoot.GetComponentsInChildren<RectTransform>(true);
+                foreach (RectTransform rect in rects)
+                    rect.ForceUpdateRectTransforms();
+
+                MethodInfo rebuild = ForceRebuildLayoutImmediate;
+                if (rebuild != null)
+                {
+                    RectTransform[] layoutRoots = rects
+                        .Where(rect => !(rect.parent is RectTransform))
+                        .ToArray();
+                    // A second pass settles nested fitters/groups whose preferred sizes were
+                    // produced during the first immediate rebuild.
+                    for (int pass = 0; pass < 2; pass++)
+                    {
+                        foreach (RectTransform layoutRoot in layoutRoots)
+                            rebuild.Invoke(null, new object[] { layoutRoot });
+                    }
+                }
+
+                foreach (RectTransform rect in rects)
+                    rect.ForceUpdateRectTransforms();
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = $"Failed to rebuild prefab UI layout: {exception.GetBaseException().Message}";
+                return false;
+            }
         }
 
         private static object ToBounds(Rect rect) => new

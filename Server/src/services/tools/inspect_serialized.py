@@ -17,7 +17,9 @@ from transport.unity_transport import send_with_unity_instance
         "Inspect an explicit whitelist of Unity serialized properties using SerializedObject. "
         "Targets may be hierarchy names/paths, GlobalObjectIds, or objects with 'target' and "
         "an optional 'component' type filter. Reports null and broken object references "
-        "distinctly and can include compact prefab source/override provenance."
+        "distinctly and can include compact prefab source/override provenance. Set prefab_path "
+        "to scope name/path/GlobalObjectId targets to an Assets/ or Packages/ prefab. A matching "
+        "open Prefab Stage is reused so unsaved edits are inspected."
     ),
 )
 async def inspect_serialized(
@@ -54,6 +56,10 @@ async def inspect_serialized(
         str | None,
         Field(default=None, description="Opaque cursor returned by a previous call."),
     ] = None,
+    prefab_path: Annotated[
+        str | None,
+        Field(default=None, description="Optional project-relative .prefab asset path under Assets/ or Packages/. Name/path/GlobalObjectId targets are resolved only within this prefab."),
+    ] = None,
 ) -> dict[str, Any]:
     if isinstance(targets, str):
         targets = [targets]
@@ -72,6 +78,8 @@ async def inspect_serialized(
         "includeInactive": include_inactive,
         "pageSize": page_size,
     }
+    if prefab_path is not None:
+        params["prefabPath"] = prefab_path
     if component_type:
         params["componentType"] = component_type
     if cursor is not None:

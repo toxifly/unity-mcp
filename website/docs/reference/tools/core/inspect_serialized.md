@@ -12,7 +12,7 @@ description: "Inspect an explicit whitelist of Unity serialized properties using
 
 ## Description
 
-Inspect an explicit whitelist of Unity serialized properties using SerializedObject. Targets may be hierarchy names/paths, GlobalObjectIds, or objects with 'target' and an optional 'component' type filter. Reports null and broken object references distinctly and can include compact prefab source/override provenance.
+Inspect an explicit whitelist of Unity serialized properties using SerializedObject. Targets may be hierarchy names/paths, GlobalObjectIds, or objects with 'target' and an optional 'component' type filter. Reports null and broken object references distinctly and can include compact prefab source/override provenance. Set prefab_path to scope name/path/GlobalObjectId targets to an Assets/ or Packages/ prefab. A matching open Prefab Stage is reused so unsaved edits are inspected.
 
 ## Parameters
 
@@ -26,6 +26,7 @@ Inspect an explicit whitelist of Unity serialized properties using SerializedObj
 | `include_inactive` | `bool` | — |  |
 | `page_size` | `int` | — |  |
 | `cursor` | `str \| None` | — |  |
+| `prefab_path` | `str \| None` | — |  |
 
 ## Returns
 
@@ -34,6 +35,12 @@ A `dict` containing the Unity response. The exact shape depends on the action.
 ## Examples
 
 <!-- examples:start -->
-*No examples yet. Add usage examples here — they will be preserved across regenerations.*
+```python
+inspect_serialized(
+    prefab_path="Assets/Prefabs/Enemy.prefab",
+    targets=[{"target": "Enemy", "component": "EnemyController"}],
+    properties=["movementSpeed", "weapon"],
+)
+```
 <!-- examples:end -->
 

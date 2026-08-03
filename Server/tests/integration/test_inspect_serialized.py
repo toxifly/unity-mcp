@@ -33,6 +33,7 @@ def test_inspect_serialized_shapes_whitelist_and_provenance_request(monkeypatch)
         object(),
         targets=[{"target": "Canvas/SelectionManager", "component": "SelectionManager"}],
         properties="outsideClickCatcher",
+        prefab_path="Assets/UI/Selection.prefab",
         include_prefab_provenance=True,
         cursor="25",
         page_size=25,
@@ -45,6 +46,7 @@ def test_inspect_serialized_shapes_whitelist_and_provenance_request(monkeypatch)
         "params": {
             "targets": [{"target": "Canvas/SelectionManager", "component": "SelectionManager"}],
             "properties": ["outsideClickCatcher"],
+            "prefabPath": "Assets/UI/Selection.prefab",
             "includePrefabProvenance": True,
             "includeMissingReferences": True,
             "includeInactive": True,

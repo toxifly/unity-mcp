@@ -12,7 +12,7 @@ description: "Read uGUI RectTransform bounds without mutating scene state."
 
 ## Description
 
-Read uGUI RectTransform bounds without mutating scene state. Returns each target's rectangle in an explicit canvas, local, world, or screen-pixel coordinate space. Targets are GameObject names, or hierarchy paths ('Canvas/Panel/Button') for disambiguation. Set include_children to also measure each target's immediate RectTransform children. Inactive objects are included by default. Geometry assertions can be evaluated in the same call.
+Read uGUI RectTransform bounds without mutating scene state. Returns each target's rectangle in an explicit canvas, local, world, or screen-pixel coordinate space. Targets are GameObject names, or hierarchy paths ('Canvas/Panel/Button') for disambiguation. Set prefab_path to inspect a prefab asset headlessly instead of the loaded scene; a matching open Prefab Stage is reused so unsaved edits are visible. Prefab layout groups are rebuilt before measurement, canvas space falls back to the prefab's root RectTransform, and screen_pixels/on_screen/not_clipped are unavailable for prefab assets. Set include_children to also measure each target's immediate RectTransform children. Inactive objects are included by default. Geometry assertions can be evaluated in the same call.
 
 ## Parameters
 
@@ -25,6 +25,7 @@ Read uGUI RectTransform bounds without mutating scene state. Returns each target
 | `include_inactive` | `bool \| str \| None` | — |  |
 | `space` | `Literal['canvas', 'local', 'world', 'screen_pixels']` | — |  |
 | `assertions` | `list[dict[str, Any]] \| None` | — |  |
+| `prefab_path` | `str \| None` | — |  |
 
 ## Returns
 
@@ -33,6 +34,12 @@ A `dict` containing the Unity response. The exact shape depends on the action.
 ## Examples
 
 <!-- examples:start -->
-*No examples yet. Add usage examples here — they will be preserved across regenerations.*
+```python
+measure_ui(
+    prefab_path="Assets/UI/HUD.prefab",
+    targets=["HUD/HealthBar"],
+    space="canvas",
+)
+```
 <!-- examples:end -->
 

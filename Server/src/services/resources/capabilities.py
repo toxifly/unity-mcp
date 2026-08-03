@@ -9,11 +9,11 @@ from services.registry import get_registered_tools, mcp_for_unity_resource
 
 _CAPABILITIES: dict[str, dict[str, Any]] = {
     "measure_ui": {
-        "version": 1,
+        "version": 2,
         "tools": ("measure_ui",),
     },
     "inspect_serialized": {
-        "version": 1,
+        "version": 2,
         "tools": ("inspect_serialized",),
     },
     "inspect_provenance": {

@@ -248,7 +248,7 @@ Snapshot of rendering performance statistics (draw calls, batches, triangles, fr
 
 **URI:** `mcpforunity://tool-groups`
 
-Available tool groups and their tools. Use manage_tools to activate/deactivate groups per session.
+Available tool groups, their tools, and effective visibility. Use manage_tools to activate/deactivate groups per session.
 
 URI: mcpforunity://tool-groups
 

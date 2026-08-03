@@ -42,7 +42,7 @@ Essential scene, script, asset & editor tools (always on by default)
 - **[`refresh_unity`](./refresh_unity.md)** — Refresh Unity's asset database and optionally request script compilation.
 - **[`save_assets_scoped`](./save_assets_scoped.md)** — Save only the declared Unity asset paths.
 - **[`save_prefab_scoped`](./save_prefab_scoped.md)** — Save exactly one prefab asset with transaction-backed save-time change detection and rollback.
-- **[`save_scene_scoped`](./save_scene_scoped.md)** — Save exactly one loaded Unity scene through the mutation transaction boundary.
+- **[`save_scene_scoped`](./save_scene_scoped.md)** — Save exactly one loaded Unity scene.
 - **[`script_apply_edits`](./script_apply_edits.md)** — Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text.
 - **[`set_active_instance`](./set_active_instance.md)** — Set this client session's active Unity instance without changing Unity project state. instance accepts Name@hash, a unique hash prefix, or a port number in stdio mode; ambiguous identifiers are rejected.
 - **[`validate_script`](./validate_script.md)** — Validate a C# script and return diagnostics.

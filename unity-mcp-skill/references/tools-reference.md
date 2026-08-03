@@ -197,8 +197,7 @@ find_gameobjects(
 ### measure_ui
 
 Measure uGUI RectTransform bounds without a screenshot (read-only). Returns each target's
-rectangle in canvas-local space (origin = reference centre, y up) and/or screen pixels
-(y up from bottom). Use for numeric UI-layout verification — clearances, overlaps, clipping,
+rectangle in one declared coordinate space. Use for numeric UI-layout verification — clearances, overlaps, clipping,
 off-screen checks — during iteration: it is deterministic and ~cheap where a Game View capture
 is large and returns white when the view is unfocused. Leave the "does it look right" judgement
 to a human viewing the live Game View.
@@ -207,14 +206,22 @@ to a human viewing the live Game View.
 measure_ui(
     targets=["Btn_Draft", "Canvas/Panel/Title"],  # list[str]|str — names or hierarchy paths
     container="RosterTiles",     # str — measure this GO + all its immediate RectTransform children
-    reference="Canvas",          # str — GO defining canvas-local origin (default: first target's root Canvas)
+    prefab_path="Assets/UI/Roster.prefab",  # str — optional; Assets/ or Packages/ prefab scope
+    reference="Canvas",          # str — origin (default: root Canvas, or prefab root RectTransform)
     include_children=False,      # bool — also measure each target's immediate RectTransform children
     include_inactive=True,       # bool — include hidden/gated objects (default true)
-    space="both"                 # "canvas"|"screen"|"both"
+    space="canvas"               # "canvas"|"local"|"world"|"screen_pixels" (screen_pixels is scene-only)
 )
-# Returns: {"success": true, "data": {"reference": {...}, "referenceSize": {"width":1920,"height":1080},
-#           "elements": [{"name","path","active","canvas":{xMin,yMin,xMax,yMax,width,height,cx,cy},"screen":{...}}]}}
+# Returns: {"success": true, "data": {"prefab_path": "Assets/UI/Roster.prefab",
+#           "space": "canvas", "reference": "Roster", "measurements": [
+#           {"target": "Btn_Draft", "path": "Roster/Btn_Draft", "bounds": {...},
+#            "size": {"width": 120, "height": 36}, "clipped": false}],
+#           "assertions": [], "summary": {"measured": 1, "assertions": 0, "passed": 0, "failed": 0}}}
 ```
+
+With `prefab_path`, `screen_pixels`, `on_screen`, and `not_clipped` are rejected because the
+prefab has no rendered Game-view screen. Canvas space uses the prefab root RectTransform when
+the widget prefab has no Canvas of its own.
 
 ---
 

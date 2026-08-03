@@ -32,6 +32,7 @@ def test_measure_ui_sends_explicit_space_and_assertions(monkeypatch):
     result = run(measure_ui_mod.measure_ui(
         object(),
         targets="Button",
+        prefab_path="Assets/UI/Hud.prefab",
         space="canvas",
         include_inactive=True,
         assertions=[{"type": "inside", "target": "Button", "container": "Canvas"}],
@@ -44,6 +45,7 @@ def test_measure_ui_sends_explicit_space_and_assertions(monkeypatch):
         "params": {
             "space": "canvas",
             "targets": ["Button"],
+            "prefabPath": "Assets/UI/Hud.prefab",
             "includeInactive": True,
             "assertions": [{"type": "inside", "target": "Button", "container": "Canvas"}],
         },
