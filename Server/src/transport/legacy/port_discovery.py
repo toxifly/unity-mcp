@@ -20,6 +20,13 @@ from pathlib import Path
 import socket
 import struct
 
+from core.bridge_handshake import (
+    BridgeCompatibilityError,
+    build_server_handshake,
+    parse_banner_manifest,
+    validate_bridge_acknowledgement,
+    validate_unity_handshake,
+)
 from models.models import UnityInstanceInfo
 
 logger = logging.getLogger("mcp-for-unity-server")
@@ -63,55 +70,81 @@ class PortDiscovery:
     @staticmethod
     def _try_probe_unity_mcp(port: int) -> bool:
         """Quickly check if a MCP for Unity listener is on this port.
-        Uses Unity's framed protocol: receives handshake, sends framed ping, expects framed pong.
+        Completes the mandatory protocol-2 handshake before sending a framed ping.
         """
         try:
             with socket.create_connection(("127.0.0.1", port), PortDiscovery.CONNECT_TIMEOUT) as s:
                 s.settimeout(PortDiscovery.CONNECT_TIMEOUT)
                 try:
-                    # 1. Receive handshake from Unity
-                    handshake = s.recv(512)
-                    if not handshake or b"FRAMING=1" not in handshake:
-                        # Try legacy mode as fallback
-                        s.sendall(b"ping")
-                        data = s.recv(512)
-                        return data and b'"message":"pong"' in data
+                    banner_bytes = bytearray()
+                    while len(banner_bytes) < 16 * 1024 and b"\n" not in banner_bytes:
+                        chunk = s.recv(256)
+                        if not chunk:
+                            return False
+                        banner_bytes.extend(chunk)
 
-                    # 2. Send framed ping command
-                    # Frame format: 8-byte length header (big-endian uint64) + payload
-                    payload = b"ping"
-                    header = struct.pack('>Q', len(payload))
-                    s.sendall(header + payload)
-
-                    # 3. Receive framed response
-                    # Helper to receive exact number of bytes
-                    def _recv_exact(expected: int) -> bytes | None:
-                        chunks = bytearray()
-                        while len(chunks) < expected:
-                            chunk = s.recv(expected - len(chunks))
-                            if not chunk:
-                                return None
-                            chunks.extend(chunk)
-                        return bytes(chunks)
-
-                    response_header = _recv_exact(8)
-                    if response_header is None:
+                    banner = bytes(banner_bytes).decode("ascii", errors="ignore").strip()
+                    if "FRAMING=1" not in banner:
                         return False
 
-                    response_length = struct.unpack('>Q', response_header)[0]
-                    if response_length > 10000:  # Sanity check
-                        return False
+                    unity_manifest = validate_unity_handshake(
+                        parse_banner_manifest(banner)
+                    )
+                    server_handshake = build_server_handshake()
+                    handshake_payload = json.dumps({
+                        "type": "bridge_handshake",
+                        "params": {"handshake": server_handshake},
+                    }).encode("utf-8")
+                    PortDiscovery._send_frame(s, handshake_payload)
 
-                    response = _recv_exact(response_length)
-                    if response is None:
-                        return False
-                    return b'"message":"pong"' in response
+                    handshake_response = json.loads(
+                        PortDiscovery._receive_frame(s).decode("utf-8")
+                    )
+                    validate_bridge_acknowledgement(
+                        handshake_response, unity_manifest, server_handshake
+                    )
+
+                    PortDiscovery._send_frame(s, b"ping")
+                    ping_response = json.loads(
+                        PortDiscovery._receive_frame(s).decode("utf-8")
+                    )
+                    return (
+                        ping_response.get("status") == "success"
+                        and ping_response.get("result", {}).get("message") == "pong"
+                    )
+                except BridgeCompatibilityError:
+                    # A responding Unity bridge with a mismatched package/protocol is
+                    # materially different from an unused port. Let discovery surface
+                    # the actionable compatibility guidance to normal tool routing.
+                    raise
                 except Exception as e:
                     logger.debug(f"Port probe failed for {port}: {e}")
                     return False
+        except BridgeCompatibilityError:
+            raise
         except Exception as e:
             logger.debug(f"Connection failed for port {port}: {e}")
             return False
+
+    @staticmethod
+    def _send_frame(sock: socket.socket, payload: bytes) -> None:
+        sock.sendall(struct.pack(">Q", len(payload)) + payload)
+
+    @staticmethod
+    def _receive_frame(sock: socket.socket) -> bytes:
+        def receive_exact(expected: int) -> bytes:
+            chunks = bytearray()
+            while len(chunks) < expected:
+                chunk = sock.recv(expected - len(chunks))
+                if not chunk:
+                    raise ConnectionError("Unity closed the port-probe connection")
+                chunks.extend(chunk)
+            return bytes(chunks)
+
+        response_length = struct.unpack(">Q", receive_exact(8))[0]
+        if response_length > 1024 * 1024:
+            raise ValueError("Unity returned an oversized port-probe frame")
+        return receive_exact(response_length)
 
     @staticmethod
     def _read_latest_status() -> dict | None:
@@ -140,13 +173,23 @@ class PortDiscovery:
         Returns:
             Port number to connect to
         """
-        # Prefer the latest heartbeat status if it points to a responsive port
+        compatibility_errors: list[BridgeCompatibilityError] = []
+
+        # Prefer the latest heartbeat status if it points to a responsive port.
+        # A stale incompatible editor must not mask a compatible registry entry.
         status = PortDiscovery._read_latest_status()
         if status:
             port = status.get('unity_port')
-            if isinstance(port, int) and PortDiscovery._try_probe_unity_mcp(port):
-                logger.info(f"Using Unity port from status: {port}")
-                return port
+            if isinstance(port, int):
+                try:
+                    if PortDiscovery._try_probe_unity_mcp(port):
+                        logger.info(f"Using Unity port from status: {port}")
+                        return port
+                except BridgeCompatibilityError as error:
+                    compatibility_errors.append(error)
+                    logger.warning(
+                        f"Skipping incompatible Unity status peer on port {port}: {error}"
+                    )
 
         candidates = PortDiscovery.list_candidate_files()
 
@@ -164,8 +207,16 @@ class PortDiscovery:
                         logger.info(
                             f"Using Unity port from {path.name}: {unity_port}")
                         return unity_port
+            except BridgeCompatibilityError as error:
+                compatibility_errors.append(error)
+                logger.warning(
+                    f"Skipping incompatible Unity registry peer {path}: {error}"
+                )
             except Exception as e:
                 logger.warning(f"Could not read port registry {path}: {e}")
+
+        if compatibility_errors:
+            raise compatibility_errors[0]
 
         if first_seen_port is not None:
             logger.info(
@@ -223,7 +274,9 @@ class PortDiscovery:
             return "Unknown"
 
     @staticmethod
-    def discover_all_unity_instances() -> list[UnityInstanceInfo]:
+    def discover_all_unity_instances(
+        requested_instance: str | None = None,
+    ) -> list[UnityInstanceInfo]:
         """
         Discover all running Unity Editor instances by scanning status files.
 
@@ -231,6 +284,8 @@ class PortDiscovery:
             List of UnityInstanceInfo objects for all discovered instances
         """
         instances_by_port: dict[int, tuple[UnityInstanceInfo, datetime]] = {}
+        compatibility_errors: list[BridgeCompatibilityError] = []
+        requested_compatibility_error: BridgeCompatibilityError | None = None
         base = PortDiscovery.get_registry_dir()
 
         # Scan all status files
@@ -238,6 +293,7 @@ class PortDiscovery:
         status_files = glob.glob(status_pattern)
 
         for status_file_path in status_files:
+            matches_requested_instance = False
             try:
                 status_path = Path(status_file_path)
                 file_mtime = datetime.fromtimestamp(
@@ -257,6 +313,15 @@ class PortDiscovery:
                     project_path)
                 port = data.get('unity_port')
                 is_reloading = data.get('reloading', False)
+                instance_id = f"{project_name}@{hash_value}"
+                matches_requested_instance = PortDiscovery._matches_instance_identifier(
+                    requested_instance,
+                    instance_id=instance_id,
+                    project_name=project_name,
+                    project_path=project_path,
+                    hash_value=hash_value,
+                    port=port,
+                )
 
                 # Parse last_heartbeat
                 last_heartbeat = None
@@ -301,7 +366,7 @@ class PortDiscovery:
 
                 # Create instance info
                 instance = UnityInstanceInfo(
-                    id=f"{project_name}@{hash_value}",
+                    id=instance_id,
                     name=project_name,
                     path=project_path,
                     hash=hash_value,
@@ -317,6 +382,14 @@ class PortDiscovery:
                 logger.debug(
                     f"Discovered Unity instance: {instance.id} on port {instance.port}")
 
+            except BridgeCompatibilityError as error:
+                compatibility_errors.append(error)
+                if matches_requested_instance:
+                    requested_compatibility_error = error
+                logger.warning(
+                    f"Skipping incompatible Unity status peer {status_file_path}: {error}"
+                )
+                continue
             except Exception as e:
                 logger.debug(
                     f"Failed to parse status file {status_file_path}: {e}")
@@ -325,6 +398,40 @@ class PortDiscovery:
         deduped_instances = [entry[0] for entry in sorted(
             instances_by_port.values(), key=lambda item: item[1], reverse=True)]
 
+        if requested_compatibility_error is not None:
+            raise requested_compatibility_error
+        if not deduped_instances and compatibility_errors:
+            raise compatibility_errors[0]
+
         logger.info(
             f"Discovered {len(deduped_instances)} Unity instances (after de-duplication by port)")
         return deduped_instances
+
+    @staticmethod
+    def _matches_instance_identifier(
+        requested_instance: str | None,
+        *,
+        instance_id: str,
+        project_name: str,
+        project_path: str,
+        hash_value: str,
+        port: object,
+    ) -> bool:
+        """Match the identifier forms accepted by UnityConnectionPool."""
+        if not requested_instance:
+            return False
+
+        identifier = requested_instance.strip()
+        if not identifier:
+            return False
+        if identifier in {instance_id, project_name, project_path, str(port)}:
+            return True
+        if hash_value == identifier or hash_value.startswith(identifier):
+            return True
+        if "@" not in identifier:
+            return False
+
+        name_part, hint_part = identifier.split("@", 1)
+        return project_name == name_part and (
+            hash_value.startswith(hint_part) or str(port) == hint_part
+        )

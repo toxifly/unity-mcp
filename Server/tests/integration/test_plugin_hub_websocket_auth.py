@@ -8,6 +8,8 @@ import pytest
 
 from core.config import config
 from core.constants import API_KEY_HEADER
+from core.bridge_handshake import BRIDGE_PROTOCOL_VERSION
+from core.telemetry import get_package_version
 from services.api_key_service import ApiKeyService, ValidationResult
 from transport.plugin_hub import PluginHub
 from transport.plugin_registry import PluginRegistry
@@ -171,6 +173,14 @@ class TestUserIdFlowsToRegistration:
             "project_name": "TestProject",
             "project_hash": "abc123",
             "unity_version": "2022.3",
+            "handshake": {
+                "bridge_protocol_version": BRIDGE_PROTOCOL_VERSION,
+                "unity_package": {
+                    "version": get_package_version(),
+                    "registered_resources": ["editor_state", "tool_states"],
+                    "tool_groups": ["core"],
+                },
+            },
         }
         await hub.on_receive(ws, register_data)
 

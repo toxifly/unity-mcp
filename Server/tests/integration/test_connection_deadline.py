@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import socket
+import struct
 import threading
 import time
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 import pytest
 
 from core.config import config
+from core.bridge_handshake import BRIDGE_PROTOCOL_VERSION
+from core.telemetry import get_package_version
 import transport.legacy.unity_connection as uc
 from transport.legacy.unity_connection import UnityConnection
 
@@ -24,6 +27,43 @@ def _start_silent_bridge():
     accepted: list[socket.socket] = []
     stop = threading.Event()
 
+    unity_package = {
+        "version": get_package_version(),
+        "registered_resources": ["editor_state", "tool_states"],
+        "tool_groups": ["core"],
+    }
+
+    def read_exact(client, count):
+        data = b""
+        while len(data) < count:
+            chunk = client.recv(count - len(data))
+            if not chunk:
+                raise ConnectionError("client disconnected")
+            data += chunk
+        return data
+
+    def acknowledge_handshake(client):
+        try:
+            client.sendall(
+                f"WELCOME UNITY-MCP {BRIDGE_PROTOCOL_VERSION} FRAMING=1 "
+                f"BRIDGE_PROTOCOL={BRIDGE_PROTOCOL_VERSION} "
+                f"UNITY_PACKAGE={get_package_version()} "
+                "RESOURCES=editor_state,tool_states TOOL_GROUPS=core\n".encode("ascii")
+            )
+            request_len = struct.unpack(">Q", read_exact(client, 8))[0]
+            request = json.loads(read_exact(client, request_len).decode("utf-8"))
+            response = json.dumps({
+                "status": "success",
+                "result": {
+                    "bridge_protocol_version": BRIDGE_PROTOCOL_VERSION,
+                    "python_server": request["params"]["handshake"]["python_server"],
+                    "unity_package": unity_package,
+                },
+            }).encode("utf-8")
+            client.sendall(struct.pack(">Q", len(response)) + response)
+        except OSError:
+            pass
+
     def serve():
         srv.settimeout(0.5)
         while not stop.is_set():
@@ -34,10 +74,9 @@ def _start_silent_bridge():
             except OSError:
                 break
             accepted.append(client)
-            try:
-                client.sendall(b"WELCOME UNITY-MCP 1 FRAMING=1\n")
-            except OSError:
-                pass
+            threading.Thread(
+                target=acknowledge_handshake, args=(client,), daemon=True
+            ).start()
 
     threading.Thread(target=serve, daemon=True).start()
     return srv, port, stop, accepted

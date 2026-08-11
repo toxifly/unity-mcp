@@ -15,6 +15,11 @@ from services.custom_tool_service import (
     resolve_project_id_for_unity_instance,
 )
 from core.config import config
+from core.bridge_handshake import (
+    BRIDGE_PROTOCOL_VERSION,
+    build_server_manifest,
+    validate_server_registrations,
+)
 from starlette.routing import WebSocketRoute
 from starlette.responses import JSONResponse
 import argparse
@@ -319,6 +324,10 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
             "status": "healthy",
             "timestamp": time.time(),
             "version": _server_version or "unknown",
+            "handshake": {
+                "bridge_protocol_version": BRIDGE_PROTOCOL_VERSION,
+                "python_server": build_server_manifest(),
+            },
             "message": "MCP for Unity server is running"
         })
 
@@ -578,6 +587,10 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
 
     # Register all resources
     register_all_resources(mcp, project_scoped_tools=project_scoped_tools)
+
+    # Fail server construction if a stale/broken package omitted resources or
+    # tool groups that every compatible Unity package relies on.
+    validate_server_registrations()
 
     return mcp
 

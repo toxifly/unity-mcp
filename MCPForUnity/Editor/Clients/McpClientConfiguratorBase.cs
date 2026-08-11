@@ -112,7 +112,7 @@ namespace MCPForUnity.Editor.Clients
         /// </summary>
         protected static string GetExpectedPackageSourceForValidation()
         {
-            // Includes explicit override, stable pin, or prerelease range depending on package version.
+            // Includes an explicit override or the exact installed-package version pin.
             return AssetPathUtility.GetMcpServerPackageSource();
         }
 
@@ -120,7 +120,6 @@ namespace MCPForUnity.Editor.Clients
         /// Checks if a package source string represents a beta/prerelease version.
         /// Beta versions include:
         /// - PyPI beta: "mcpforunityserver==9.4.0b20250203..." (contains 'b' before timestamp)
-        /// - PyPI prerelease range: "mcpforunityserver>=0.0.0a0" (used for prerelease package builds)
         /// - Git beta branch: contains "@beta" or "-beta"
         /// </summary>
         protected static bool IsBetaPackageSource(string packageSource)
@@ -131,10 +130,6 @@ namespace MCPForUnity.Editor.Clients
             // PyPI beta format: mcpforunityserver==X.Y.Zb<timestamp>
             // The 'b' suffix before numbers indicates a PEP 440 beta version
             if (System.Text.RegularExpressions.Regex.IsMatch(packageSource, @"==\d+\.\d+\.\d+b\d+"))
-                return true;
-
-            // PyPI prerelease range: >=0.0.0a0 (used for prerelease package builds)
-            if (packageSource.Contains(">=0.0.0a0", StringComparison.OrdinalIgnoreCase))
                 return true;
 
             // Git-based beta references

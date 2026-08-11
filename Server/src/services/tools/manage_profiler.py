@@ -35,24 +35,13 @@ ALL_ACTIONS = (
 @mcp_for_unity_tool(
     group="profiling",
     description=(
-        "Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger.\n\n"
-        "SESSION:\n"
-        "- profiler_start: Enable profiler, optionally record to .raw file (log_file, enable_callstacks)\n"
-        "- profiler_stop: Disable profiler, stop recording\n"
-        "- profiler_status: Get enabled state, active areas, recording path\n"
-        "- profiler_set_areas: Toggle ProfilerAreas on/off (areas dict)\n\n"
-        "COUNTERS:\n"
-        "- get_frame_timing: FrameTimingManager data (12 fields, synchronous)\n"
-        "- get_counters: Generic counter read by category + optional counter names (async, 1-frame wait)\n"
-        "- get_object_memory: Memory size of a specific object by path\n\n"
-        "MEMORY SNAPSHOT (requires com.unity.memoryprofiler):\n"
-        "- memory_take_snapshot: Capture memory snapshot to file\n"
-        "- memory_list_snapshots: List available .snap files\n"
-        "- memory_compare_snapshots: Compare two snapshot files\n\n"
-        "FRAME DEBUGGER:\n"
-        "- frame_debugger_enable: Turn on Frame Debugger, report event count\n"
-        "- frame_debugger_disable: Turn off Frame Debugger\n"
-        "- frame_debugger_get_events: Get draw call events (paged, best-effort via reflection)"
+        "Control Unity Profiler sessions, read counters and frame timing, inspect object memory, capture or "
+        "compare memory snapshots, and use the Frame Debugger. action supports profiler_start/stop/status/"
+        "set_areas, get_frame_timing, get_counters, get_object_memory, memory_take/list/compare_snapshots, "
+        "and frame_debugger_enable/disable/get_events. The remaining parameters are action-specific; "
+        "page_size and cursor page Frame Debugger events. Memory snapshots require com.unity.memoryprofiler "
+        "and write .snap files; profiler_start may write a .raw recording. Session and Frame Debugger "
+        "controls mutate transient Editor state."
     ),
     annotations=ToolAnnotations(
         title="Manage Profiler",

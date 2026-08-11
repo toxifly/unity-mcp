@@ -5,9 +5,11 @@ import subprocess
 import sys
 import textwrap
 
-EXPECTED_MAX_SCHEMA_BYTES = 120_000
-EXPECTED_BASELINE_SCHEMA_BYTES = 111_411
-EXPECTED_MAX_REGRESSION_BYTES = EXPECTED_BASELINE_SCHEMA_BYTES * 103 // 100
+MAX_TOOL_DESCRIPTION_CHARS = 1_000
+MAX_TOOLS_LIST_ESTIMATED_TOKENS = 28_000
+MIN_DUPLICATE_PARAGRAPH_CHARS = 80
+EXPECTED_BASELINE_TOOLS_LIST_BYTES = 109_631
+EXPECTED_MAX_REGRESSION_BYTES = EXPECTED_BASELINE_TOOLS_LIST_BYTES * 103 // 100
 
 
 def test_default_discovery_stays_lean_and_tool_groups_round_trip():
@@ -18,6 +20,7 @@ def test_default_discovery_stays_lean_and_tool_groups_round_trip():
         f"""
         import asyncio
         import json
+        import re
 
         from fastmcp import Client
         from fastmcp.client.messages import MessageHandler
@@ -50,12 +53,55 @@ def test_default_discovery_stays_lean_and_tool_groups_round_trip():
                 assert "This server provides tools" not in descriptions
                 assert "Targeting Unity instances" not in descriptions
 
-                schema_bytes = sum(
-                    len(json.dumps(tool.model_dump(), separators=(",", ":")))
-                    for tool in tools
+                registered_descriptions = {{
+                    tool["name"]: tool.get("description") or ""
+                    for tool in get_registered_tools()
+                }}
+                oversized = {{
+                    name: len(description)
+                    for name, description in registered_descriptions.items()
+                    if len(description) > {MAX_TOOL_DESCRIPTION_CHARS}
+                }}
+                assert not oversized, oversized
+
+                paragraph_owners = {{}}
+                for name, description in registered_descriptions.items():
+                    for paragraph in re.split(r"\\n\\s*\\n+", description):
+                        normalized = re.sub(
+                            r"\\s+", " ", paragraph
+                        ).strip().casefold()
+                        if len(normalized) < {MIN_DUPLICATE_PARAGRAPH_CHARS}:
+                            continue
+                        paragraph_owners.setdefault(normalized, []).append(name)
+                duplicates = {{
+                    paragraph[:160]: owners
+                    for paragraph, owners in paragraph_owners.items()
+                    if len(owners) > 1
+                }}
+                assert not duplicates, duplicates
+
+                tools_list_json = json.dumps(
+                    {{
+                        "tools": [
+                            tool.model_dump(mode="json", by_alias=True)
+                            for tool in tools
+                        ]
+                    }},
+                    separators=(",", ":"),
+                    ensure_ascii=False,
                 )
-                assert schema_bytes < {EXPECTED_MAX_SCHEMA_BYTES}, schema_bytes
-                assert schema_bytes <= {EXPECTED_MAX_REGRESSION_BYTES}, schema_bytes
+                tools_list_bytes = len(tools_list_json.encode("utf-8"))
+                # MCP clients use different tokenizers. Four UTF-8 bytes per
+                # token is the repository's stable, model-neutral CI proxy.
+                estimated_tokens = (tools_list_bytes + 3) // 4
+                assert estimated_tokens <= {MAX_TOOLS_LIST_ESTIMATED_TOKENS}, (
+                    estimated_tokens,
+                    tools_list_bytes,
+                )
+                assert tools_list_bytes <= {EXPECTED_MAX_REGRESSION_BYTES}, (
+                    tools_list_bytes,
+                    estimated_tokens,
+                )
                 assert len(_build_instructions(project_scoped_tools=True)) < 300
 
                 resource_uris = {{str(resource.uri) for resource in resources}}

@@ -32,21 +32,23 @@ Exit-code contract:
     5  Editor binary/version not found (discovery layer, before any boot; lists
        every searched path).
 
-Run locally (against TestProjects/UnityMCPTests, default isolated tmp status dir)::
+Run locally through the uv-managed Server environment — the UTF legs import
+Server modules in-process, so system Python lacks their dependencies
+(against TestProjects/UnityMCPTests, default isolated tmp status dir)::
 
-    python tools/local_harness.py --legs smoke,editmode,playmode \
-        --project-path TestProjects/UnityMCPTests
+    uv run --project Server python tools/local_harness.py \
+        --legs smoke,editmode,playmode --project-path TestProjects/UnityMCPTests
 
     # Attach to an already-resident bridge instead of booting one:
-    python tools/local_harness.py --reuse --legs smoke \
+    uv run --project Server python tools/local_harness.py --reuse --legs smoke \
         --project-path TestProjects/UnityMCPTests
 
     # Point at an arbitrary consumer project with an explicit editor binary:
-    python tools/local_harness.py --editor /path/to/Unity \
+    uv run --project Server python tools/local_harness.py --editor /path/to/Unity \
         --project-path ~/TestbedMCP --legs smoke,editmode
 
     # CI parity (DockerLauncher; license threaded as an opaque editor arg):
-    python tools/local_harness.py --ci --no-warmup \
+    uv run --project Server python tools/local_harness.py --ci --no-warmup \
         --legs smoke,editmode,playmode \
         --project-path TestProjects/UnityMCPTests --status-dir .unity-mcp \
         --editor-arg -manualLicenseFile --editor-arg /root/.../Unity_lic.ulf
@@ -1089,6 +1091,20 @@ def compile_probe(instance_id: str, max_retries: int, retry_ms: int, send=None) 
     return True
 
 
+def _smoke_python_argv() -> list[str]:
+    """Interpreter argv for bridge_smoke.py, preferring the uv-managed Server env.
+
+    The smoke client imports Server modules (handshake -> fastmcp etc.), so a
+    bare sys.executable only works when the harness itself already runs inside
+    the Server environment; otherwise route through ``uv run --project Server``
+    so the smoke leg gets the dependencies from Server/pyproject.toml.
+    """
+    uv = shutil.which("uv")
+    if uv:
+        return [uv, "run", "--project", str(REPO_ROOT / "Server"), "python"]
+    return [sys.executable]
+
+
 def run_smoke_leg(instance_id: str, junit_path: Path, max_retries: int, retry_ms: int,
                   deadline: float | None = None, python_exe: str | None = None) -> LegOutcome:
     """Run bridge_smoke.py as a subprocess; honor its 0/1/2 exit contract.
@@ -1099,8 +1115,8 @@ def run_smoke_leg(instance_id: str, junit_path: Path, max_retries: int, retry_ms
     all three legs share the configured reload-retry delay.
     """
     smoke = REPO_ROOT / "Server" / "tests" / "e2e" / "bridge_smoke.py"
-    py = python_exe or sys.executable
-    argv = [py, str(smoke), "--instance", instance_id, "--junit", str(junit_path),
+    py = [python_exe] if python_exe else _smoke_python_argv()
+    argv = [*py, str(smoke), "--instance", instance_id, "--junit", str(junit_path),
             "--max-retries", str(max_retries), "--retry-ms", str(retry_ms)]
     timeout = max(1.0, deadline - time.time()) if deadline is not None else None
     try:

@@ -61,6 +61,13 @@ Each MCP tool does one thing well. Resist the urge to add "convenient" parameter
 ### 6. Use Resources for Reading
 Keep them smart and focused rather than "read everything" type resources. Resources should be quick and LLM-friendly.
 
+### 7. Exact Server Version Is Mandatory
+The Unity package and Python server are one versioned release unit. Default configuration must always use an exact normalized PEP 440 equality pin derived from the installed Unity package version, for example `10.1.1-beta.1` becomes `mcpforunityserver==10.1.1b1`.
+
+Never introduce an unpinned package source, a version range (`>=`, `~=`, wildcard, etc.), a prerelease channel, a `latest` lookup, or any fallback that can resolve a different server version. If the package version is missing, unknown, invalid, or unavailable, fail with an actionable error. Do not silently continue with another version. An explicitly configured local **Server Source Override** is allowed for development; it is user intent, not an automatic fallback.
+
+Keep `MCPForUnity/package.json`, root `manifest.json`, `Server/pyproject.toml`, and `Server/uv.lock` synchronized. Preserve regression tests that assert exact prerelease normalization and reject broad or unpinned sources.
+
 ## Key Patterns
 
 ### Python MCP Tool Registration
@@ -171,8 +178,10 @@ tools/check-unity-versions.sh --full    # full EditMode test run
 One command boots a headless Hub-licensed Editor against `TestProjects/UnityMCPTests` and runs the smoke + EditMode + PlayMode legs over the bridge — the same entrypoint CI uses (`.github/workflows/e2e-bridge.yml`):
 
 ```bash
-python tools/local_harness.py
+uv run --project Server python tools/local_harness.py
 ```
+
+Always run it through `uv run --project Server` — the harness (and the bridge smoke client it spawns) imports Server modules, so bare system Python is missing their dependencies.
 
 Key flags: `--legs smoke,editmode,playmode` (subset to run), `--project-path` (target project, default `TestProjects/UnityMCPTests`), `--reuse` (attach to an already-resident bridge instead of booting one), `--keep-alive` (leave the Editor running after the legs), `--no-warmup` (skip the warm-up import phase).
 
@@ -205,3 +214,4 @@ Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setu
 - Don't add error handling for scenarios that can't happen
 - Don't commit to `main` directly - branch off `beta` for PRs
 - Don't add docstrings/comments to code you didn't change
+- Don't add server-version fallbacks, ranges, channels, unpinned sources, or `latest` resolution; require the exact Unity-package-matched server version

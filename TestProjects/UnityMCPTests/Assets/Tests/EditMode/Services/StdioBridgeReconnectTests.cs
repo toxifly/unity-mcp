@@ -8,6 +8,8 @@ using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
 using MCPForUnity.Editor.Services.Transport.Transports;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace MCPForUnityTests.Editor.Services
 {
@@ -43,6 +45,7 @@ namespace MCPForUnityTests.Editor.Services
 
                 string handshake1 = ReadLine(stream1, ReadTimeoutMs);
                 Assert.That(handshake1, Does.Contain("FRAMING=1"), "First client should receive handshake");
+                CompleteHandshake(stream1, handshake1);
 
                 // Send a framed ping
                 SendFrame(stream1, Encoding.UTF8.GetBytes("ping"));
@@ -69,6 +72,7 @@ namespace MCPForUnityTests.Editor.Services
 
                 string handshake2 = ReadLine(stream2, ReadTimeoutMs);
                 Assert.That(handshake2, Does.Contain("FRAMING=1"), "Second client should receive handshake");
+                CompleteHandshake(stream2, handshake2);
 
                 // Send a framed ping — this is the critical check that would fail
                 // if the bridge is in zombie state.
@@ -100,8 +104,10 @@ namespace MCPForUnityTests.Editor.Services
                     "First client connect timed out");
                 client1.ReceiveTimeout = ReadTimeoutMs;
                 var stream1 = client1.GetStream();
-                Assert.That(ReadLine(stream1, ReadTimeoutMs), Does.Contain("FRAMING=1"),
+                string handshake1 = ReadLine(stream1, ReadTimeoutMs);
+                Assert.That(handshake1, Does.Contain("FRAMING=1"),
                     "First client should receive handshake");
+                CompleteHandshake(stream1, handshake1);
 
                 SendFrame(stream1, Encoding.UTF8.GetBytes("ping"));
                 Assert.That(Encoding.UTF8.GetString(ReadFrame(stream1, ReadTimeoutMs)), Does.Contain("pong"));
@@ -110,8 +116,10 @@ namespace MCPForUnityTests.Editor.Services
                     "Second client connect timed out");
                 client2.ReceiveTimeout = ReadTimeoutMs;
                 var stream2 = client2.GetStream();
-                Assert.That(ReadLine(stream2, ReadTimeoutMs), Does.Contain("FRAMING=1"),
+                string handshake2 = ReadLine(stream2, ReadTimeoutMs);
+                Assert.That(handshake2, Does.Contain("FRAMING=1"),
                     "Second client should receive handshake");
+                CompleteHandshake(stream2, handshake2);
 
                 SendFrame(stream2, Encoding.UTF8.GetBytes("ping"));
                 Assert.That(Encoding.UTF8.GetString(ReadFrame(stream2, ReadTimeoutMs)), Does.Contain("pong"),
@@ -135,7 +143,11 @@ namespace MCPForUnityTests.Editor.Services
         {
             string banner = StdioBridgeHost.BuildHandshakeBanner();
 
-            StringAssert.StartsWith("WELCOME UNITY-MCP 1 FRAMING=1 ", banner);
+            StringAssert.StartsWith("WELCOME UNITY-MCP 2 FRAMING=1 ", banner);
+            Assert.That(banner, Does.Contain(" BRIDGE_PROTOCOL=2 "));
+            Assert.That(banner, Does.Match(@" UNITY_PACKAGE=\S+"));
+            Assert.That(banner, Does.Match(@" RESOURCES=\S+"));
+            Assert.That(banner, Does.Match(@" TOOL_GROUPS=\S+"));
             Assert.That(banner, Does.Match(@" PROJECT=[0-9a-f]{8}\b"),
                 "banner must carry the project hash so clients can detect a wrong/stale port");
             Assert.That(banner, Does.Match(@" PORT=\d+"));
@@ -143,6 +155,45 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         #region Frame protocol helpers
+
+        private static void CompleteHandshake(NetworkStream stream, string banner)
+        {
+            string packageVersion = "unknown";
+            foreach (string token in banner.Split(' '))
+            {
+                if (token.StartsWith("UNITY_PACKAGE=", StringComparison.Ordinal))
+                {
+                    packageVersion = token.Substring("UNITY_PACKAGE=".Length);
+                    break;
+                }
+            }
+
+            var request = new JObject
+            {
+                ["type"] = "bridge_handshake",
+                ["params"] = new JObject
+                {
+                    ["handshake"] = new JObject
+                    {
+                        ["bridge_protocol_version"] = 2,
+                        ["python_server"] = new JObject
+                        {
+                            ["version"] = packageVersion,
+                            ["git_sha"] = "test-sha",
+                            ["registered_resources"] = new JArray(
+                                "mcpforunity://capabilities",
+                                "mcpforunity://workflow"),
+                            ["tool_groups"] = new JArray("core")
+                        }
+                    }
+                }
+            };
+            SendFrame(stream, Encoding.UTF8.GetBytes(request.ToString(Formatting.None)));
+            JObject response = JObject.Parse(Encoding.UTF8.GetString(
+                ReadFrame(stream, ReadTimeoutMs)));
+            Assert.That(response.Value<string>("status"), Is.EqualTo("success"),
+                response.Value<string>("error"));
+        }
 
         private static string ReadLine(NetworkStream stream, int timeoutMs)
         {

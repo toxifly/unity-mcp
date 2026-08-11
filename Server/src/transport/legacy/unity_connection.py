@@ -16,6 +16,13 @@ import time
 from typing import Any
 
 from models.models import MCPResponse, UnityInstanceInfo
+from core.bridge_handshake import (
+    BridgeCompatibilityError,
+    build_server_handshake,
+    parse_banner_manifest,
+    validate_bridge_acknowledgement,
+    validate_unity_handshake,
+)
 from transport.legacy.stdio_port_registry import stdio_port_registry
 
 
@@ -36,6 +43,8 @@ class UnityConnection:
     sock: socket.socket = None  # Socket for Unity communication
     use_framing: bool = False  # Negotiated per-connection
     instance_id: str | None = None  # Instance identifier for reconnection
+    handshake: dict[str, Any] | None = None
+    last_error: str | None = None
 
     def __post_init__(self):
         """Set port from discovery if not explicitly provided"""
@@ -59,6 +68,7 @@ class UnityConnection:
             if self.sock:
                 return True
             try:
+                self.last_error = None
                 # Bounded connect to avoid indefinite blocking
                 if connect_timeout is None:
                     connect_timeout = float(
@@ -79,7 +89,7 @@ class UnityConnection:
                     self.sock.settimeout(handshake_timeout)
                     buf = bytearray()
                     deadline = time.monotonic() + handshake_timeout
-                    while time.monotonic() < deadline and len(buf) < 512:
+                    while time.monotonic() < deadline and len(buf) < 16 * 1024:
                         try:
                             chunk = self.sock.recv(256)
                             if not chunk:
@@ -112,6 +122,11 @@ class UnityConnection:
                                 f'Connected to the wrong Unity instance on port {self.port}: '
                                 f'expected project hash {expected_hash}, got {banner_project.group(1)}. '
                                 f'The port registry entry is stale.')
+
+                        unity_manifest = validate_unity_handshake(
+                            parse_banner_manifest(text)
+                        )
+                        self._exchange_bridge_handshake(unity_manifest)
                     else:
                         if require_framing:
                             # Best-effort plain-text advisory for legacy peers
@@ -128,6 +143,7 @@ class UnityConnection:
                     self.sock.settimeout(config.connection_timeout)
                 return True
             except Exception as e:
+                self.last_error = str(e)
                 logger.error(f"Failed to connect to Unity: {str(e)}")
                 try:
                     if self.sock:
@@ -136,6 +152,31 @@ class UnityConnection:
                     pass
                 self.sock = None
                 return False
+
+    def _exchange_bridge_handshake(self, unity_manifest: dict[str, Any]) -> None:
+        """Send Python build identity and require Unity's acknowledgement."""
+        if not self.sock or not self.use_framing:
+            raise BridgeCompatibilityError(
+                "Bridge handshake requires a connected FRAMING=1 socket"
+            )
+
+        request_handshake = build_server_handshake()
+        payload = json.dumps({
+            "type": "bridge_handshake",
+            "params": {"handshake": request_handshake},
+        }).encode("utf-8")
+        self.sock.sendall(struct.pack(">Q", len(payload)) + payload)
+        response_bytes = self.receive_full_response(self.sock)
+        try:
+            response = json.loads(response_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise BridgeCompatibilityError(
+                "Unity returned an invalid bridge handshake acknowledgement"
+            ) from exc
+
+        self.handshake = validate_bridge_acknowledgement(
+            response, unity_manifest, request_handshake
+        )
 
     def disconnect(self):
         """Close the connection to the Unity Editor."""
@@ -146,6 +187,7 @@ class UnityConnection:
                 logger.error(f"Error disconnecting from Unity: {str(e)}")
             finally:
                 self.sock = None
+                self.handshake = None
 
     def _ensure_live_connection(self) -> None:
         """Detect and discard cleanly-closed sockets before sending.
@@ -392,7 +434,8 @@ class UnityConnection:
                 # Ensure connected (handshake occurs within connect())
                 t_conn_start = time.time()
                 if not self.sock and not self.connect(self._cap_to_deadline(config.connection_timeout, deadline)):
-                    raise ConnectionError("Could not connect to Unity")
+                    detail = self.last_error or "unknown connection error"
+                    raise ConnectionError(f"Could not connect to Unity: {detail}")
                 logger.info("[TIMING-STDIO] connect took %.3fs command=%s", time.time() - t_conn_start, command_type)
 
                 # Build payload
@@ -558,27 +601,54 @@ class UnityConnectionPool:
             logger.info(
                 f"Default Unity instance set from environment: {env_default}")
 
-    def discover_all_instances(self, force_refresh: bool = False) -> list[UnityInstanceInfo]:
+    def discover_all_instances(
+        self,
+        force_refresh: bool = False,
+        instance_identifier: str | None = None,
+    ) -> list[UnityInstanceInfo]:
         """
         Discover all running Unity Editor instances.
 
         Args:
             force_refresh: If True, bypass cache and scan immediately
+            instance_identifier: Optional selected instance used to decide whether
+                                 a fresh cache entry can satisfy the request
 
         Returns:
             List of UnityInstanceInfo objects
         """
         now = time.time()
 
-        # Return cached results if valid
-        if not force_refresh and (now - self._last_full_scan) < self._scan_interval:
-            logger.debug(
-                f"Returning cached Unity instances (age: {now - self._last_full_scan:.1f}s)")
-            return list(self._known_instances.values())
+        # Return cached results if valid. Explicit instance routing still uses the
+        # discovery cache when that identifier resolves within it; only a cache
+        # miss needs a targeted rescan.
+        cache_age = now - self._last_full_scan
+        if not force_refresh and cache_age < self._scan_interval:
+            cached_instances = list(self._known_instances.values())
+            if instance_identifier is None:
+                logger.debug(
+                    f"Returning cached Unity instances (age: {cache_age:.1f}s)")
+                return cached_instances
+
+            try:
+                self._resolve_instance_id(instance_identifier, cached_instances)
+            except ConnectionError:
+                logger.debug(
+                    "Requested Unity instance %r was not resolvable from the "
+                    "discovery cache; refreshing",
+                    instance_identifier,
+                )
+            else:
+                logger.debug(
+                    "Returning cached Unity instances for %r (age: %.1fs)",
+                    instance_identifier,
+                    cache_age,
+                )
+                return cached_instances
 
         # Scan for instances
         logger.debug("Scanning for Unity instances...")
-        instances = PortDiscovery.discover_all_unity_instances()
+        instances = PortDiscovery.discover_all_unity_instances(instance_identifier)
 
         # Update cache
         with self._pool_lock:
@@ -718,7 +788,10 @@ class UnityConnectionPool:
             ConnectionError: If instance cannot be found or connected
         """
         # Refresh instance list if cache expired
-        instances = self.discover_all_instances()
+        requested_instance = instance_identifier or self._default_instance_id
+        instances = self.discover_all_instances(
+            instance_identifier=requested_instance
+        )
 
         # Resolve identifier to specific instance
         target = self._resolve_instance_id(instance_identifier, instances)

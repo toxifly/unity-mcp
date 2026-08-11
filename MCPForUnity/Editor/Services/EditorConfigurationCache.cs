@@ -82,7 +82,7 @@ namespace MCPForUnity.Editor.Services
         public string UvxPathOverride => _uvxPathOverride;
 
         /// <summary>
-        /// Custom Git URL override for server installation.
+        /// Explicit local Server/ source override for development.
         /// Default: empty string (use default)
         /// </summary>
         public string GitUrlOverride => _gitUrlOverride;

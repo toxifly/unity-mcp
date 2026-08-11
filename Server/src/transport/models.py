@@ -9,11 +9,19 @@ class WelcomeMessage(BaseModel):
     type: str = "welcome"
     serverTimeout: int
     keepAliveInterval: int
+    handshake: dict[str, Any]
 
 
 class RegisteredMessage(BaseModel):
     type: str = "registered"
     session_id: str
+    handshake: dict[str, Any]
+
+
+class HandshakeErrorMessage(BaseModel):
+    type: str = "handshake_error"
+    error: str
+    handshake: dict[str, Any]
 
 
 class ExecuteCommandMessage(BaseModel):
@@ -37,6 +45,7 @@ class RegisterMessage(BaseModel):
     project_hash: str
     unity_version: str = "Unknown"
     project_path: str | None = None  # Full path to project root (for focus nudging)
+    handshake: dict[str, Any] | None = None
 
 
 class RegisterToolsMessage(BaseModel):

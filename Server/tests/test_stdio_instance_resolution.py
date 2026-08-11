@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from models.models import UnityInstanceInfo
-from transport.legacy.unity_connection import UnityConnectionPool
+from transport.legacy.unity_connection import PortDiscovery, UnityConnectionPool
 
 
 def _instance(name: str, port: int, heartbeat: datetime | None) -> UnityInstanceInfo:
@@ -98,3 +98,52 @@ def test_resolve_no_instances_raises_distinct_error():
 
     with pytest.raises(ConnectionError, match="No Unity Editor instances found"):
         pool._resolve_instance_id(None, [])
+
+
+def test_discover_selected_instance_reuses_fresh_cache(monkeypatch):
+    """Explicit routing must not probe every status file for every command."""
+    pool = UnityConnectionPool()
+    selected = _instance("Selected", 6400, datetime.now())
+    discovery_calls = []
+
+    def discover(instance_identifier):
+        discovery_calls.append(instance_identifier)
+        return [selected]
+
+    monkeypatch.setattr(
+        PortDiscovery,
+        "discover_all_unity_instances",
+        discover,
+    )
+
+    first = pool.discover_all_instances(instance_identifier=selected.id)
+    second = pool.discover_all_instances(instance_identifier=selected.id)
+
+    assert first == [selected]
+    assert second == [selected]
+    assert discovery_calls == [selected.id]
+
+
+def test_discover_selected_instance_refreshes_on_cache_miss(monkeypatch):
+    """A fresh cache for another editor must not hide a newly selected one."""
+    pool = UnityConnectionPool()
+    first = _instance("First", 6400, datetime.now())
+    selected = _instance("Selected", 6401, datetime.now())
+    discovery_results = iter(([first], [first, selected]))
+    discovery_calls = []
+
+    def discover(instance_identifier):
+        discovery_calls.append(instance_identifier)
+        return next(discovery_results)
+
+    monkeypatch.setattr(
+        PortDiscovery,
+        "discover_all_unity_instances",
+        discover,
+    )
+
+    pool.discover_all_instances(instance_identifier=first.id)
+    instances = pool.discover_all_instances(instance_identifier=selected.id)
+
+    assert instances == [first, selected]
+    assert discovery_calls == [first.id, selected.id]

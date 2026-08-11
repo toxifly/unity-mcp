@@ -21,24 +21,34 @@ class StdioPortRegistry:
         self._instances: dict[str, UnityInstanceInfo] = {}
         self._last_refresh: float = 0.0
 
-    def _refresh_locked(self) -> None:
-        instances = PortDiscovery.discover_all_unity_instances()
+    def _refresh_locked(self, requested_instance: str | None = None) -> None:
+        instances = PortDiscovery.discover_all_unity_instances(requested_instance)
         self._instances = {inst.id: inst for inst in instances}
         self._last_refresh = time.time()
         logger.debug(
             f"STDIO port registry refreshed with {len(instances)} instance(s)")
 
-    def get_instances(self, *, force_refresh: bool = False) -> list[UnityInstanceInfo]:
+    def get_instances(
+        self,
+        *,
+        force_refresh: bool = False,
+        requested_instance: str | None = None,
+    ) -> list[UnityInstanceInfo]:
         ttl = getattr(config, "port_registry_ttl", 5.0)
         with self._lock:
             now = time.time()
-            if not force_refresh and self._instances and (now - self._last_refresh) < ttl:
+            if (
+                requested_instance is None
+                and not force_refresh
+                and self._instances
+                and (now - self._last_refresh) < ttl
+            ):
                 return list(self._instances.values())
-            self._refresh_locked()
+            self._refresh_locked(requested_instance)
             return list(self._instances.values())
 
     def get_instance(self, instance_id: str | None) -> UnityInstanceInfo | None:
-        instances = self.get_instances()
+        instances = self.get_instances(requested_instance=instance_id)
         if instance_id:
             return next((inst for inst in instances if inst.id == instance_id), None)
         if not instances:

@@ -16,8 +16,19 @@ from utils.module_discovery import discover_modules
 
 logger = logging.getLogger("mcp-for-unity-server")
 
+# Exact resource URIs attached to the currently constructed FastMCP server.
+# The bridge handshake advertises from services.capability_catalog (stable
+# build metadata); this list exists only so validate_server_registrations()
+# can verify what FastMCP actually registered against that catalog.
+_active_resource_uris: list[str] = []
+
 # Export decorator for easy imports within tools
-__all__ = ['register_all_resources']
+__all__ = ['register_all_resources', 'get_active_resource_uris']
+
+
+def get_active_resource_uris() -> list[str]:
+    """Return the resource URIs exposed by the active FastMCP server."""
+    return _active_resource_uris.copy()
 
 
 def _serialize_pydantic(func):
@@ -47,6 +58,7 @@ def register_all_resources(mcp: FastMCP, *, project_scoped_tools: bool = True):
     functions will be automatically registered.
     """
     logger.info("Auto-discovering MCP for Unity Server resources...")
+    _active_resource_uris.clear()
     # Dynamic import of all modules in this directory
     resources_dir = Path(__file__).parent
 
@@ -89,6 +101,7 @@ def register_all_resources(mcp: FastMCP, *, project_scoped_tools: bool = True):
             logger.debug(
                 f"Registered resource template: {resource_name} - {uri}")
             registered_count += 1
+            _active_resource_uris.append(uri)
             resource_info['func'] = wrapped_template
         else:
             wrapped = _serialize_pydantic(func)
@@ -104,6 +117,7 @@ def register_all_resources(mcp: FastMCP, *, project_scoped_tools: bool = True):
             logger.debug(
                 f"Registered resource: {resource_name} - {description}")
             registered_count += 1
+            _active_resource_uris.append(uri)
 
     logger.info(
         f"Registered {registered_count} MCP resources ({len(resources)} unique)")

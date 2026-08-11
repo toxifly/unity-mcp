@@ -17,7 +17,7 @@
                 <ui:Label text="Server Source:" class="override-label" />
             </ui:VisualElement>
             <ui:VisualElement class="path-override-controls">
-                <ui:TextField name="git-url-override" placeholder-text="/path/to/Server or git+https://..." class="override-field" />
+                <ui:TextField name="git-url-override" placeholder-text="/path/to/local/Server" class="override-field" />
                 <ui:Button name="browse-git-url-button" text="Select" class="icon-button" />
                 <ui:Button name="clear-git-url-button" text="Clear" class="icon-button" />
             </ui:VisualElement>

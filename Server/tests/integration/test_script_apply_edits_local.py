@@ -12,7 +12,23 @@ from services.tools.script_apply_edits import (
     _find_best_closing_brace_match,
     _find_best_anchor_match,
     _is_in_string_context,
+    _infer_class_name,
 )
+
+
+# ── class-name inference ─────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("script_name", "expected"),
+    [
+        ("Unit", "Unit"),
+        ("Unit.Part", "Unit"),
+        ("Unit.Part.Rendering", "Unit"),
+    ],
+)
+def test_infer_class_name_uses_first_script_stem_segment(script_name, expected):
+    assert _infer_class_name(script_name) == expected
 
 
 # ── _is_in_string_context ────────────────────────────────────────────

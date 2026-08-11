@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Threading;
@@ -53,6 +54,12 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private string _projectName;
         private string _projectPath;
         private string _unityVersion;
+        private string _packageVersion;
+        private List<string> _registeredResources = new();
+        private List<string> _toolGroups = new();
+        private JObject _unityHandshake;
+        private volatile bool _handshakeIncompatible;
+        private volatile bool _registrationAccepted;
         private TimeSpan _keepAliveInterval = DefaultKeepAliveInterval;
         private TimeSpan _socketKeepAliveInterval = DefaultKeepAliveInterval;
         private volatile bool _isConnected;
@@ -83,6 +90,20 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             _projectName = ProjectIdentityUtility.GetProjectName();
             _projectHash = ProjectIdentityUtility.GetProjectHash();
             _unityVersion = Application.unityVersion;
+            _packageVersion = AssetPathUtility.GetPackageVersion();
+            _registeredResources = MCPServiceLocator.ResourceDiscovery.DiscoverAllResources()
+                .Select(resource => resource.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToList();
+            _toolGroups = (_toolDiscoveryService?.DiscoverAllTools() ?? new List<ToolMetadata>())
+                .Select(tool => string.IsNullOrWhiteSpace(tool.Group) ? "core" : tool.Group)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(group => group, StringComparer.Ordinal)
+                .ToList();
+            _unityHandshake = BridgeProtocol.CreateUnityHandshake(
+                _packageVersion, _registeredResources, _toolGroups);
             _apiKey = HttpEndpointUtility.IsRemoteScope()
                 ? EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty)
                 : string.Empty;
@@ -113,6 +134,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
             await StopAsync();
 
+            _handshakeIncompatible = false;
+            _registrationAccepted = false;
             _lifecycleCts = new CancellationTokenSource();
             _endpointUri = BuildWebSocketUri(HttpEndpointUtility.GetBaseUrl());
             _sessionId = null;
@@ -123,14 +146,21 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 return false;
             }
 
-            // State is connected but session ID might be pending until 'registered' message
-            _state = TransportState.Connected(TransportDisplayName, sessionId: "pending", details: _endpointUri.ToString());
+            // EstablishConnectionAsync now returns only after the mandatory
+            // registered-handshake assigns a server-authoritative session ID.
+            _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _endpointUri.ToString());
             _isConnected = true;
             return true;
         }
 
         public async Task StopAsync()
         {
+            // Start/manager cleanup follows a failed handshake. Preserve the
+            // actionable failure instead of replacing it with an empty state.
+            string preservedError = _state != null && !_state.IsConnected
+                ? _state.Error
+                : null;
+
             if (_lifecycleCts == null)
             {
                 return;
@@ -162,7 +192,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
 
             _isConnected = false;
-            _state = TransportState.Disconnected(TransportDisplayName);
+            _registrationAccepted = false;
+            _state = TransportState.Disconnected(TransportDisplayName, preservedError);
 
             _lifecycleCts.Dispose();
             _lifecycleCts = null;
@@ -191,6 +222,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             _keepAliveTask = null;
             Interlocked.Exchange(ref _isReconnectingFlag, 0);
             _isConnected = false;
+            _registrationAccepted = false;
             _state = TransportState.Disconnected(TransportDisplayName);
 
             try { _lifecycleCts?.Dispose(); } catch { }
@@ -249,6 +281,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private async Task<bool> EstablishConnectionAsync(CancellationToken token)
         {
             await StopConnectionLoopsAsync().ConfigureAwait(false);
+            _registrationAccepted = false;
 
             _connectionCts?.Dispose();
             _connectionCts = CancellationTokenSource.CreateLinkedTokenSource(token);
@@ -303,7 +336,9 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 _endpointUri = connectedEndpoint;
             }
 
-            StartBackgroundLoops(connectionToken);
+            var handshakeCompletion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            StartBackgroundLoops(connectionToken, handshakeCompletion);
 
             try
             {
@@ -314,10 +349,27 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 string regMsg = $"Registration with server failed: {ex.Message}";
                 McpLog.Error($"[WebSocket] {regMsg}");
                 _state = TransportState.Disconnected(TransportDisplayName, regMsg);
+                handshakeCompletion.TrySetResult(false);
                 return false;
             }
 
-            return true;
+            Task completed = await Task.WhenAny(
+                handshakeCompletion.Task,
+                Task.Delay(TimeSpan.FromSeconds(5), connectionToken)).ConfigureAwait(false);
+            if (completed != handshakeCompletion.Task)
+            {
+                string error = $"Mandatory bridge handshake timed out after 5 seconds (protocol {BridgeProtocol.Version}).";
+                McpLog.Error($"[WebSocket] {error}");
+                _state = TransportState.Disconnected(TransportDisplayName, error);
+                handshakeCompletion.TrySetResult(false);
+                return false;
+            }
+
+            bool handshakeSucceeded = await handshakeCompletion.Task.ConfigureAwait(false);
+            return handshakeSucceeded
+                && !connectionToken.IsCancellationRequested
+                && _socket != null
+                && _socket.State == WebSocketState.Open;
         }
 
         /// <summary>
@@ -365,29 +417,35 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private void StartBackgroundLoops(CancellationToken token)
+        private void StartBackgroundLoops(
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             if ((_receiveTask != null && !_receiveTask.IsCompleted) || (_keepAliveTask != null && !_keepAliveTask.IsCompleted))
             {
                 return;
             }
 
-            _receiveTask = Task.Run(() => ReceiveLoopAsync(token), CancellationToken.None);
-            _keepAliveTask = Task.Run(() => KeepAliveLoopAsync(token), CancellationToken.None);
+            _receiveTask = Task.Run(
+                () => ReceiveLoopAsync(token, handshakeCompletion), CancellationToken.None);
+            _keepAliveTask = Task.Run(
+                () => KeepAliveLoopAsync(token, handshakeCompletion), CancellationToken.None);
         }
 
-        private async Task ReceiveLoopAsync(CancellationToken token)
+        private async Task ReceiveLoopAsync(
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             while (!token.IsCancellationRequested)
             {
                 try
                 {
-                    string message = await ReceiveMessageAsync(token).ConfigureAwait(false);
+                    string message = await ReceiveMessageAsync(token, handshakeCompletion).ConfigureAwait(false);
                     if (message == null)
                     {
                         continue;
                     }
-                    await HandleMessageAsync(message, token).ConfigureAwait(false);
+                    await HandleMessageAsync(message, token, handshakeCompletion).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -396,19 +454,21 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 catch (WebSocketException wse)
                 {
                     McpLog.Warn($"[WebSocket] Receive loop error: {wse.Message}");
-                    await HandleSocketClosureAsync(wse.Message).ConfigureAwait(false);
+                    await HandleSocketClosureAsync(wse.Message, handshakeCompletion).ConfigureAwait(false);
                     break;
                 }
                 catch (Exception ex)
                 {
                     McpLog.Warn($"[WebSocket] Unexpected receive error: {ex.Message}");
-                    await HandleSocketClosureAsync(ex.Message).ConfigureAwait(false);
+                    await HandleSocketClosureAsync(ex.Message, handshakeCompletion).ConfigureAwait(false);
                     break;
                 }
             }
         }
 
-        private async Task<string> ReceiveMessageAsync(CancellationToken token)
+        private async Task<string> ReceiveMessageAsync(
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             if (_socket == null)
             {
@@ -427,7 +487,9 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
                     if (result.MessageType == WebSocketMessageType.Close)
                     {
-                        await HandleSocketClosureAsync(result.CloseStatusDescription ?? "Server closed connection").ConfigureAwait(false);
+                        await HandleSocketClosureAsync(
+                            result.CloseStatusDescription ?? "Server closed connection",
+                            handshakeCompletion).ConfigureAwait(false);
                         return null;
                     }
 
@@ -455,7 +517,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private async Task HandleMessageAsync(string message, CancellationToken token)
+        private async Task HandleMessageAsync(
+            string message,
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             JObject payload;
             try
@@ -474,15 +539,28 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             {
                 case "welcome":
                     ApplyWelcome(payload);
+                    ValidateServerWelcome(payload, handshakeCompletion);
                     break;
                 case "registered":
-                    await HandleRegisteredAsync(payload, token).ConfigureAwait(false);
+                    await HandleRegisteredAsync(payload, token, handshakeCompletion).ConfigureAwait(false);
                     break;
                 case "execute":
+                    if (!_registrationAccepted)
+                    {
+                        FailHandshake(
+                            "Python server sent a command before the mandatory bridge handshake completed.",
+                            handshakeCompletion);
+                        break;
+                    }
                     await HandleExecuteAsync(payload, token).ConfigureAwait(false);
                     break;
                 case "ping":
                     await SendPongAsync(token).ConfigureAwait(false);
+                    break;
+                case "handshake_error":
+                    FailHandshake(
+                        payload.Value<string>("error") ?? "Python server rejected the mandatory bridge handshake.",
+                        handshakeCompletion);
                     break;
                 default:
                     // No-op for unrecognised types (keep-alives, telemetry, etc.)
@@ -508,17 +586,72 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private async Task HandleRegisteredAsync(JObject payload, CancellationToken token)
+        private void ValidateServerWelcome(
+            JObject payload,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
+            if (!BridgeProtocol.ValidateServerHandshake(
+                    payload["handshake"] as JObject,
+                    _packageVersion,
+                    out string error))
+            {
+                FailHandshake(error, handshakeCompletion);
+            }
+        }
+
+        private void FailHandshake(
+            string error,
+            TaskCompletionSource<bool> handshakeCompletion)
+        {
+            string message = string.IsNullOrWhiteSpace(error)
+                ? "Mandatory bridge handshake failed."
+                : error;
+            _state = TransportState.Disconnected(TransportDisplayName, message);
+            _handshakeIncompatible = true;
+            _registrationAccepted = false;
+            _isConnected = false;
+            McpLog.Error($"[WebSocket] {message}");
+            handshakeCompletion?.TrySetResult(false);
+            try { _connectionCts?.Cancel(); } catch { }
+        }
+
+        private async Task HandleRegisteredAsync(
+            JObject payload,
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
+        {
+            if (!BridgeProtocol.ValidateCompleteHandshake(
+                    payload["handshake"] as JObject,
+                    _packageVersion,
+                    _registeredResources,
+                    _toolGroups,
+                    out string handshakeError))
+            {
+                FailHandshake(handshakeError, handshakeCompletion);
+                return;
+            }
+
             string newSessionId = payload.Value<string>("session_id");
             if (!string.IsNullOrEmpty(newSessionId))
             {
                 _sessionId = newSessionId;
                 ProjectIdentityUtility.SetSessionId(_sessionId);
-                _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _endpointUri.ToString());
-                McpLog.Info($"[WebSocket] Registered with session ID: {_sessionId}", false);
-
                 await SendRegisterToolsAsync(token).ConfigureAwait(false);
+                token.ThrowIfCancellationRequested();
+                if (_socket == null || _socket.State != WebSocketState.Open)
+                {
+                    throw new WebSocketException("WebSocket closed during tool registration");
+                }
+
+                _registrationAccepted = true;
+                McpLog.Info($"[WebSocket] Registered with session ID: {_sessionId}", false);
+                handshakeCompletion?.TrySetResult(true);
+            }
+            else
+            {
+                FailHandshake(
+                    "Python server completed the handshake without assigning a session ID.",
+                    handshakeCompletion);
             }
         }
 
@@ -667,7 +800,9 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             await SendJsonAsync(responsePayload, token).ConfigureAwait(false);
         }
 
-        private async Task KeepAliveLoopAsync(CancellationToken token)
+        private async Task KeepAliveLoopAsync(
+            CancellationToken token,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             while (!token.IsCancellationRequested)
             {
@@ -687,7 +822,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 catch (Exception ex)
                 {
                     McpLog.Warn($"[WebSocket] Keep-alive failed: {ex.Message}");
-                    await HandleSocketClosureAsync(ex.Message).ConfigureAwait(false);
+                    await HandleSocketClosureAsync(ex.Message, handshakeCompletion).ConfigureAwait(false);
                     break;
                 }
             }
@@ -702,7 +837,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                 ["project_name"] = _projectName,
                 ["project_hash"] = _projectHash,
                 ["unity_version"] = _unityVersion,
-                ["project_path"] = _projectPath
+                ["project_path"] = _projectPath,
+                ["handshake"] = _unityHandshake?.DeepClone()
             };
 
             await SendJsonAsync(registerPayload, token).ConfigureAwait(false);
@@ -745,7 +881,9 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private async Task HandleSocketClosureAsync(string reason)
+        private async Task HandleSocketClosureAsync(
+            string reason,
+            TaskCompletionSource<bool> handshakeCompletion)
         {
             // Capture stack trace for debugging disconnection triggers
             var stackTrace = new System.Diagnostics.StackTrace(true);
@@ -753,21 +891,36 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
             if (_lifecycleCts == null || _lifecycleCts.IsCancellationRequested)
             {
+                handshakeCompletion?.TrySetCanceled();
                 return;
             }
 
-            if (Interlocked.CompareExchange(ref _isReconnectingFlag, 1, 0) != 0)
-            {
-                return;
-            }
+            // Always release the waiter belonging to this socket attempt. A
+            // reconnect owns a different completion source and cannot replace it.
+            handshakeCompletion?.TrySetResult(false);
 
+            bool wasConnected = _isConnected;
             _isConnected = false;
+            _registrationAccepted = false;
             _state = _state.WithError(reason ?? "Connection closed");
             McpLog.Warn($"[WebSocket] Connection closed: {reason}");
 
             await StopConnectionLoopsAsync(awaitTasks: false).ConfigureAwait(false);
 
-            _ = Task.Run(() => AttemptReconnectAsync(_lifecycleCts.Token), CancellationToken.None);
+            if (Volatile.Read(ref _isReconnectingFlag) != 0)
+            {
+                // AttemptReconnectAsync already owns retry policy. Its current
+                // EstablishConnectionAsync call was unblocked above.
+                return;
+            }
+
+            // A closure during the initial mandatory handshake is reported to
+            // StartAsync. Only a previously registered connection starts the
+            // long-running reconnect loop.
+            if (wasConnected && Interlocked.CompareExchange(ref _isReconnectingFlag, 1, 0) == 0)
+            {
+                _ = Task.Run(() => AttemptReconnectAsync(_lifecycleCts.Token), CancellationToken.None);
+            }
         }
 
         private async Task AttemptReconnectAsync(CancellationToken token)
@@ -796,6 +949,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         McpLog.Info("[WebSocket] Reconnected to MCP server", false);
                         return;
                     }
+                    if (_handshakeIncompatible)
+                    {
+                        McpLog.Error("[WebSocket] Reconnect stopped because the Python server and Unity package are incompatible.");
+                        return;
+                    }
                 }
 
                 // Schedule exhausted — keep retrying every 30 s indefinitely so a transient
@@ -812,6 +970,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         _state = TransportState.Connected(TransportDisplayName, sessionId: _sessionId, details: _endpointUri.ToString());
                         _isConnected = true;
                         McpLog.Info("[WebSocket] Reconnected to MCP server", false);
+                        return;
+                    }
+                    if (_handshakeIncompatible)
+                    {
+                        McpLog.Error("[WebSocket] Reconnect stopped because the Python server and Unity package are incompatible.");
                         return;
                     }
                 }

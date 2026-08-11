@@ -58,6 +58,14 @@ Control the Unity Editor in natural language from any MCP client — create scen
 
 ---
 
+## Server version policy
+
+The Unity package and Python server must use the same release version. Automatic configuration uses an exact normalized pin (for example, Unity package `10.1.1-beta.1` uses `mcpforunityserver==10.1.1b1`) and never selects an unpinned package, version range, prerelease channel, `latest`, or another fallback version. If the exact matching server cannot be determined or obtained, setup fails with an error instead of silently installing a different release.
+
+For repository development, **Server Source Override** may be explicitly set to the local `Server/` directory. This is a deliberate local-development setting, not an automatic fallback.
+
+---
+
 ## Community
 
 - [Discord](https://discord.gg/y4p8KfzrN4) — chat with maintainers and other contributors

@@ -54,6 +54,107 @@ namespace MCPForUnity.Editor.Tools
     [McpForUnityTool("manage_script", AutoRegister = false)]
     public static class ManageScript
     {
+        private static readonly Regex IdentifierRegex = new Regex(
+            @"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2));
+
+        // Portable superset used on every host. POSIX permits most of these characters, but Unity
+        // projects must remain check-outable and openable on supported Windows systems too.
+        private const string PortableInvalidFileNamePunctuation = "<>:\"/\\|?*";
+
+        // Windows resolves these as devices regardless of any extension or suffix, so a file named
+        // after one never round-trips to a real path.
+        private static readonly HashSet<string> ReservedDeviceNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        };
+
+        /// <summary>
+        /// Validates a script's FILE STEM (the name with ".cs" removed). This is a path-safety check,
+        /// NOT a C# identifier check: partial classes are conventionally split across "Type.Part.cs"
+        /// files, so a dotted stem is legal and must be accepted here. The identifier rule belongs on
+        /// the TYPE name — see <see cref="TryGetTypeName"/> — and is enforced only where a type name
+        /// is actually consumed (template generation and class-span lookups).
+        /// </summary>
+        private static bool IsSafeFileStem(string stem, out string error)
+        {
+            if (string.IsNullOrWhiteSpace(stem))
+            {
+                error = "Script name cannot be empty.";
+                return false;
+            }
+
+            // Checked explicitly rather than left to GetInvalidFileNameChars: on POSIX a backslash is a
+            // legal filename character, so only an explicit test rejects separators on every platform.
+            if (stem.IndexOf('/') >= 0 || stem.IndexOf('\\') >= 0)
+            {
+                error = $"Invalid script name: '{stem}'. It must be a file name, not a path — put directories in 'path'.";
+                return false;
+            }
+
+            if (stem.IndexOf("..", StringComparison.Ordinal) >= 0)
+            {
+                error = $"Invalid script name: '{stem}'. It must not contain '..'.";
+                return false;
+            }
+
+            if (stem.Any(character =>
+                    character < ' ' || PortableInvalidFileNamePunctuation.IndexOf(character) >= 0))
+            {
+                error = $"Invalid script name: '{stem}'. It contains characters that are not legal in a file name.";
+                return false;
+            }
+
+            // Windows silently strips a trailing dot or space, so the file created would not be the
+            // file named. A leading dot would make it a hidden file with no type name at all.
+            if (stem.StartsWith(".", StringComparison.Ordinal) ||
+                stem.EndsWith(".", StringComparison.Ordinal) ||
+                stem.EndsWith(" ", StringComparison.Ordinal))
+            {
+                error = $"Invalid script name: '{stem}'. It must not start with a dot or end with a dot or space.";
+                return false;
+            }
+
+            if (ReservedDeviceNames.Contains(TypeNameFromFileStem(stem)))
+            {
+                error = $"Invalid script name: '{stem}'. It is a reserved device name.";
+                return false;
+            }
+
+            error = null;
+            return true;
+        }
+
+        /// <summary>
+        /// The C# type a script file declares, by convention: the stem up to the FIRST dot, so the
+        /// partial "UnitSlotController.QuickMove.cs" resolves to type "UnitSlotController".
+        /// </summary>
+        private static string TypeNameFromFileStem(string stem)
+        {
+            if (string.IsNullOrEmpty(stem)) return stem;
+            int dot = stem.IndexOf('.');
+            return dot < 0 ? stem : stem.Substring(0, dot);
+        }
+
+        /// <summary>
+        /// Derives the type name from a file stem and enforces the C# identifier rule on it. Call this
+        /// only where the result is used AS an identifier; a stem that merely names a file never needs it.
+        /// </summary>
+        private static bool TryGetTypeName(string stem, out string typeName, out string error)
+        {
+            typeName = TypeNameFromFileStem(stem);
+            if (!IdentifierRegex.IsMatch(typeName))
+            {
+                error = $"Invalid type name '{typeName}' derived from script name '{stem}'. " +
+                        "Use only letters, numbers, underscores, and don't start with a number.";
+                return false;
+            }
+
+            error = null;
+            return true;
+        }
+
         /// <summary>
         /// Resolves a directory under Assets/, preventing traversal and escaping.
         /// Returns fullPathDir on disk and canonical 'Assets/...' relative path.
@@ -176,12 +277,12 @@ namespace MCPForUnity.Editor.Tools
 
             string scriptType = p.Get("scriptType"); // For templates/validation
             string namespaceName = p.Get("namespace"); // For organizing code
-            // Basic name validation (alphanumeric, underscores, cannot start with number)
-            if (!Regex.IsMatch(name, @"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(2)))
+            // 'name' is a FILE STEM here — it is only ever recombined as "{name}.cs" below — so it is
+            // validated for path safety, not as a C# identifier. Gating it on the identifier rule used
+            // to reject every partial-class file ("Type.Part.cs"), which is a legal and common layout.
+            if (!IsSafeFileStem(name, out string nameError))
             {
-                return new ErrorResponse(
-                    $"Invalid script name: '{name}'. Use only letters, numbers, underscores, and don't start with a number."
-                );
+                return new ErrorResponse(nameError);
             }
 
             // Resolve and harden target directory under Assets/
@@ -349,10 +450,16 @@ namespace MCPForUnity.Editor.Tools
                 );
             }
 
-            // Generate default content if none provided
+            // Generate default content if none provided. This is the one path that turns the file name
+            // into a declared type, so the identifier rule is enforced here rather than up front.
             if (string.IsNullOrEmpty(contents))
             {
-                contents = GenerateDefaultScriptContent(name, scriptType, namespaceName);
+                if (!TryGetTypeName(name, out string typeName, out string typeError))
+                {
+                    return new ErrorResponse(typeError);
+                }
+
+                contents = GenerateDefaultScriptContent(typeName, scriptType, namespaceName);
             }
 
             // Validate syntax with detailed error reporting using GUI setting
@@ -620,8 +727,11 @@ namespace MCPForUnity.Editor.Tools
                 if (mh.Success)
                 {
                     string methodName = mh.Groups[1].Value;
+                    // The class is named by the stem's first segment: a partial's "Type.Part.cs" file
+                    // still declares "Type", so the whole stem would never match a declaration.
+                    string className = TypeNameFromFileStem(name);
                     // Find class span containing the edit
-                    if (TryComputeClassSpan(original, name, null, out var clsStart, out var clsLen, out _))
+                    if (TryComputeClassSpan(original, className, null, out var clsStart, out var clsLen, out _))
                     {
                         if (TryComputeMethodSpan(original, clsStart, clsLen, methodName, null, null, null, out var mStart, out var mLen, out _))
                         {
@@ -633,7 +743,7 @@ namespace MCPForUnity.Editor.Tools
                                 // Apply the edit to get a candidate string, then recompute method span on the edited text
                                 string candidate = original.Remove(sp.start, sp.end - sp.start).Insert(sp.start, sp.text ?? string.Empty);
                                 string replacementText;
-                                if (TryComputeClassSpan(candidate, name, null, out var cls2Start, out var cls2Len, out _)
+                                if (TryComputeClassSpan(candidate, className, null, out var cls2Start, out var cls2Len, out _)
                                     && TryComputeMethodSpan(candidate, cls2Start, cls2Len, methodName, null, null, null, out var m2Start, out var m2Len, out _))
                                 {
                                     replacementText = candidate.Substring(m2Start, m2Len);
@@ -659,7 +769,7 @@ namespace MCPForUnity.Editor.Tools
                                 var op = new JObject
                                 {
                                     ["mode"] = "replace_method",
-                                    ["className"] = name,
+                                    ["className"] = className,
                                     ["methodName"] = methodName,
                                     ["replacement"] = replacementText
                                 };
@@ -1498,7 +1608,7 @@ namespace MCPForUnity.Editor.Tools
                                     }
 
                                     // Duplicate guard: if identical snippet already exists within this class, skip insert
-                                    if (TryComputeClassSpan(working, name, null, out var clsStartDG, out var clsLenDG, out _))
+                                    if (TryComputeClassSpan(working, TypeNameFromFileStem(name), null, out var clsStartDG, out var clsLenDG, out _))
                                     {
                                         string classSlice = working.Substring(clsStartDG, Math.Min(clsLenDG, working.Length - clsStartDG));
                                         if (classSlice.IndexOf(norm, StringComparison.Ordinal) >= 0)

@@ -3,8 +3,14 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+using MCPForUnity.Editor.Services.Transport;
 using MCPForUnity.Editor.Services.Transport.Transports;
 using NUnit.Framework;
+using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace MCPForUnityTests.Editor.Services
 {
@@ -82,6 +88,120 @@ namespace MCPForUnityTests.Editor.Services
             }
         }
 
+        [Test]
+        public async Task HandleSocketClosureAsync_CompletesOnlyItsOwnHandshakeAttempt()
+        {
+            var client = new WebSocketTransportClient();
+            var closedAttempt = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var unrelatedAttempt = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SetInstanceField(client, "_lifecycleCts", new CancellationTokenSource());
+
+            try
+            {
+                await InvokePrivateTask(
+                    client,
+                    "HandleSocketClosureAsync",
+                    "closed before registration",
+                    closedAttempt);
+
+                Assert.IsTrue(closedAttempt.Task.IsCompleted);
+                Assert.IsFalse(await closedAttempt.Task);
+                Assert.IsFalse(
+                    unrelatedAttempt.Task.IsCompleted,
+                    "A closure from an older socket must not complete a newer attempt's handshake.");
+                Assert.AreEqual(0, GetInstanceField<int>(client, "_isReconnectingFlag"));
+            }
+            finally
+            {
+                await client.StopAsync();
+            }
+        }
+
+        [Test]
+        public async Task HandleSocketClosureAsync_DuringReconnect_ClearsConnectedState()
+        {
+            var client = new WebSocketTransportClient();
+            var attempt = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SetInstanceField(client, "_lifecycleCts", new CancellationTokenSource());
+            SetInstanceField(client, "_isConnected", true);
+            SetInstanceField(client, "_registrationAccepted", true);
+            SetInstanceField(client, "_isReconnectingFlag", 1);
+
+            try
+            {
+                await InvokePrivateTask(
+                    client,
+                    "HandleSocketClosureAsync",
+                    "closed during reconnect registration",
+                    attempt);
+
+                Assert.IsFalse(client.IsConnected);
+                Assert.IsFalse(client.State.IsConnected);
+                Assert.IsFalse(GetInstanceField<bool>(client, "_registrationAccepted"));
+                Assert.IsTrue(attempt.Task.IsCompleted);
+                Assert.IsFalse(await attempt.Task);
+            }
+            finally
+            {
+                SetInstanceField(client, "_isReconnectingFlag", 0);
+                await client.StopAsync();
+            }
+        }
+
+        [Test]
+        public async Task HandleMessageAsync_ExecuteBeforeHandshake_CancelsConnection()
+        {
+            var client = new WebSocketTransportClient();
+            var lifecycleCts = new CancellationTokenSource();
+            var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(
+                lifecycleCts.Token);
+            var attempt = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SetInstanceField(client, "_lifecycleCts", lifecycleCts);
+            SetInstanceField(client, "_connectionCts", connectionCts);
+            const string error =
+                "Python server sent a command before the mandatory bridge handshake completed.";
+
+            LogAssert.Expect(LogType.Error, new Regex(Regex.Escape(error)));
+            await InvokePrivateTask(
+                client,
+                "HandleMessageAsync",
+                "{\"type\":\"execute\",\"id\":\"unsafe\",\"name\":\"manage_scene\"}",
+                CancellationToken.None,
+                attempt);
+
+            Assert.IsTrue(connectionCts.IsCancellationRequested);
+            Assert.IsFalse(client.IsConnected);
+            Assert.AreEqual(error, client.State.Error);
+            Assert.IsTrue(attempt.Task.IsCompleted);
+            Assert.IsFalse(await attempt.Task);
+
+            await client.StopAsync();
+        }
+
+        [Test]
+        public async Task StopAsync_PreservesActionableHandshakeError()
+        {
+            var client = new WebSocketTransportClient();
+            var attempt = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            SetInstanceField(client, "_lifecycleCts", new CancellationTokenSource());
+            const string mismatch =
+                "Server/package version mismatch: install matching releases and restart both sides.";
+
+            LogAssert.Expect(LogType.Error, new Regex(Regex.Escape(mismatch)));
+            InvokePrivate(client, "FailHandshake", mismatch, attempt);
+            await client.StopAsync();
+
+            Assert.IsFalse(client.State.IsConnected);
+            Assert.AreEqual(mismatch, client.State.Error);
+            Assert.IsTrue(attempt.Task.IsCompleted);
+            Assert.IsFalse(await attempt.Task);
+        }
+
         private static List<Uri> InvokeBuildConnectionCandidateUris(Uri endpoint)
         {
             if (BuildConnectionCandidateUrisMethod == null)
@@ -92,6 +212,36 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsNotNull(result);
             Assert.IsInstanceOf<List<Uri>>(result);
             return (List<Uri>)result;
+        }
+
+        private static void SetInstanceField(object target, string fieldName, object value)
+        {
+            FieldInfo field = target.GetType().GetField(
+                fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.IsNotNull(field, $"Expected private field '{fieldName}' to exist.");
+            field.SetValue(target, value);
+        }
+
+        private static T GetInstanceField<T>(object target, string fieldName)
+        {
+            FieldInfo field = target.GetType().GetField(
+                fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.IsNotNull(field, $"Expected private field '{fieldName}' to exist.");
+            return (T)field.GetValue(target);
+        }
+
+        private static object InvokePrivate(object target, string methodName, params object[] args)
+        {
+            MethodInfo method = target.GetType().GetMethod(
+                methodName, BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.IsNotNull(method, $"Expected private method '{methodName}' to exist.");
+            return method.Invoke(target, args);
+        }
+
+        private static Task InvokePrivateTask(
+            object target, string methodName, params object[] args)
+        {
+            return (Task)InvokePrivate(target, methodName, args);
         }
 
         private static MethodInfo ResolveCandidateBuilderMethod()

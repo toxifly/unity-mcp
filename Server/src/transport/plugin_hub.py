@@ -15,6 +15,13 @@ from starlette.websockets import WebSocket, WebSocketState
 
 from core.config import config
 from core.constants import API_KEY_HEADER
+from core.bridge_handshake import (
+    BRIDGE_PROTOCOL_VERSION,
+    BridgeCompatibilityError,
+    build_bridge_handshake,
+    build_server_manifest,
+    validate_unity_handshake,
+)
 from models.models import MCPResponse
 from transport.plugin_registry import PluginRegistry
 from services.api_key_service import ApiKeyService
@@ -24,6 +31,7 @@ if TYPE_CHECKING:
 from transport.models import (
     WelcomeMessage,
     RegisteredMessage,
+    HandshakeErrorMessage,
     ExecuteCommandMessage,
     PingMessage,
     RegisterMessage,
@@ -220,6 +228,10 @@ class PluginHub(WebSocketEndpoint):
         msg = WelcomeMessage(
             serverTimeout=self.SERVER_TIMEOUT,
             keepAliveInterval=self.KEEP_ALIVE_INTERVAL,
+            handshake={
+                "bridge_protocol_version": BRIDGE_PROTOCOL_VERSION,
+                "python_server": build_server_manifest(),
+            },
         )
         await websocket.send_json(msg.model_dump())
 
@@ -447,12 +459,31 @@ class PluginHub(WebSocketEndpoint):
             raise ValueError(
                 "Plugin registration missing project_hash")
 
+        try:
+            unity_manifest = validate_unity_handshake(payload.handshake)
+        except BridgeCompatibilityError as exc:
+            error = str(exc)
+            logger.error("Rejecting incompatible Unity bridge: %s", error)
+            response = HandshakeErrorMessage(
+                error=error,
+                handshake={
+                    "bridge_protocol_version": BRIDGE_PROTOCOL_VERSION,
+                    "python_server": build_server_manifest(),
+                },
+            )
+            await websocket.send_json(response.model_dump())
+            await websocket.close(code=4406, reason="Incompatible Unity MCP bridge")
+            return
+
         # Get user_id from websocket state (set during API key validation)
         user_id = getattr(websocket.state, "user_id", None)
 
         session_id = str(uuid.uuid4())
         # Inform the plugin of its assigned session ID
-        response = RegisteredMessage(session_id=session_id)
+        response = RegisteredMessage(
+            session_id=session_id,
+            handshake=build_bridge_handshake(unity_manifest),
+        )
         await websocket.send_json(response.model_dump())
 
         session, evicted_session_id = await registry.register(session_id, project_name, project_hash, unity_version, project_path, user_id=user_id)

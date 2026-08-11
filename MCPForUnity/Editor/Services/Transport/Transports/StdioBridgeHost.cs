@@ -58,6 +58,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private static int mainThreadId;
         private static int currentUnityPort = 6400;
         private static bool isAutoConnectMode = false;
+        private static string unityPackageVersion = "unknown";
+        private static string[] registeredResourceNames = Array.Empty<string>();
+        private static string[] registeredToolGroups = Array.Empty<string>();
+        private static JObject unityHandshake;
         private const ulong MaxFrameBytes = 64UL * 1024 * 1024;
         private const int FrameIOTimeoutMs = 30000;
         private static readonly Stopwatch _uptime = Stopwatch.StartNew();
@@ -89,8 +93,79 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         /// 8-char project hash used in the status file name, so a client can detect that it
         /// reached the wrong editor (stale port registry) or a zombie socket.
         /// </summary>
-        public static string BuildHandshakeBanner() =>
-            $"WELCOME UNITY-MCP 1 FRAMING=1 PROJECT={ComputeProjectHash(Application.dataPath)} PORT={currentUnityPort}\n";
+        public static string BuildHandshakeBanner()
+        {
+            // Batch-mode tests do not auto-start the bridge, but the public
+            // diagnostic banner must still contain a complete manifest.
+            if (unityHandshake == null)
+            {
+                CaptureHandshakeManifest();
+            }
+
+            return $"WELCOME UNITY-MCP {BridgeProtocol.Version} FRAMING=1 " +
+                $"BRIDGE_PROTOCOL={BridgeProtocol.Version} " +
+                $"PROJECT={ComputeProjectHash(Application.dataPath)} PORT={currentUnityPort} " +
+                $"UNITY_PACKAGE={unityPackageVersion} " +
+                $"RESOURCES={string.Join(",", registeredResourceNames)} " +
+                $"TOOL_GROUPS={string.Join(",", registeredToolGroups)}\n";
+        }
+
+        private static void CaptureHandshakeManifest()
+        {
+            unityPackageVersion = AssetPathUtility.GetPackageVersion();
+            registeredResourceNames = MCPServiceLocator.ResourceDiscovery.DiscoverAllResources()
+                .Select(resource => resource.Name)
+                .Where(name => !string.IsNullOrWhiteSpace(name))
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+            registeredToolGroups = MCPServiceLocator.ToolDiscovery.DiscoverAllTools()
+                .Select(tool => string.IsNullOrWhiteSpace(tool.Group) ? "core" : tool.Group)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(group => group, StringComparer.Ordinal)
+                .ToArray();
+            unityHandshake = BridgeProtocol.CreateUnityHandshake(
+                unityPackageVersion, registeredResourceNames, registeredToolGroups);
+        }
+
+        private static string ProcessBridgeHandshake(string commandText, out bool accepted)
+        {
+            accepted = false;
+            try
+            {
+                JObject request = JObject.Parse(commandText);
+                if (!string.Equals(request.Value<string>("type"), "bridge_handshake", StringComparison.Ordinal))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        status = "error",
+                        error = $"Mandatory bridge handshake required before commands. Expected protocol {BridgeProtocol.Version}."
+                    });
+                }
+
+                JObject serverHandshake = request["params"]?["handshake"] as JObject;
+                if (!BridgeProtocol.ValidateServerHandshake(
+                        serverHandshake, unityPackageVersion, out string error))
+                {
+                    return JsonConvert.SerializeObject(new { status = "error", error });
+                }
+
+                accepted = true;
+                return JsonConvert.SerializeObject(new
+                {
+                    status = "success",
+                    result = BridgeProtocol.CompleteHandshake(serverHandshake, unityHandshake)
+                });
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    status = "error",
+                    error = $"Invalid bridge handshake: {ex.Message}"
+                });
+            }
+        }
 
         private static void IoInfo(string s) { McpLog.Info(s, always: false); }
 
@@ -374,12 +449,12 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                     _portBusySince = 0.0;
                     isRunning = true;
                     isAutoConnectMode = false;
+                    CommandRegistry.Initialize();
+                    CaptureHandshakeManifest();
                     string platform = Application.platform.ToString();
-                    string serverVer = AssetPathUtility.GetPackageVersion();
-                    McpLog.Info($"StdioBridgeHost started on port {currentUnityPort}. (OS={platform}, server={serverVer})");
+                    McpLog.Info($"StdioBridgeHost started on port {currentUnityPort}. (OS={platform}, package={unityPackageVersion}, bridge={BridgeProtocol.Version})");
                     cts = new CancellationTokenSource();
                     listenerTask = Task.Run(() => ListenerLoopAsync(cts.Token));
-                    CommandRegistry.Initialize();
                     if (!_processCommandsHooked)
                     {
                         _processCommandsHooked = true;
@@ -577,6 +652,8 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         return;
                     }
 
+                    bool handshakeComplete = false;
+
                     // Concurrent clients are served independently: several agents (or a test
                     // harness next to a resident MCP server) may hold connections at once, and
                     // a new connection must not kill the others mid-request. Dead or idle
@@ -598,6 +675,24 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                                 }
                             }
                             catch { }
+
+                            if (!handshakeComplete)
+                            {
+                                string handshakeResponse = ProcessBridgeHandshake(
+                                    commandText, out bool accepted);
+                                byte[] handshakeResponseBytes = System.Text.Encoding.UTF8.GetBytes(
+                                    handshakeResponse);
+                                await WriteFrameAsync(stream, handshakeResponseBytes);
+                                if (!accepted)
+                                {
+                                    McpLog.Error($"Rejected incompatible stdio bridge client: {JObject.Parse(handshakeResponse).Value<string>("error")}");
+                                    break;
+                                }
+                                handshakeComplete = true;
+                                if (IsDebugEnabled()) McpLog.Info("Mandatory bridge handshake completed", always: false);
+                                continue;
+                            }
+
                             string commandId = Guid.NewGuid().ToString();
                             var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
 
