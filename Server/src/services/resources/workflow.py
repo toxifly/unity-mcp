@@ -31,7 +31,7 @@ _SECTIONS: dict[str, dict[str, Any]] = {
         "instructions": [
             "After creating or editing scripts, call refresh_unity(wait_for_ready=true) before using new types or components.",
             "If refresh_unity times out, resume the same refresh with its job_id instead of requesting another refresh or manually polling editor state.",
-            "For asynchronous test runs, call get_test_job with wait_timeout for a blocking wait instead of repeatedly polling job status.",
+            "Pass wait_timeout to run_tests to start a run and block for its result in one call; get_test_job with wait_timeout is for resuming a wait that timed out, not for repeatedly polling job status.",
             "After Unity is ready, call read_console filtered to Error and resolve compilation errors before proceeding.",
             "When the docs group is available, verify version- and package-specific APIs with unity_reflect and unity_docs before writing C#; search project assets for actual shader names.",
         ],

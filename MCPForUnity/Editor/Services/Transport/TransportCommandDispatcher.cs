@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
@@ -9,6 +10,7 @@ using MCPForUnity.Editor.Tools;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
+using UnityEditorInternal;
 
 namespace MCPForUnity.Editor.Services.Transport
 {
@@ -30,13 +32,14 @@ namespace MCPForUnity.Editor.Services.Transport
                 string commandJson,
                 TaskCompletionSource<string> completionSource,
                 CancellationToken cancellationToken,
-                CancellationTokenRegistration registration)
+                CancellationTokenRegistration registration,
+                long queuedAtTimestamp)
             {
                 CommandJson = commandJson;
                 CompletionSource = completionSource;
                 CancellationToken = cancellationToken;
                 CancellationRegistration = registration;
-                QueuedAt = DateTime.UtcNow;
+                QueuedAtTimestamp = queuedAtTimestamp;
             }
 
             public string CommandJson { get; }
@@ -44,7 +47,7 @@ namespace MCPForUnity.Editor.Services.Transport
             public CancellationToken CancellationToken { get; }
             public CancellationTokenRegistration CancellationRegistration { get; }
             public bool IsExecuting { get; set; }
-            public DateTime QueuedAt { get; }
+            public long QueuedAtTimestamp { get; }
 
             public void Dispose()
             {
@@ -89,6 +92,21 @@ namespace MCPForUnity.Editor.Services.Transport
         /// </summary>
         public static Task<string> ExecuteCommandJsonAsync(string commandJson, CancellationToken cancellationToken)
         {
+            return ExecuteCommandJsonAsync(
+                commandJson,
+                cancellationToken,
+                Stopwatch.GetTimestamp());
+        }
+
+        /// <summary>
+        /// Schedule a command that may already have waited in an upstream in-process queue.
+        /// The monotonic enqueue timestamp keeps that first-hop wait in the dispatcher diagnostic.
+        /// </summary>
+        internal static Task<string> ExecuteCommandJsonAsync(
+            string commandJson,
+            CancellationToken cancellationToken,
+            long queuedAtTimestamp)
+        {
             if (commandJson is null)
             {
                 throw new ArgumentNullException(nameof(commandJson));
@@ -103,7 +121,12 @@ namespace MCPForUnity.Editor.Services.Transport
                 ? cancellationToken.Register(() => CancelPending(id, cancellationToken))
                 : default;
 
-            var pending = new PendingCommand(commandJson, tcs, cancellationToken, registration);
+            var pending = new PendingCommand(
+                commandJson,
+                tcs,
+                cancellationToken,
+                registration,
+                queuedAtTimestamp);
 
             lock (PendingLock)
             {
@@ -268,8 +291,122 @@ namespace MCPForUnity.Editor.Services.Transport
             }
         }
 
+        /// <summary>
+        /// How long a command sat in the queue before the main thread could take it, and what was
+        /// holding the thread when it finally did. A read-only call can block for a minute behind
+        /// a domain reload and look, from the caller's side, like the tool itself was slow.
+        /// </summary>
+        private const double QueueWaitReportThresholdMs = 2000d;
+
+        internal static object DescribeQueueWait(DateTime queuedAtUtc, string commandType)
+        {
+            JObject queueWait = CaptureQueueWait(queuedAtUtc);
+            LogQueueWait(queueWait, commandType);
+            return queueWait;
+        }
+
+        internal static JObject CaptureQueueWait(DateTime queuedAtUtc)
+        {
+            return CaptureQueueWait(queuedAtUtc, DateTime.UtcNow, GetQueueWaitReason());
+        }
+
+        internal static JObject CaptureQueueWait(long queuedAtTimestamp)
+        {
+            return CaptureQueueWait(
+                queuedAtTimestamp,
+                Stopwatch.GetTimestamp(),
+                GetQueueWaitReason());
+        }
+
+        internal static JObject CaptureQueueWait(
+            long queuedAtTimestamp,
+            long processingStartedAtTimestamp,
+            string reason)
+        {
+            double waitedMs = ElapsedMilliseconds(
+                queuedAtTimestamp,
+                processingStartedAtTimestamp);
+            return BuildQueueWait(waitedMs, reason);
+        }
+
+        internal static JObject CaptureQueueWait(
+            DateTime queuedAtUtc,
+            DateTime processingStartedAtUtc,
+            string reason)
+        {
+            double waitedMs = (processingStartedAtUtc - queuedAtUtc).TotalMilliseconds;
+            return BuildQueueWait(waitedMs, reason);
+        }
+
+        private static double ElapsedMilliseconds(long startedAtTimestamp, long endedAtTimestamp)
+        {
+            if (endedAtTimestamp <= startedAtTimestamp)
+            {
+                return 0d;
+            }
+
+            return (endedAtTimestamp - startedAtTimestamp) * 1000d / Stopwatch.Frequency;
+        }
+
+        private static JObject BuildQueueWait(double waitedMs, string reason)
+        {
+            if (waitedMs < QueueWaitReportThresholdMs)
+            {
+                return null;
+            }
+
+            return new JObject
+            {
+                ["waited_ms"] = (long)waitedMs,
+                ["reason"] = reason,
+            };
+        }
+
+        private static string GetQueueWaitReason()
+        {
+            return ClassifyQueueWaitReason(
+                EditorStateCache.GetActualIsCompiling(),
+                EditorApplication.isUpdating,
+                EditorApplication.isPlayingOrWillChangePlaymode,
+                InternalEditorUtility.isApplicationActive);
+        }
+
+        internal static string ClassifyQueueWaitReason(
+            bool isActuallyCompiling,
+            bool isUpdating,
+            bool isPlayingOrWillChangePlaymode,
+            bool isApplicationActive)
+        {
+            return isActuallyCompiling
+                ? "compiling"
+                : isUpdating
+                    ? "asset_import"
+                    : isPlayingOrWillChangePlaymode
+                        ? "play_mode_transition"
+                        : !isApplicationActive
+                            ? "editor_unfocused"
+                            : "main_thread_busy";
+        }
+
+        private static void LogQueueWait(JObject queueWait, string commandType)
+        {
+            if (queueWait == null)
+            {
+                return;
+            }
+
+            long waitedMs = queueWait.Value<long>("waited_ms");
+            string reason = queueWait.Value<string>("reason");
+            McpLog.Warn(
+                $"[Dispatcher] '{commandType}' waited {waitedMs}ms for the main thread ({reason}).");
+        }
+
         private static void ProcessCommand(string id, PendingCommand pending)
         {
+            // Snapshot both elapsed time and editor state before parsing or executing the command.
+            // Tool duration and side effects must not be reported as time spent in this queue.
+            JObject queueWait = CaptureQueueWait(pending.QueuedAtTimestamp);
+
             if (pending.CancellationToken.IsCancellationRequested)
             {
                 RemovePending(id, pending);
@@ -364,7 +501,12 @@ namespace MCPForUnity.Editor.Services.Transport
 
                 var logType = resourceMeta != null ? "resource" : toolMeta != null ? "tool" : "unknown";
                 var sw = McpLogRecord.IsEnabled ? System.Diagnostics.Stopwatch.StartNew() : null;
-                var result = CommandRegistry.ExecuteCommand(command.type, parameters, pending.CompletionSource);
+                LogQueueWait(queueWait, command.type);
+                var result = CommandRegistry.ExecuteCommand(
+                    command.type,
+                    parameters,
+                    pending.CompletionSource,
+                    queueWait);
 
                 if (result == null)
                 {
@@ -413,7 +555,12 @@ namespace MCPForUnity.Editor.Services.Transport
                 }
                 McpLogRecord.Log(command.type, parameters, logType, syncLogStatus, sw?.ElapsedMilliseconds ?? 0, syncLogError);
 
-                var response = new { status = "success", result };
+                var response = new
+                {
+                    status = "success",
+                    result,
+                    queue = queueWait,
+                };
                 pending.TrySetResult(JsonConvert.SerializeObject(response));
                 RemovePending(id, pending);
             }

@@ -490,4 +490,35 @@ def test_incomplete_send_is_not_marked_delivery_uncertain():
 
     assert not getattr(raised.value, "request_may_have_reached_unity", False)
 
+def test_a_long_main_thread_wait_reaches_the_caller(monkeypatch):
+    """Unity reports the wait beside result; unwrapping result must not throw it away."""
+    conn = UnityConnection(host="127.0.0.1", port=1)
+    conn.sock = _DeliveryStageSocket()
+    conn.use_framing = True
+    envelope = json.dumps({
+        "status": "success",
+        "result": {"name": "SampleScene"},
+        "queue": {"waited_ms": 64000, "reason": "compiling"},
+    }).encode("utf-8")
+    monkeypatch.setattr(conn, "receive_full_response", lambda _sock: envelope)
 
+    result = conn.send_command("manage_scene", {"action": "get_active"}, max_attempts=0)
+
+    assert result["name"] == "SampleScene"
+    assert result["queue"] == {"waited_ms": 64000, "reason": "compiling"}
+
+
+def test_a_short_wait_adds_nothing_to_the_result(monkeypatch):
+    conn = UnityConnection(host="127.0.0.1", port=1)
+    conn.sock = _DeliveryStageSocket()
+    conn.use_framing = True
+    envelope = json.dumps({
+        "status": "success",
+        "result": {"name": "SampleScene"},
+        "queue": None,
+    }).encode("utf-8")
+    monkeypatch.setattr(conn, "receive_full_response", lambda _sock: envelope)
+
+    result = conn.send_command("manage_scene", {"action": "get_active"}, max_attempts=0)
+
+    assert result == {"name": "SampleScene"}

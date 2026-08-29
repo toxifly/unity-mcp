@@ -235,7 +235,7 @@ result = run_tests(mode="EditMode", test_names=["MyTests.TestSomething"])
 job_id = result["job_id"]
 
 # 2. Poll for completion
-result = get_test_job(job_id=job_id, wait_timeout=60, include_failed_tests=True)
+result = get_test_job(job_id=job_id, wait_timeout=60, include_failed=True)
 ```
 
 ## Pagination Pattern

@@ -24,10 +24,32 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 {
     class QueuedCommand
     {
+        private const int Waiting = 0;
+        private const int Executing = 1;
+        private const int Abandoned = 2;
+
+        private int state = Waiting;
+
         public string CommandJson;
         public TaskCompletionSource<string> Tcs;
-        public bool IsExecuting;
-        public long EnqueuedAtMs;
+        public long EnqueuedAtTimestamp;
+
+        public bool IsWaiting => Volatile.Read(ref state) == Waiting;
+        public bool IsExecuting => Volatile.Read(ref state) == Executing;
+
+        /// <summary>
+        /// Atomically claims this command immediately before its handler is invoked.
+        /// A command abandoned by its timed-out client can never be claimed later.
+        /// </summary>
+        public bool TryBeginExecution()
+            => Interlocked.CompareExchange(ref state, Executing, Waiting) == Waiting;
+
+        /// <summary>
+        /// Atomically abandons a command only while it is still waiting to start.
+        /// An executing handler cannot safely be recalled from the Unity main thread.
+        /// </summary>
+        public bool TryAbandon()
+            => Interlocked.CompareExchange(ref state, Abandoned, Waiting) == Waiting;
     }
 
     [InitializeOnLoad]
@@ -64,7 +86,6 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private static JObject unityHandshake;
         private const ulong MaxFrameBytes = 64UL * 1024 * 1024;
         private const int FrameIOTimeoutMs = 30000;
-        private static readonly Stopwatch _uptime = Stopwatch.StartNew();
         private static volatile int _consecutiveTimeouts = 0;
         private static bool _processCommandsHooked = false;
 
@@ -343,7 +364,9 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
 
         private static bool IsCompiling()
         {
-            if (EditorApplication.isCompiling)
+            // Play-mode aware: a recompile deferred by Recompile-After-Finished-Playing keeps the raw
+            // EditorApplication.isCompiling flag true for the whole play session (upstream issue #549).
+            if (EditorStateCache.GetActualIsCompiling())
             {
                 return true;
             }
@@ -711,8 +734,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                                 {
                                     CommandJson = commandText,
                                     Tcs = tcs,
-                                    IsExecuting = false,
-                                    EnqueuedAtMs = _uptime.ElapsedMilliseconds
+                                    EnqueuedAtTimestamp = Stopwatch.GetTimestamp()
                                 };
                             }
 
@@ -735,7 +757,25 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                                 else
                                 {
                                     int timeouts = Interlocked.Increment(ref _consecutiveTimeouts);
-                                    McpLog.Warn($"Command TCS timed out ({timeouts} consecutive)");
+
+                                    // The client has been told this command failed, so it must not run
+                                    // later with nobody listening. Drop it if the pump has not picked it
+                                    // up yet; a command already executing on the main thread cannot be
+                                    // recalled, so leave that one for the stale sweep in ProcessCommands.
+                                    bool abandoned = false;
+                                    lock (lockObj)
+                                    {
+                                        if (commandQueue.TryGetValue(commandId, out var pending)
+                                            && pending.TryAbandon())
+                                        {
+                                            commandQueue.Remove(commandId);
+                                            abandoned = true;
+                                        }
+                                    }
+
+                                    McpLog.Warn($"Command TCS timed out ({timeouts} consecutive, "
+                                        + (abandoned ? "never started - dropped from queue" : "already executing - left to finish")
+                                        + ")");
                                     var timeoutResponse = new
                                     {
                                         status = "error",
@@ -930,6 +970,26 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             dest[7] = (byte)(value);
         }
 
+        /// <summary>
+        /// Takes a non-mutating snapshot of commands that are waiting to run. The caller must
+        /// synchronize access to <paramref name="queue"/>. Commands are claimed individually by
+        /// <see cref="QueuedCommand.TryBeginExecution"/> immediately before invocation.
+        /// </summary>
+        internal static List<(string id, QueuedCommand command)> SnapshotWaitingCommands(
+            IReadOnlyDictionary<string, QueuedCommand> queue)
+        {
+            var work = new List<(string, QueuedCommand)>(queue.Count);
+            foreach (var kvp in queue)
+            {
+                if (kvp.Value.IsWaiting)
+                {
+                    work.Add((kvp.Key, kvp.Value));
+                }
+            }
+
+            return work;
+        }
+
         private static void ProcessCommands()
         {
             if (!isRunning) return;
@@ -952,13 +1012,19 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         return;
                     }
 
-                    // Evict commands stuck with IsExecuting=true for too long (e.g. from pre-reload state).
-                    long nowMs = _uptime.ElapsedMilliseconds;
+                    // Evict commands that have outlived their client. IsExecuting=true means one is
+                    // stuck mid-execution (e.g. from pre-reload state); IsExecuting=false past the same
+                    // threshold means the pump was starved past the client's own timeout, so the reader
+                    // has already given up and running it now would only burn main-thread time on a
+                    // response nobody reads.
+                    long nowTimestamp = Stopwatch.GetTimestamp();
                     const long staleThresholdMs = 2L * FrameIOTimeoutMs; // 60s
                     List<string> staleIds = null;
                     foreach (var kvp in commandQueue)
                     {
-                        if (kvp.Value.IsExecuting && (nowMs - kvp.Value.EnqueuedAtMs) > staleThresholdMs)
+                        double ageMs = (nowTimestamp - kvp.Value.EnqueuedAtTimestamp)
+                            * 1000d / Stopwatch.Frequency;
+                        if (ageMs > staleThresholdMs)
                         {
                             staleIds ??= new List<string>();
                             staleIds.Add(kvp.Key);
@@ -976,20 +1042,23 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         McpLog.Info($"Evicted {staleIds.Count} stale command(s) from queue");
                     }
 
-                    work = new List<(string, QueuedCommand)>(commandQueue.Count);
-                    foreach (var kvp in commandQueue)
-                    {
-                        var queued = kvp.Value;
-                        if (queued.IsExecuting) continue;
-                        queued.IsExecuting = true;
-                        work.Add((kvp.Key, queued));
-                    }
+                    work = SnapshotWaitingCommands(commandQueue);
                 }
 
                 foreach (var item in work)
                 {
                     string id = item.id;
                     QueuedCommand queuedCommand = item.command;
+
+                    // Claim each item only when it is actually about to start. A previous handler
+                    // can block the main thread long enough for later items in this snapshot to time
+                    // out; those items transition to Abandoned on the listener thread and must not
+                    // execute after their callers have already received an error.
+                    if (!queuedCommand.TryBeginExecution())
+                    {
+                        continue;
+                    }
+
                     string commandText = queuedCommand.CommandJson;
                     TaskCompletionSource<string> tcs = queuedCommand.Tcs;
 
@@ -1033,7 +1102,11 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                         continue;
                     }
 
-                    ExecuteQueuedCommand(id, commandText, tcs);
+                    ExecuteQueuedCommand(
+                        id,
+                        commandText,
+                        tcs,
+                        queuedCommand.EnqueuedAtTimestamp);
                 }
             }
             finally
@@ -1042,14 +1115,21 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private static void ExecuteQueuedCommand(string commandId, string payload, TaskCompletionSource<string> completionSource)
+        private static void ExecuteQueuedCommand(
+            string commandId,
+            string payload,
+            TaskCompletionSource<string> completionSource,
+            long enqueuedAtTimestamp)
         {
             async void Runner()
             {
                 try
                 {
                     using var cts = new CancellationTokenSource(FrameIOTimeoutMs);
-                    string response = await TransportCommandDispatcher.ExecuteCommandJsonAsync(payload, cts.Token).ConfigureAwait(true);
+                    string response = await TransportCommandDispatcher.ExecuteCommandJsonAsync(
+                        payload,
+                        cts.Token,
+                        enqueuedAtTimestamp).ConfigureAwait(true);
                     completionSource.TrySetResult(response);
                 }
                 catch (OperationCanceledException)

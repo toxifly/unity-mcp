@@ -22,7 +22,7 @@ AI asset generation – 3D model gen/import, 2D image gen & audio gen (bring-you
 - **[`generate_image`](./asset_gen/generate_image.md)** — Generate 2D images with AI providers (fal.ai, OpenRouter) and import them as textures/sprites into the Unity project.
 - **[`generate_model`](./asset_gen/generate_model.md)** — Generate 3D models with AI providers (Tripo, Meshy) and import them into the Unity project.
 - **[`import_model`](./asset_gen/import_model.md)** — Import 3D models from the Sketchfab marketplace into the Unity project.
-- **[`import_model_file`](./asset_gen/import_model_file.md)** — Import a local 3D model file that already exists on disk (e.g. an FBX/OBJ/glTF exported from Blender or another DCC tool) into the Unity project.
+- **[`import_model_file`](./asset_gen/import_model_file.md)** — Copy a local FBX, OBJ, glTF/GLB, or ZIP model into Assets/ and run Unity's model importer. source_path identifies the local file; name, output_folder, target_size, and animation_type configure the import.
 
 ## `core` &nbsp; (38 tools)
 Essential scene, script, asset & editor tools (always on by default)
@@ -41,11 +41,11 @@ Essential scene, script, asset & editor tools (always on by default)
 - **[`lifecycle_trace`](./core/lifecycle_trace.md)** — Start, poll, inspect, or stop a bounded opt-in trace of lifecycle callbacks, selection changes, and whitelisted serialized-property changes.
 - **[`manage_asset`](./core/manage_asset.md)** — Manage Unity assets.
 - **[`manage_build`](./core/manage_build.md)** — Manage Unity player builds — trigger builds, switch platforms, configure settings, manage build scenes and profiles, run batch builds across platforms.
-- **[`manage_camera`](./core/manage_camera.md)** — Manage cameras (Unity Camera + Cinemachine).
+- **[`manage_camera`](./core/manage_camera.md)** — Manage Unity and Cinemachine cameras: setup, creation, configuration, blending, and capture. action supports ping, ensure_brain, get_brain_status, create_camera, set_target, set_priority, set_lens, set_body, set_aim, set_noise, add_exten…
 - **[`manage_components`](./core/manage_components.md)** — Manage components on existing GameObjects.
 - **[`manage_editor`](./core/manage_editor.md)** — Control and query Unity Editor state and settings.
 - **[`manage_gameobject`](./core/manage_gameobject.md)** — Create, modify, delete, duplicate, move, or orient GameObjects.
-- **[`manage_graphics`](./core/manage_graphics.md)** — Manage rendering graphics: volumes, post-processing, light baking, rendering stats, pipeline settings, and URP renderer features.
+- **[`manage_graphics`](./core/manage_graphics.md)** — Manage volumes and post-processing, light baking, rendering statistics, render-pipeline settings, URP renderer features, and skybox/environment settings. action prefixes select the domain: volume_*, bake_*, stats_*, pipeline_*, feature_*…
 - **[`manage_material`](./core/manage_material.md)** — Manages Unity materials (set properties, colors, shaders, etc).
 - **[`manage_packages`](./core/manage_packages.md)** — Manage Unity packages: query, install, remove, embed, and configure registries.
 - **[`manage_physics`](./core/manage_physics.md)** — Manage physics settings, collision matrix, materials, joints, queries, and validation.
@@ -61,7 +61,7 @@ Essential scene, script, asset & editor tools (always on by default)
 - **[`save_assets_scoped`](./core/save_assets_scoped.md)** — Save only the declared Unity asset paths.
 - **[`save_prefab_scoped`](./core/save_prefab_scoped.md)** — Save exactly one prefab asset with transaction-backed save-time change detection and rollback.
 - **[`save_scene_scoped`](./core/save_scene_scoped.md)** — Save exactly one loaded Unity scene.
-- **[`script_apply_edits`](./core/script_apply_edits.md)** — Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text.
+- **[`script_apply_edits`](./core/script_apply_edits.md)** — Apply mutating, structured C# method or anchor edits with boundary validation. edits accepts a list or JSON string using replace_method, insert_method, delete_method, anchor_insert, anchor_delete, or anchor_replace.
 - **[`set_active_instance`](./core/set_active_instance.md)** — Set this client session's active Unity instance without changing Unity project state. instance accepts Name@hash, a unique hash prefix, or a port number in stdio mode; ambiguous identifiers are rejected.
 - **[`validate_script`](./core/validate_script.md)** — Validate a C# script and return diagnostics.
 
@@ -72,11 +72,11 @@ Unity API reflection and documentation lookup
 
 ## `probuilder` &nbsp; (1 tool)
 ProBuilder 3D modeling – requires com.unity.probuilder package
-- **[`manage_probuilder`](./probuilder/manage_probuilder.md)** — Manage ProBuilder meshes for in-editor 3D modeling.
+- **[`manage_probuilder`](./probuilder/manage_probuilder.md)** — Create, query, and edit ProBuilder meshes; requires com.unity.probuilder. action covers shape creation (create_shape, create_poly_shape), face/edge editing (extrude, bevel, subdivide, delete, bridge, connect, detach, flip, merge, combine…
 
 ## `profiling` &nbsp; (1 tool)
 Unity Profiler session control, counters, memory snapshots & Frame Debugger
-- **[`manage_profiler`](./profiling/manage_profiler.md)** — Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger.
+- **[`manage_profiler`](./profiling/manage_profiler.md)** — Control Unity Profiler sessions, read counters and frame timing, inspect object memory, capture or compare memory snapshots, and use the Frame Debugger. action supports profiler_start/stop/status/set_areas, get_frame_timing, get_counters…
 
 ## `scripting_ext` &nbsp; (2 tools)
 ScriptableObject management

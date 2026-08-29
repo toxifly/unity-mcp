@@ -8,4 +8,4 @@ description: "MCP for Unity tools in the profiling group."
 
 Unity Profiler session control, counters, memory snapshots & Frame Debugger
 
-- **[`manage_profiler`](./manage_profiler.md)** — Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger.
+- **[`manage_profiler`](./manage_profiler.md)** — Control Unity Profiler sessions, read counters and frame timing, inspect object memory, capture or compare memory snapshots, and use the Frame Debugger. action supports profiler_start/stop/status/set_areas, get_frame_timing, get_counters…

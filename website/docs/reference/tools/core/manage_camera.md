@@ -1,7 +1,7 @@
 ---
 title: manage_camera
 sidebar_label: manage_camera
-description: "Manage cameras (Unity Camera + Cinemachine)."
+description: "Manage Unity and Cinemachine cameras: setup, creation, configuration, blending, and capture. action supports ping, ensure_brain, get_brain_status, create_camera, set_target, set_priority, set_lens, set_body, set_aim, set_noise, add_exten…"
 ---
 
 # `manage_camera`
@@ -12,37 +12,7 @@ description: "Manage cameras (Unity Camera + Cinemachine)."
 
 ## Description
 
-Manage cameras (Unity Camera + Cinemachine). Works without Cinemachine using basic Camera; unlocks presets, pipelines, and blending when Cinemachine is installed. Use ping to check Cinemachine availability.
-
-SETUP:
-- ping: Check if Cinemachine is available
-- ensure_brain: Ensure CinemachineBrain exists on main camera
-- get_brain_status: Get Brain state (active camera, blend, etc.)
-
-CAMERA CREATION:
-- create_camera: Create camera with preset (third_person, freelook, follow, dolly, static, top_down, side_scroller). Falls back to basic Camera without Cinemachine.
-
-CAMERA CONFIGURATION:
-- set_target: Set Follow and/or LookAt targets on a camera
-- set_priority: Set camera priority for Brain selection
-- set_lens: Configure lens (fieldOfView, nearClipPlane, farClipPlane, orthographicSize, dutch)
-- set_body: Configure Body component (bodyType to swap, plus component properties)
-- set_aim: Configure Aim component (aimType to swap, plus component properties)
-- set_noise: Configure Noise component (amplitudeGain, frequencyGain)
-
-EXTENSIONS:
-- add_extension: Add extension (extensionType: CinemachineConfiner2D, CinemachineDeoccluder, CinemachineImpulseListener, CinemachineFollowZoom, CinemachineRecomposer, etc.)
-- remove_extension: Remove extension by type
-
-CAMERA CONTROL:
-- set_blend: Configure default blend (style: Cut/EaseInOut/Linear/etc., duration)
-- force_camera: Override Brain to use specific camera
-- release_override: Release camera override
-- list_cameras: List all cameras with status
-
-CAPTURE:
-- screenshot: Capture a screenshot. By default (no camera specified) uses ScreenCapture API, which captures all render layers including Screen Space - Overlay UI canvases. Specifying a camera uses direct camera rendering, which EXCLUDES Screen Space - Overlay canvases (use only when you need a specific viewpoint without UI). Supports include_image=true for inline base64 PNG, batch='surround' for 6-angle contact sheet, batch='orbit' for configurable grid, view_target/view_position for positioned capture, and capture_source='scene_view' to capture the active Unity Scene View viewport.
-- screenshot_multiview: Shorthand for screenshot with batch='surround' and include_image=true.
+Manage Unity and Cinemachine cameras: setup, creation, configuration, blending, and capture. action supports ping, ensure_brain, get_brain_status, create_camera, set_target, set_priority, set_lens, set_body, set_aim, set_noise, add_extension, remove_extension, set_blend, force_camera, release_override, list_cameras, screenshot, and screenshot_multiview. properties contains action-specific settings; capture actions use the dedicated screenshot, view, orbit, and output parameters. Cinemachine-only features require its package, while create_camera falls back to a basic Camera. Omitting camera from a screenshot captures Screen Space - Overlay UI; direct camera rendering excludes those canvases. Configuration and control actions mutate scene or Editor state, and capture actions can write image files.
 
 ## Parameters
 

@@ -370,7 +370,102 @@ namespace MCPForUnityTests.Editor.Tools
             }
         }
 
-        private JObject Inspect(string property)
+        [Test]
+        public void ColorProperty_ReportsPlainComponents()
+        {
+            JObject result = Inspect("tint");
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            JToken finding = result["data"]["findings"][0];
+            Assert.AreEqual("color", finding.Value<string>("value_kind"));
+            var value = (JObject)finding["value"];
+            CollectionAssert.AreEquivalent(
+                new[] { "r", "g", "b", "a" },
+                value.Properties().Select(property => property.Name).ToArray());
+            Assert.AreEqual(0.45f, value.Value<float>("a"), 0.0001f);
+        }
+
+        [Test]
+        public void AnimationCurve_DistinguishesInterpolationWithIdenticalKeyPositions()
+        {
+            var linear = AnimationCurve.Linear(0f, 0f, 1f, 1f);
+            var eased = AnimationCurve.EaseInOut(0f, 0f, 1f, 1f);
+            var custom = new AnimationCurve(
+                new Keyframe(0f, 0f, -2f, 2f),
+                new Keyframe(1f, 1f, 3f, -3f));
+
+            JObject linearValue = InspectCurve(linear);
+            JObject easedValue = InspectCurve(eased);
+            JObject customValue = InspectCurve(custom);
+
+            AssertSameKeyPositions(linearValue, easedValue);
+            AssertSameKeyPositions(linearValue, customValue);
+            Assert.IsFalse(JToken.DeepEquals(linearValue["keys"], easedValue["keys"]));
+            Assert.IsFalse(JToken.DeepEquals(linearValue["keys"], customValue["keys"]));
+            Assert.IsFalse(JToken.DeepEquals(easedValue["keys"], customValue["keys"]));
+
+            foreach (JObject key in customValue["keys"].Children<JObject>())
+            {
+                CollectionAssert.AreEquivalent(
+                    new[] { "time", "value", "inTangent", "outTangent", "inWeight", "outWeight", "weightedMode" },
+                    key.Properties().Select(property => property.Name).ToArray());
+            }
+            Assert.AreEqual(2f, customValue["keys"][0].Value<float>("outTangent"), 0.0001f);
+            Assert.AreEqual(3f, customValue["keys"][1].Value<float>("inTangent"), 0.0001f);
+        }
+
+        [Test]
+        public void AnimationCurve_ReportsWeightsWeightedModeAndWrapModes()
+        {
+            var first = new Keyframe(0f, 0f, -1.25f, 2.5f, 0.2f, 0.4f)
+            {
+                weightedMode = WeightedMode.Both
+            };
+            var second = new Keyframe(1f, 1f, 3.5f, -4.75f, 0.6f, 0.8f)
+            {
+                weightedMode = WeightedMode.In
+            };
+            var curve = new AnimationCurve(first, second)
+            {
+                preWrapMode = WrapMode.PingPong,
+                postWrapMode = WrapMode.ClampForever
+            };
+
+            JObject value = InspectCurve(curve);
+            JToken firstValue = value["keys"][0];
+            JToken secondValue = value["keys"][1];
+
+            Assert.AreEqual(-1.25f, firstValue.Value<float>("inTangent"), 0.0001f);
+            Assert.AreEqual(2.5f, firstValue.Value<float>("outTangent"), 0.0001f);
+            Assert.AreEqual(0.2f, firstValue.Value<float>("inWeight"), 0.0001f);
+            Assert.AreEqual(0.4f, firstValue.Value<float>("outWeight"), 0.0001f);
+            Assert.AreEqual((int)WeightedMode.Both, firstValue.Value<int>("weightedMode"));
+            Assert.AreEqual(0.6f, secondValue.Value<float>("inWeight"), 0.0001f);
+            Assert.AreEqual(0.8f, secondValue.Value<float>("outWeight"), 0.0001f);
+            Assert.AreEqual((int)WeightedMode.In, secondValue.Value<int>("weightedMode"));
+            Assert.AreEqual(WrapMode.PingPong.ToString(), value.Value<string>("pre_wrap_mode"));
+            Assert.AreEqual(WrapMode.ClampForever.ToString(), value.Value<string>("post_wrap_mode"));
+        }
+
+        [Test]
+        public void ValueStructs_DoNotDragInSelfReferencingDerivedMembers()
+        {
+            // Color.linear, Vector3.normalized and BoundsInt.allPositionsWithin each walk back
+            // into their own type; serializing one raises "Self referencing loop detected" and
+            // takes the entire response with it. ToJObject is that same serialization step.
+            JObject result = Inspect("tint", "offset2", "offset3", "tangent", "rotation", "area",
+                "volume", "cell2", "cell3", "areaInt", "volumeInt", "curve");
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            Assert.AreEqual(12, result["data"]["findings"].Count(), result.ToString());
+            foreach (JToken finding in result["data"]["findings"])
+                Assert.IsTrue(finding.Value<bool>("found"), finding.ToString());
+            string json = result.ToString();
+            foreach (string derived in new[] { "linear", "gamma", "normalized", "magnitude", "allPositionsWithin" })
+                StringAssert.DoesNotContain(derived, json);
+        }
+
+        private JObject Inspect(params string[] properties)
         {
             return ToJObject(InspectSerialized.HandleCommand(new JObject
             {
@@ -379,9 +474,25 @@ namespace MCPForUnityTests.Editor.Tools
                     ["target"] = _owner.name,
                     ["component"] = typeof(SerializedInspectionFixture).FullName
                 }),
-                ["properties"] = new JArray(property),
+                ["properties"] = new JArray(properties),
                 ["includePrefabProvenance"] = true
             }));
+        }
+
+        private JObject InspectCurve(AnimationCurve curve)
+        {
+            _owner.GetComponent<SerializedInspectionFixture>().Curve = curve;
+            return (JObject)Inspect("curve")["data"]["findings"][0]["value"];
+        }
+
+        private static void AssertSameKeyPositions(JObject expected, JObject actual)
+        {
+            Assert.AreEqual(expected["keys"].Count(), actual["keys"].Count());
+            for (int i = 0; i < expected["keys"].Count(); i++)
+            {
+                Assert.AreEqual(expected["keys"][i].Value<float>("time"), actual["keys"][i].Value<float>("time"), 0.0001f);
+                Assert.AreEqual(expected["keys"][i].Value<float>("value"), actual["keys"][i].Value<float>("value"), 0.0001f);
+            }
         }
     }
 

@@ -321,12 +321,17 @@ def execute_menu(menu_path: str):
     help="Include detailed results for all tests."
 )
 @click.option(
-    "--failed-only",
+    "--failed",
     is_flag=True,
-    help="Include details for failed/skipped tests only."
+    help="Include details for failed tests only."
+)
+@click.option(
+    "--skipped",
+    is_flag=True,
+    help="Include details for skipped tests only."
 )
 @handle_unity_errors
-def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, failed_only: bool):
+def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, failed: bool, skipped: bool):
     """Run Unity tests.
 
     \b
@@ -334,7 +339,7 @@ def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, f
         unity-mcp editor tests
         unity-mcp editor tests --mode PlayMode
         unity-mcp editor tests --async
-        unity-mcp editor tests --wait 60 --failed-only
+        unity-mcp editor tests --wait 60 --failed
     """
     config = get_config()
 
@@ -343,8 +348,10 @@ def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, f
         params["wait_timeout"] = wait
     if details:
         params["include_details"] = True
-    if failed_only:
-        params["include_failed_tests"] = True
+    if failed:
+        params["include_failed"] = True
+    if skipped:
+        params["include_skipped"] = True
 
     result = run_command("run_tests", params, config)
 
@@ -373,19 +380,24 @@ def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, f
     help="Include detailed results for all tests."
 )
 @click.option(
-    "--failed-only",
+    "--failed",
     is_flag=True,
-    help="Include details for failed/skipped tests only."
+    help="Include details for failed tests only."
+)
+@click.option(
+    "--skipped",
+    is_flag=True,
+    help="Include details for skipped tests only."
 )
 @handle_unity_errors
-def poll_test(job_id: str, wait: int, details: bool, failed_only: bool):
+def poll_test(job_id: str, wait: int, details: bool, failed: bool, skipped: bool):
     """Poll an async test job for status/results.
 
     \b
     Examples:
         unity-mcp editor poll-test abc123
         unity-mcp editor poll-test abc123 --wait 60
-        unity-mcp editor poll-test abc123 --failed-only
+        unity-mcp editor poll-test abc123 --failed
     """
     config = get_config()
 
@@ -394,8 +406,10 @@ def poll_test(job_id: str, wait: int, details: bool, failed_only: bool):
         params["wait_timeout"] = wait
     if details:
         params["include_details"] = True
-    if failed_only:
-        params["include_failed_tests"] = True
+    if failed:
+        params["include_failed"] = True
+    if skipped:
+        params["include_skipped"] = True
 
     result = run_command("get_test_job", params, config)
     click.echo(format_output(result, config.format))

@@ -807,16 +807,19 @@ read_console(action="clear")
 
 ### run_tests
 
-Start async test execution.
+Start a test run. Without `wait_timeout` it returns a job id to poll; with it, the run is started
+and awaited in the same call, which is the usual way to spend one call instead of two.
 
 ```python
 result = run_tests(
     mode="EditMode",             # "EditMode"|"PlayMode"
+    wait_timeout=600,            # block for the result instead of returning a job id
     test_names=["MyTests.TestA", "MyTests.TestB"],  # specific tests
     group_names=["Integration*"],  # regex patterns
     category_names=["Unit"],     # NUnit categories
     assembly_names=["Tests"],    # assembly filter
-    include_failed_tests=True,   # include failure details
+    include_failed=True,         # include failure details
+    include_skipped=False,       # include skipped-test details
     include_details=False        # include all test details
 )
 # Returns: {"job_id": "abc123", ...}
@@ -830,7 +833,7 @@ Poll test job status.
 result = get_test_job(
     job_id="abc123",
     wait_timeout=60,             # wait up to N seconds
-    include_failed_tests=True,
+    include_failed=True,
     include_details=False
 )
 # Returns: {"status": "complete"|"running"|"failed", "results": {...}}

@@ -6,6 +6,22 @@ from typing import Any, Type
 from models.models import MCPResponse
 
 
+def _preserve_queue_metadata(
+    response: dict[str, Any], normalized: dict[str, Any]
+) -> dict[str, Any]:
+    """Carry transport queue diagnostics onto the unwrapped response.
+
+    Unity reports these diagnostics beside ``result``. The legacy transport
+    exposes a non-empty value as ``result["queue"]``, without replacing queue
+    metadata already supplied by the result itself. Keep that contract when
+    normalizing PluginHub responses as well.
+    """
+    queue = response.get("queue")
+    if not queue or "queue" in normalized:
+        return normalized
+    return {**normalized, "queue": queue}
+
+
 def normalize_unity_response(response: Any) -> Any:
     """Normalize Unity's {status,result} payloads into MCPResponse shape."""
     if not isinstance(response, dict):
@@ -19,7 +35,7 @@ def normalize_unity_response(response: Any) -> Any:
     if "success" in response:
         return response
     if isinstance(result, dict) and "success" in result:
-        return result
+        return _preserve_queue_metadata(response, result)
 
     if status is None:
         return response
@@ -46,7 +62,7 @@ def normalize_unity_response(response: Any) -> Any:
     if not success and not normalized["error"]:
         normalized["error"] = message or "Unity command failed"
 
-    return normalized
+    return _preserve_queue_metadata(response, normalized)
 
 
 def parse_resource_response(response: Any, typed_cls: Type[MCPResponse]) -> MCPResponse:
@@ -65,6 +81,7 @@ def parse_resource_response(response: Any, typed_cls: Type[MCPResponse]) -> MCPR
             success=False,
             error=response.get("error"),
             message=response.get("message"),
+            queue=response.get("queue"),
         )
 
     return typed_cls(**response)

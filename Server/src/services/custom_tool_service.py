@@ -275,6 +275,7 @@ class CustomToolService:
                 error=response.get("error"),
                 data=response.get(
                     "data", response) if "data" not in response else response["data"],
+                queue=response.get("queue"),
             )
 
         success = True

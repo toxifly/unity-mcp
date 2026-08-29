@@ -1,7 +1,7 @@
 ---
 title: script_apply_edits
 sidebar_label: script_apply_edits
-description: "Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text."
+description: "Apply mutating, structured C# method or anchor edits with boundary validation. edits accepts a list or JSON string using replace_method, insert_method, delete_method, anchor_insert, anchor_delete, or anchor_replace."
 ---
 
 # `script_apply_edits`
@@ -12,52 +12,7 @@ description: "Structured C# edits (methods/classes) with safer boundaries - pref
 
 ## Description
 
-Structured C# edits (methods/classes) with safer boundaries - prefer this over raw text.
-    Best practices:
-    - Prefer anchor_* ops for pattern-based insert/replace near stable markers
-    - Use replace_method/delete_method for whole-method changes (keeps signatures balanced)
-    - Avoid whole-file regex deletes; validators will guard unbalanced braces
-    - For tail insertions, prefer anchor/regex_replace on final brace (class closing)
-    - Pass options.validate='standard' for structural checks; 'basic' for interior-only edits
-    Canonical fields (use these exact keys):
-    - op: replace_method | insert_method | delete_method | anchor_insert | anchor_delete | anchor_replace
-    - className: string (defaults to 'name' if omitted on method/class ops)
-    - methodName: string (required for replace_method, delete_method)
-    - replacement: string (required for replace_method, insert_method)
-    - position: start | end | after | before (insert_method only)
-    - afterMethodName / beforeMethodName: string (required when position='after'/'before')
-    - anchor: regex string (for anchor_* ops)
-    - text: string (for anchor_insert/anchor_replace)
-    Examples:
-    1) Replace a method:
-    {
-        "name": "SmartReach",
-        "path": "Assets/Scripts/Interaction",
-        "edits": [
-        {
-        "op": "replace_method",
-        "className": "SmartReach",
-        "methodName": "HasTarget",
-        "replacement": "public bool HasTarget(){ return currentTarget!=null; }"
-        }
-    ],
-    "options": {"validate": "standard", "refresh": "immediate"}
-    }
-    "2) Insert a method after another:
-    {
-        "name": "SmartReach",
-        "path": "Assets/Scripts/Interaction",
-        "edits": [
-        {
-        "op": "insert_method",
-        "className": "SmartReach",
-        "replacement": "public void PrintSeries(){ Debug.Log(seriesName); }",
-        "position": "after",
-        "afterMethodName": "GetCurrentTarget"
-        }
-    ],
-    }
-    ]
+Apply mutating, structured C# method or anchor edits with boundary validation. edits accepts a list or JSON string using replace_method, insert_method, delete_method, anchor_insert, anchor_delete, or anchor_replace. Method operations use className, methodName, replacement, position, afterMethodName, and beforeMethodName as applicable; anchor operations use anchor and text. options controls validation and refresh behavior. Prefer standard validation and stable anchors; structural guards reject edits that unbalance braces. Use this tool instead of raw text for whole-method changes.
 
 ## Parameters
 

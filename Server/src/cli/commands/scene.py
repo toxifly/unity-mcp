@@ -8,6 +8,7 @@ from typing import Optional, Any
 from cli.utils.config import get_config
 from cli.utils.output import format_output, print_error, print_success, print_warning
 from cli.utils.connection import run_command, handle_unity_errors
+from cli.utils.parsers import parse_json_list_or_exit
 
 
 @click.group()
@@ -316,6 +317,70 @@ def move_to(target: str, scene_name: str):
     click.echo(format_output(result, config.format))
     if result.get("success"):
         print_success(f"Moved '{target}' to scene '{scene_name}'")
+
+
+# ── External file edits ──────────────────────────────────────────────────
+
+
+@scene.command("apply-external-edit")
+@click.argument("scene_path")
+@click.option(
+    "--edits",
+    default=None,
+    help=(
+        "JSON array of literal replacements, each "
+        "{\"old_text\": ..., \"new_text\": ..., \"count\": 1}. "
+        "Omit to just resync a file already changed on disk."
+    ),
+)
+@click.option(
+    "--discard-unsaved",
+    is_flag=True,
+    help="Drop the open scene's unsaved in-memory changes, which the rewrite would otherwise refuse to discard."
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Report which anchors matched without writing."
+)
+@handle_unity_errors
+def apply_external_edit(
+    scene_path: str,
+    edits: Optional[str],
+    discard_unsaved: bool,
+    dry_run: bool,
+):
+    """Rewrite a scene file on disk and resync the Editor in one step.
+
+    This is the only safe way to hand-patch scene YAML: editing the file outside
+    Unity raises a modal reload prompt that blocks the Editor's main thread.
+
+    Every anchor must match exactly 'count' times or nothing is written.
+
+    \b
+    Examples:
+        unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity" --edits '[{"old_text": "m_Name: Old", "new_text": "m_Name: New"}]'
+        unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity" --edits '[...]' --dry-run
+        unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity"
+    """
+    config = get_config()
+
+    params: dict[str, Any] = {
+        "action": "apply_external_edit",
+        "path": scene_path,
+    }
+    if edits is not None:
+        params["edits"] = parse_json_list_or_exit(edits, "--edits")
+    if discard_unsaved:
+        params["discard_unsaved"] = True
+    if dry_run:
+        params["dry_run"] = True
+
+    result = run_command("manage_scene", params, config)
+    click.echo(format_output(result, config.format))
+    if result.get("success"):
+        verb = "Previewed" if dry_run else "Applied"
+        print_success(f"{verb} external edit: {scene_path}")
 
 
 # ── Scene validation ─────────────────────────────────────────────────

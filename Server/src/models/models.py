@@ -1,6 +1,15 @@
 from typing import Any
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class QueueWaitMetadata(BaseModel):
+    """Diagnostic emitted when a Unity command waited for the main thread."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    waited_ms: int = Field(ge=0, strict=True)
+    reason: str = Field(min_length=1, strict=True)
 
 
 class MCPResponse(BaseModel):
@@ -8,6 +17,7 @@ class MCPResponse(BaseModel):
     message: str | None = None
     error: str | None = None
     data: Any | None = None
+    queue: QueueWaitMetadata | None = None
     # Optional hint for clients about how to handle the response.
     # Supported values:
     #   - "retry": Unity is temporarily reloading; call should be retried politely.

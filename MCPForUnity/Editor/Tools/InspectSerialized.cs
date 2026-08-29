@@ -399,28 +399,75 @@ namespace MCPForUnity.Editor.Tools
                 case SerializedPropertyType.Boolean: return property.boolValue;
                 case SerializedPropertyType.Float: return property.doubleValue;
                 case SerializedPropertyType.String: return property.stringValue;
-                case SerializedPropertyType.Color: return property.colorValue;
+                case SerializedPropertyType.Color: return Compact(property.colorValue);
                 case SerializedPropertyType.LayerMask: return property.intValue;
                 case SerializedPropertyType.Enum:
                     return property.enumValueIndex >= 0 && property.enumValueIndex < property.enumDisplayNames.Length
                         ? property.enumDisplayNames[property.enumValueIndex]
                         : property.enumValueIndex.ToString();
-                case SerializedPropertyType.Vector2: return property.vector2Value;
-                case SerializedPropertyType.Vector3: return property.vector3Value;
-                case SerializedPropertyType.Vector4: return property.vector4Value;
-                case SerializedPropertyType.Rect: return property.rectValue;
+                case SerializedPropertyType.Vector2: return Compact(property.vector2Value);
+                case SerializedPropertyType.Vector3: return Compact(property.vector3Value);
+                case SerializedPropertyType.Vector4: return Compact(property.vector4Value);
+                case SerializedPropertyType.Rect: return Compact(property.rectValue);
                 case SerializedPropertyType.ArraySize: return property.intValue;
                 case SerializedPropertyType.Character: return (char)property.intValue;
-                case SerializedPropertyType.AnimationCurve: return property.animationCurveValue;
-                case SerializedPropertyType.Bounds: return property.boundsValue;
-                case SerializedPropertyType.Quaternion: return property.quaternionValue;
-                case SerializedPropertyType.Vector2Int: return property.vector2IntValue;
-                case SerializedPropertyType.Vector3Int: return property.vector3IntValue;
-                case SerializedPropertyType.RectInt: return property.rectIntValue;
-                case SerializedPropertyType.BoundsInt: return property.boundsIntValue;
+                case SerializedPropertyType.AnimationCurve: return Compact(property.animationCurveValue);
+                case SerializedPropertyType.Bounds: return Compact(property.boundsValue);
+                case SerializedPropertyType.Quaternion: return Compact(property.quaternionValue);
+                case SerializedPropertyType.Vector2Int: return Compact(property.vector2IntValue);
+                case SerializedPropertyType.Vector3Int: return Compact(property.vector3IntValue);
+                case SerializedPropertyType.RectInt: return Compact(property.rectIntValue);
+                case SerializedPropertyType.BoundsInt: return Compact(property.boundsIntValue);
                 case SerializedPropertyType.ManagedReference: return property.managedReferenceFullTypename;
                 default: return property.hasVisibleChildren ? "<serialized object>" : property.type;
             }
+        }
+
+        /// <summary>
+        /// Unity's value structs expose derived members that walk back into their own type
+        /// (Color.linear, Vector3.normalized, BoundsInt.allPositionsWithin), so handing one to
+        /// Newtonsoft raises "Self referencing loop detected" and costs the whole response.
+        /// Emit the plain components instead, through the shared Unity converters so the key
+        /// names match every other tool.
+        /// </summary>
+        private static JToken Compact(object value) => JToken.FromObject(value, UnityJsonSerializer.Instance);
+
+        private static JToken Compact(Vector2Int value) => Compact(new { value.x, value.y });
+
+        private static JToken Compact(Vector3Int value) => Compact(new { value.x, value.y, value.z });
+
+        private static JToken Compact(RectInt value) =>
+            Compact(new { value.x, value.y, value.width, value.height });
+
+        private static JToken Compact(BoundsInt value) => Compact(new
+        {
+            position = new { value.x, value.y, value.z },
+            size = new { value.size.x, value.size.y, value.size.z }
+        });
+
+        private static JToken Compact(AnimationCurve value)
+        {
+            if (value == null) return JValue.CreateNull();
+            var keys = new JArray();
+            foreach (Keyframe key in value.keys)
+            {
+                keys.Add(new JObject
+                {
+                    ["time"] = key.time,
+                    ["value"] = key.value,
+                    ["inTangent"] = key.inTangent,
+                    ["outTangent"] = key.outTangent,
+                    ["inWeight"] = key.inWeight,
+                    ["outWeight"] = key.outWeight,
+                    ["weightedMode"] = (int)key.weightedMode
+                });
+            }
+            return new JObject
+            {
+                ["keys"] = keys,
+                ["pre_wrap_mode"] = value.preWrapMode.ToString(),
+                ["post_wrap_mode"] = value.postWrapMode.ToString()
+            };
         }
 
         private static bool TryReadCursor(string cursor, out int offset)

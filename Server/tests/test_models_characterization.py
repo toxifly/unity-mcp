@@ -28,6 +28,7 @@ import json
 import pytest
 from datetime import datetime
 from typing import Any, Dict
+from pydantic import ValidationError
 
 from models.models import (
     MCPResponse,
@@ -35,7 +36,7 @@ from models.models import (
     ToolParameterModel,
     ToolDefinitionModel,
 )
-from models.unity_response import normalize_unity_response
+from models.unity_response import normalize_unity_response, parse_resource_response
 
 
 class TestMCPResponseModel:
@@ -143,6 +144,34 @@ class TestMCPResponseModel:
         json_str = response.model_dump_json()
         restored = MCPResponse.model_validate_json(json_str)
         assert restored.data == complex_data
+
+    def test_mcp_response_round_trips_queue_wait_metadata(self):
+        """Queue diagnostics remain present after typed response serialization."""
+        queue = {"waited_ms": 64000, "reason": "compiling"}
+
+        response = MCPResponse(success=True, queue=queue)
+
+        assert response.queue is not None
+        assert response.queue.waited_ms == 64000
+        assert response.queue.reason == "compiling"
+        assert response.model_dump()["queue"] == queue
+        assert MCPResponse.model_validate_json(
+            response.model_dump_json()
+        ).model_dump()["queue"] == queue
+
+    @pytest.mark.parametrize(
+        "queue",
+        [
+            {"waited_ms": -1, "reason": "compiling"},
+            {"waited_ms": "2100", "reason": "compiling"},
+            {"waited_ms": 2100, "reason": ""},
+            {"waited_ms": 2100, "reason": "main_thread_busy", "typo": True},
+        ],
+    )
+    def test_mcp_response_validates_queue_wait_metadata(self, queue):
+        """The explicit diagnostic field does not turn queue payloads into arbitrary data."""
+        with pytest.raises(ValidationError):
+            MCPResponse(success=True, queue=queue)
 
     @pytest.mark.parametrize("success,message,error", [
         (True, "OK", None),
@@ -766,6 +795,103 @@ class TestNormalizeUnityResponse:
         # Should extract the inner response
         assert result["success"] is True
         assert result["message"] == "Inner success"
+
+    @pytest.mark.parametrize("success", [True, False])
+    def test_normalize_preserves_outer_queue_on_inner_mcp_response(self, success):
+        """PluginHub queue diagnostics survive unwrapping an MCP response."""
+        queue = {"waited_ms": 64000, "reason": "compiling"}
+        response = {
+            "status": "success",
+            "result": {
+                "success": success,
+                "message": "Done" if success else None,
+                "error": None if success else "Command failed",
+                "data": {"value": 42},
+            },
+            "queue": queue,
+        }
+
+        result = normalize_unity_response(response)
+
+        assert result["success"] is success
+        assert result["queue"] == queue
+
+    def test_normalize_preserves_outer_queue_on_status_envelope(self):
+        """Queue metadata is also kept when constructing an MCP response."""
+        queue = {"waited_ms": 2100, "reason": "play_mode_transition"}
+        response = {
+            "status": "error",
+            "result": {"error": "Command failed"},
+            "queue": queue,
+        }
+
+        result = normalize_unity_response(response)
+
+        assert result["success"] is False
+        assert result["error"] == "Command failed"
+        assert result["queue"] == queue
+
+    def test_parse_resource_error_preserves_queue_metadata(self):
+        """Typed resource error handling retains a valid queue diagnostic."""
+        queue = {"waited_ms": 2100, "reason": "play_mode_transition"}
+
+        class StrictResourceResponse(MCPResponse):
+            data: list[str]
+
+        result = parse_resource_response(
+            {
+                "success": False,
+                "error": "Command failed",
+                "queue": queue,
+            },
+            StrictResourceResponse,
+        )
+
+        assert type(result) is MCPResponse
+        assert result.success is False
+        assert result.error == "Command failed"
+        assert result.model_dump()["queue"] == queue
+
+    @pytest.mark.parametrize(
+        "queue",
+        [
+            {"waited_ms": "2100", "reason": "compiling"},
+            {"waited_ms": 2100, "reason": "main_thread_busy", "typo": True},
+        ],
+    )
+    def test_parse_resource_error_validates_queue_metadata(self, queue):
+        """The error shortcut applies the same strict queue schema as other responses."""
+        with pytest.raises(ValidationError):
+            parse_resource_response(
+                {"success": False, "error": "Command failed", "queue": queue},
+                MCPResponse,
+            )
+
+    def test_normalize_does_not_replace_inner_queue_metadata(self):
+        """An explicitly returned queue value wins, matching legacy transport."""
+        inner_queue = {"waited_ms": 5, "reason": "inner"}
+        response = {
+            "status": "success",
+            "result": {"success": True, "queue": inner_queue},
+            "queue": {"waited_ms": 64000, "reason": "outer"},
+        }
+
+        result = normalize_unity_response(response)
+
+        assert result["queue"] == inner_queue
+
+    @pytest.mark.parametrize("queue", [None, {}])
+    def test_normalize_omits_empty_outer_queue_metadata(self, queue):
+        """Empty diagnostics remain absent, matching legacy transport output."""
+        response = {
+            "status": "success",
+            "result": {"success": True, "data": {"value": 42}},
+            "queue": queue,
+        }
+
+        result = normalize_unity_response(response)
+
+        assert "queue" not in result
 
     @pytest.mark.parametrize("status,expected_success", [
         ("success", True),

@@ -92,10 +92,63 @@ namespace MCPForUnity.Editor.Services
         private static string _currentJobId;
         private static long _lastPersistUnixMs;
 
+        // A main thread that is blocked (asset import, synchronous domain reload, the test run's own
+        // setup) freezes the editor loop. The init watchdog below charges wall-clock idleness against a
+        // job that has not started tests yet, so without this the first poll after a freeze would see
+        // the whole frozen span as "no progress" and auto-fail a perfectly healthy run. Track loop
+        // liveness so stalled time is never charged. The genuine wedge case this watchdog exists for
+        // keeps the loop ticking normally, so it stays fully covered.
+        private const long LoopStallThresholdMs = 2_000;
+        private static long _lastLoopTickUnixMs;
+        private static long _lastStallEndedUnixMs;
+
         static TestJobManager()
         {
             // Restore after domain reloads (e.g., compilation while a job is running).
             TryRestoreFromSessionState();
+        }
+
+        [InitializeOnLoadMethod]
+        private static void InstallLoopStallDetector()
+        {
+            _lastLoopTickUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+            // This runs on every domain load, so treat the load itself as an observed stall: the job
+            // survives the reload through SessionState carrying its pre-reload LastUpdateUnixMs, and
+            // without this the whole compile + reload span would be charged against the init budget --
+            // the same false failure this detector exists to prevent, arriving by reload instead of
+            // by import.
+            _lastStallEndedUnixMs = _lastLoopTickUnixMs;
+            EditorApplication.update -= OnEditorLoopTick;
+            EditorApplication.update += OnEditorLoopTick;
+        }
+
+        private static void OnEditorLoopTick()
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            long previous = _lastLoopTickUnixMs;
+            _lastLoopTickUnixMs = now;
+            if (previous > 0 && now - previous > LoopStallThresholdMs)
+            {
+                _lastStallEndedUnixMs = now;
+            }
+        }
+
+        /// <summary>
+        /// The earliest instant from which idle time may fairly be charged against
+        /// <paramref name="lastActivityUnixMs"/>: never before the end of the most recent editor-loop
+        /// stall. If the loop is stalled at evaluation time — a queued poll can execute before the
+        /// post-stall update tick lands — nothing is chargeable yet, so the clock restarts at
+        /// <paramref name="now"/>. A genuinely wedged run that overlaps a stall simply takes one extra
+        /// init window to be declared dead.
+        /// </summary>
+        private static long ChargeableSince(long lastActivityUnixMs, long now)
+        {
+            if (_lastLoopTickUnixMs > 0 && now - _lastLoopTickUnixMs > LoopStallThresholdMs)
+            {
+                return now;
+            }
+            return Math.Max(lastActivityUnixMs, _lastStallEndedUnixMs);
         }
 
         public static string CurrentJobId
@@ -605,7 +658,8 @@ namespace MCPForUnity.Editor.Services
                 {
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     long initTimeout = job.InitTimeoutMs > 0 ? job.InitTimeoutMs : DefaultInitializationTimeoutMs;
-                    if (!EditorApplication.isCompiling && !EditorApplication.isUpdating && now - job.LastUpdateUnixMs > initTimeout)
+                    if (!EditorStateCache.GetActualIsCompiling() && !EditorApplication.isUpdating
+                        && now - ChargeableSince(job.LastUpdateUnixMs, now) > initTimeout)
                     {
                         McpLog.Warn($"[TestJobManager] Job {jobId} stalled before any test started (no RunFinished within {initTimeout}ms), auto-failing");
                         job.Status = TestJobStatus.Failed;
@@ -642,7 +696,7 @@ namespace MCPForUnity.Editor.Services
                     && string.Equals(job.Mode, nameof(TestMode.PlayMode), StringComparison.OrdinalIgnoreCase)
                     && !EditorApplication.isPlaying
                     && !EditorApplication.isPlayingOrWillChangePlaymode
-                    && !EditorApplication.isCompiling
+                    && !EditorStateCache.GetActualIsCompiling()
                     && !EditorApplication.isUpdating;
                 if (midRunWedged)
                 {
@@ -699,7 +753,11 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
-        internal static object ToSerializable(TestJob job, bool includeDetails, bool includeFailedTests)
+        internal static object ToSerializable(
+            TestJob job,
+            bool includeDetails,
+            bool includeFailed,
+            bool includeSkipped)
         {
             if (job == null)
             {
@@ -709,7 +767,8 @@ namespace MCPForUnity.Editor.Services
             object resultPayload = null;
             if (job.Status == TestJobStatus.Succeeded && job.Result != null)
             {
-                resultPayload = job.Result.ToSerializable(job.Mode, includeDetails, includeFailedTests);
+                resultPayload = job.Result.ToSerializable(
+                    job.Mode, includeDetails, includeFailed, includeSkipped);
             }
 
             return new
@@ -721,7 +780,11 @@ namespace MCPForUnity.Editor.Services
                 started_unix_ms = job.StartedUnixMs,
                 finished_unix_ms = job.FinishedUnixMs,
                 last_update_unix_ms = job.LastUpdateUnixMs,
-                progress = new
+                // Progress is dead weight on a green terminal poll — a succeeded job has already
+                // answered "is it moving, and is something blocking it". It is dropped only there:
+                // a failed job carries no result payload at all, so its progress block (which test
+                // was executing, what had failed, what was blocking) is the whole diagnosis.
+                progress = job.Status == TestJobStatus.Succeeded ? null : (object)new
                 {
                     completed = job.CompletedTests,
                     total = job.TotalTests,
@@ -761,7 +824,7 @@ namespace MCPForUnity.Editor.Services
                 return "editor_unfocused";
             }
 
-            if (EditorApplication.isCompiling)
+            if (EditorStateCache.GetActualIsCompiling())
             {
                 return "compiling";
             }

@@ -28,7 +28,11 @@ TOOL_GROUPS: dict[str, str] = {
     "asset_gen": "AI asset generation – 3D model gen/import, 2D image gen & audio gen (bring-your-own-key)",
 }
 
-DEFAULT_ENABLED_GROUPS: set[str] = {"core"}
+# ``testing`` ships enabled because it is only two tools and an agent that cannot see
+# them cannot discover them either: a hidden tool is absent from ``tools/list``, so the
+# usual "search for run_tests" reflex returns nothing and the group has to be activated
+# from prior knowledge before the first test can ever be run.
+DEFAULT_ENABLED_GROUPS: set[str] = {"core", "testing"}
 
 
 def mcp_for_unity_tool(

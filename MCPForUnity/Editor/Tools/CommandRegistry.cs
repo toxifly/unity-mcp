@@ -289,11 +289,28 @@ namespace MCPForUnity.Editor.Tools
         /// <returns>The result for synchronous commands, or null for async commands (TCS will be completed later)</returns>
         public static object ExecuteCommand(string commandName, JObject @params, TaskCompletionSource<string> tcs)
         {
+            return ExecuteCommand(commandName, @params, tcs, null);
+        }
+
+        /// <summary>
+        /// Execute a command while preserving dispatcher metadata through asynchronous completion.
+        /// The metadata is snapshotted per invocation so concurrent commands cannot overwrite one
+        /// another's response envelope.
+        /// </summary>
+        internal static object ExecuteCommand(
+            string commandName,
+            JObject @params,
+            TaskCompletionSource<string> tcs,
+            JObject queueWait)
+        {
             var handlerInfo = GetHandlerInfo(commandName);
 
             if (handlerInfo.IsAsync)
             {
-                ExecuteAsyncHandler(handlerInfo, @params, commandName, tcs);
+                var queueWaitSnapshot = queueWait == null
+                    ? null
+                    : (JObject)queueWait.DeepClone();
+                ExecuteAsyncHandler(handlerInfo, @params, commandName, tcs, queueWaitSnapshot);
                 return null;
             }
 
@@ -390,7 +407,8 @@ namespace MCPForUnity.Editor.Tools
             HandlerInfo handlerInfo,
             JObject parameters,
             string commandName,
-            TaskCompletionSource<string> tcs)
+            TaskCompletionSource<string> tcs,
+            JObject queueWait)
         {
             if (handlerInfo.AsyncHandler == null)
             {
@@ -405,13 +423,13 @@ namespace MCPForUnity.Editor.Tools
             }
             catch (Exception ex)
             {
-                ReportAsyncFailure(commandName, tcs, ex);
+                ReportAsyncFailure(commandName, tcs, ex, queueWait);
                 return;
             }
 
             if (handlerTask == null)
             {
-                CompleteAsyncCommand(commandName, tcs, null);
+                CompleteAsyncCommand(commandName, tcs, null, queueWait);
                 return;
             }
 
@@ -420,11 +438,11 @@ namespace MCPForUnity.Editor.Tools
                 try
                 {
                     var finalResult = await handlerTask.ConfigureAwait(true);
-                    CompleteAsyncCommand(commandName, tcs, finalResult);
+                    CompleteAsyncCommand(commandName, tcs, finalResult, queueWait);
                 }
                 catch (Exception ex)
                 {
-                    ReportAsyncFailure(commandName, tcs, ex);
+                    ReportAsyncFailure(commandName, tcs, ex, queueWait);
                 }
             }
 
@@ -437,11 +455,15 @@ namespace MCPForUnity.Editor.Tools
         /// <param name="commandName"></param>
         /// <param name="tcs"></param>
         /// <param name="result"></param>
-        private static void CompleteAsyncCommand(string commandName, TaskCompletionSource<string> tcs, object result)
+        private static void CompleteAsyncCommand(
+            string commandName,
+            TaskCompletionSource<string> tcs,
+            object result,
+            JObject queueWait)
         {
             try
             {
-                var response = new { status = "success", result };
+                var response = new { status = "success", result, queue = queueWait };
                 string json = JsonConvert.SerializeObject(response);
 
                 if (!tcs.TrySetResult(json))
@@ -452,7 +474,7 @@ namespace MCPForUnity.Editor.Tools
             catch (Exception ex)
             {
                 McpLog.Error($"Error completing async command '{commandName}': {ex.Message}\n{ex.StackTrace}");
-                ReportAsyncFailure(commandName, tcs, ex);
+                ReportAsyncFailure(commandName, tcs, ex, queueWait);
             }
         }
 
@@ -463,7 +485,11 @@ namespace MCPForUnity.Editor.Tools
         /// <param name="commandName"></param>
         /// <param name="tcs"></param>
         /// <param name="ex"></param>
-        private static void ReportAsyncFailure(string commandName, TaskCompletionSource<string> tcs, Exception ex)
+        private static void ReportAsyncFailure(
+            string commandName,
+            TaskCompletionSource<string> tcs,
+            Exception ex,
+            JObject queueWait)
         {
             McpLog.Error($"Error in async command '{commandName}': {ex.Message}\n{ex.StackTrace}");
 
@@ -472,7 +498,8 @@ namespace MCPForUnity.Editor.Tools
                 status = "error",
                 error = ex.Message,
                 command = commandName,
-                stackTrace = ex.StackTrace
+                stackTrace = ex.StackTrace,
+                queue = queueWait,
             };
 
             string json;

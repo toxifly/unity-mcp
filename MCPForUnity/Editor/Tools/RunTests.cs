@@ -42,7 +42,8 @@ namespace MCPForUnity.Editor.Tools
 
                 var p = new ToolParams(@params);
                 bool includeDetails = p.GetBool("includeDetails");
-                bool includeFailedTests = p.GetBool("includeFailedTests");
+                bool includeFailed = p.GetBool("includeFailed") || p.GetBool("includeFailedTests");
+                bool includeSkipped = p.GetBool("includeSkipped");
 
                 var filterOptions = GetFilterOptions(@params);
                 long initTimeoutMs = p.GetInt("initTimeout") ?? 0;
@@ -58,7 +59,8 @@ namespace MCPForUnity.Editor.Tools
                     status = "running",
                     mode = parsedMode.Value.ToString(),
                     include_details = includeDetails,
-                    include_failed_tests = includeFailedTests
+                    include_failed = includeFailed,
+                    include_skipped = includeSkipped
                 }));
             }
             catch (Exception ex)

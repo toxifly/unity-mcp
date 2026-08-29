@@ -208,7 +208,7 @@ uv run python -m cli.main editor tests --async
 uv run python -m cli.main editor poll-test <job_id> --wait 60
 
 # Show only failed tests
-uv run python -m cli.main editor tests --failed-only
+uv run python -m cli.main editor tests --failed
 ```
 
 **Using MCP tools directly** (from any MCP client):

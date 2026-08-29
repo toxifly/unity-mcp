@@ -76,6 +76,15 @@ namespace MCPForUnityTests.Editor.Services
             AssetDatabase.DeleteAsset("Assets/Temp/DryRunPrefab");
         }
 
+        // SetActiveScene answers "did the active scene change", not "did it succeed":
+        // NewScene(..., Additive) already leaves the new scene active, so asking for that
+        // same scene again reports false. Assert the state the caller needs instead.
+        private static void MakeActiveScene(Scene scene)
+        {
+            EditorSceneManager.SetActiveScene(scene);
+            Assert.AreEqual(scene, SceneManager.GetActiveScene());
+        }
+
         [Test]
         public void Begin_RejectsPredirtyTargetSceneByDefault()
         {
@@ -798,7 +807,7 @@ namespace MCPForUnityTests.Editor.Services
             {
                 Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
                 Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
-                Assert.IsTrue(EditorSceneManager.SetActiveScene(additiveScene));
+                MakeActiveScene(additiveScene);
                 string parentTransformId = GlobalObjectId.GetGlobalObjectIdSlow(destinationParent.transform).ToString();
 
                 JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject
@@ -846,7 +855,7 @@ namespace MCPForUnityTests.Editor.Services
             {
                 Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
                 Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
-                Assert.IsTrue(EditorSceneManager.SetActiveScene(additiveScene));
+                MakeActiveScene(additiveScene);
                 string parentTransformId = GlobalObjectId.GetGlobalObjectIdSlow(destinationParent.transform).ToString();
 
                 JObject response = JObject.FromObject(ManageGameObject.HandleCommand(new JObject

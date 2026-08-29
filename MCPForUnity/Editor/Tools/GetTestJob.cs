@@ -21,7 +21,10 @@ namespace MCPForUnity.Editor.Tools
 
             var p = new ToolParams(@params);
             bool includeDetails = p.GetBool("includeDetails");
-            bool includeFailedTests = p.GetBool("includeFailedTests");
+            // includeFailedTests is the old spelling, and it used to drag skipped tests along
+            // with the failures. Skipped detail now needs asking for by name.
+            bool includeFailed = p.GetBool("includeFailed") || p.GetBool("includeFailedTests");
+            bool includeSkipped = p.GetBool("includeSkipped");
 
             var job = TestJobManager.GetJob(jobId);
             if (job == null)
@@ -29,7 +32,8 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("Unknown job_id.");
             }
 
-            var payload = TestJobManager.ToSerializable(job, includeDetails, includeFailedTests);
+            var payload = TestJobManager.ToSerializable(
+                job, includeDetails, includeFailed, includeSkipped);
             return new SuccessResponse("Test job status retrieved.", payload);
         }
     }

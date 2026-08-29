@@ -1,7 +1,7 @@
 ---
 title: manage_graphics
 sidebar_label: manage_graphics
-description: "Manage rendering graphics: volumes, post-processing, light baking, rendering stats, pipeline settings, and URP renderer features."
+description: "Manage volumes and post-processing, light baking, rendering statistics, render-pipeline settings, URP renderer features, and skybox/environment settings. action prefixes select the domain: volume_*, bake_*, stats_*, pipeline_*, feature_*…"
 ---
 
 # `manage_graphics`
@@ -12,35 +12,7 @@ description: "Manage rendering graphics: volumes, post-processing, light baking,
 
 ## Description
 
-Manage rendering graphics: volumes, post-processing, light baking, rendering stats, pipeline settings, and URP renderer features. Use ping to check pipeline and available features.
-
-VOLUME (require URP/HDRP):
-- volume_create, volume_add_effect, volume_set_effect, volume_remove_effect
-- volume_get_info, volume_set_properties, volume_list_effects, volume_create_profile
-
-BAKE (Edit mode only):
-- bake_start, bake_cancel, bake_status, bake_clear, bake_reflection_probe
-- bake_get_settings, bake_set_settings
-- bake_create_light_probe_group, bake_create_reflection_probe, bake_set_probe_positions
-
-STATS:
-- stats_get: Rendering counters (draw calls, batches, triangles, etc.)
-- stats_list_counters, stats_set_scene_debug, stats_get_memory
-
-PIPELINE:
-- pipeline_get_info, pipeline_set_quality, pipeline_get_settings, pipeline_set_settings
-
-FEATURES (URP only):
-- feature_list, feature_add, feature_remove, feature_configure, feature_toggle, feature_reorder
-
-SKYBOX / ENVIRONMENT:
-- skybox_get: Read all environment settings (material, ambient, fog, reflection, sun)
-- skybox_set_material: Set skybox material by asset path
-- skybox_set_properties: Set properties on current skybox material (tint, exposure, rotation)
-- skybox_set_ambient: Set ambient lighting mode and colors
-- skybox_set_fog: Enable/configure fog (mode, color, density, start/end distance)
-- skybox_set_reflection: Set environment reflection settings
-- skybox_set_sun: Set the sun source light
+Manage volumes and post-processing, light baking, rendering statistics, render-pipeline settings, URP renderer features, and skybox/environment settings. action prefixes select the domain: volume_*, bake_*, stats_*, pipeline_*, feature_*, or skybox_*; ping reports the active pipeline and supported features. target, effect, parameters, properties, settings, and the remaining domain-specific fields supply action inputs. Volume actions require URP or HDRP, renderer-feature actions require URP, and baking runs only in Edit mode. get/list/status actions are read-only; create, set, add, remove, configure, toggle, reorder, bake, and clear actions mutate scene assets or project rendering settings.
 
 ## Parameters
 

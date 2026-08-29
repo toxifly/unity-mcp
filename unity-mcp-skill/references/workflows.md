@@ -463,7 +463,7 @@ batch_execute(commands=[
 result = run_tests(
     mode="EditMode",
     test_names=["MyTests.TestPlayerMovement", "MyTests.TestEnemySpawn"],
-    include_failed_tests=True
+    include_failed=True
 )
 job_id = result["job_id"]
 
@@ -471,7 +471,7 @@ job_id = result["job_id"]
 final_result = get_test_job(
     job_id=job_id,
     wait_timeout=60,
-    include_failed_tests=True
+    include_failed=True
 )
 
 # 4. Check results
@@ -487,7 +487,7 @@ if final_result["status"] == "complete":
 result = run_tests(
     mode="EditMode",
     category_names=["Unit"],
-    include_failed_tests=True
+    include_failed=True
 )
 
 # Poll until complete

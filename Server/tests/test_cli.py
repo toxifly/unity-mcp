@@ -456,6 +456,44 @@ class TestSceneCommands:
             result = runner.invoke(cli, ["scene", "create", "NewLevel"])
             assert result.exit_code == 0
 
+    def test_scene_apply_external_edit(self, runner, mock_unity_response):
+        """Test scene apply-external-edit passes edits through as parsed JSON."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, [
+                "scene", "apply-external-edit", "Assets/Scenes/Main.unity",
+                "--edits", '[{"old_text": "a", "new_text": "b", "count": 2}]',
+                "--dry-run",
+            ])
+            assert result.exit_code == 0
+            params = mock_run.call_args[0][1]
+            assert params["action"] == "apply_external_edit"
+            assert params["path"] == "Assets/Scenes/Main.unity"
+            assert params["edits"] == [{"old_text": "a", "new_text": "b", "count": 2}]
+            assert params["dry_run"] is True
+            assert "discard_unsaved" not in params
+
+    def test_scene_apply_external_edit_without_edits(self, runner, mock_unity_response):
+        """Omitting --edits is a pure resync of a file already changed on disk."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, [
+                "scene", "apply-external-edit", "Assets/Scenes/Main.unity",
+                "--discard-unsaved",
+            ])
+            assert result.exit_code == 0
+            params = mock_run.call_args[0][1]
+            assert "edits" not in params
+            assert params["discard_unsaved"] is True
+
+    def test_scene_apply_external_edit_rejects_bad_json(self, runner, mock_unity_response):
+        """A malformed --edits payload must fail before anything reaches Unity."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, [
+                "scene", "apply-external-edit", "Assets/Scenes/Main.unity",
+                "--edits", "not json",
+            ])
+            assert result.exit_code != 0
+            mock_run.assert_not_called()
+
 
 class TestCameraCommands:
     """Tests for Camera CLI commands."""
@@ -1342,6 +1380,23 @@ class TestEditorEnhancedCommands:
             result = runner.invoke(
                 cli, ["editor", "poll-test", "test-job-123"])
             assert result.exit_code == 0
+
+    def test_failed_and_skipped_are_asked_for_separately(self, runner):
+        """--failed no longer drags skipped tests along; --skipped is its own flag."""
+        captured = {}
+
+        def capture(command, params, config):
+            captured[command] = params
+            return {"success": True, "data": {"job_id": "j"}}
+
+        with patch("cli.commands.editor.run_command", side_effect=capture):
+            assert runner.invoke(cli, ["editor", "tests", "--failed"]).exit_code == 0
+            assert captured["run_tests"] == {"mode": "EditMode", "include_failed": True}
+
+            assert runner.invoke(
+                cli, ["editor", "poll-test", "j", "--skipped"]).exit_code == 0
+            assert captured["get_test_job"]["include_skipped"] is True
+            assert "include_failed" not in captured["get_test_job"]
 
 
 # =============================================================================

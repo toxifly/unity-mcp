@@ -259,6 +259,10 @@ namespace MCPForUnity.Editor.Tools
                         return new ErrorResponse(
                             "Either 'name'/'path' or 'buildIndex' must be provided for 'load' action."
                         );
+                case "apply_external_edit":
+                    // Rewrite the .unity file on disk and resync the Editor in one main-thread
+                    // step, so Unity's external-change reload prompt never gets to appear.
+                    return SceneExternalEdit.Apply(@params);
                 case "save":
                     // Save current scene, optionally to a new path
                     return SaveScene(fullPath, relativePath);

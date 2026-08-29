@@ -26,6 +26,7 @@ from services.registry import (  # noqa: E402
 )
 
 OPTIONAL_GROUPS = sorted(set(TOOL_GROUPS) - DEFAULT_ENABLED_GROUPS)
+DEFAULT_GROUPS = sorted(DEFAULT_ENABLED_GROUPS)
 DOCS_TOOLS = {"unity_docs", "unity_reflect"}
 
 
@@ -82,12 +83,13 @@ async def list_tool_names(client):
 
 
 async def scenario_fresh_v2(server):
-    """Fresh v2 preferences (core-only) must keep optional groups hidden."""
+    """Fresh v2 preferences (defaults only) must keep optional groups hidden."""
     recorder = Recorder()
     async with Client(server, message_handler=recorder) as client:
-        result = await sync_from(unity_response({"core"}, prefs_version=2))
+        result = await sync_from(
+            unity_response(DEFAULT_ENABLED_GROUPS, prefs_version=2))
         assert result.get("synced") is True, result
-        assert result["enabled_groups"] == ["core"], result
+        assert result["enabled_groups"] == DEFAULT_GROUPS, result
         assert result["skipped_legacy_groups"] == [], result
         assert set(result["disabled_groups"]) == set(OPTIONAL_GROUPS), result
 
@@ -145,7 +147,7 @@ async def scenario_fresh_v2(server):
         await client.call_tool("manage_tools", {"action": "activate", "group": "docs"})
         await client.call_tool("manage_tools", {"action": "reset"})
         visible = await list_tool_names(client)
-        assert visible == expected_visible(), "reset must restore core-only visibility"
+        assert visible == expected_visible(), "reset must restore default visibility"
 
 
 async def scenario_legacy_all_enabled(server):
@@ -154,7 +156,7 @@ async def scenario_legacy_all_enabled(server):
     async with Client(server) as client:
         result = await sync_from(unity_response(set(TOOL_GROUPS), prefs_version=None))
         assert result.get("synced") is True, result
-        assert result["enabled_groups"] == ["core"], result
+        assert result["enabled_groups"] == DEFAULT_GROUPS, result
         assert result["skipped_legacy_groups"] == OPTIONAL_GROUPS, result
 
         visible = await list_tool_names(client)
@@ -168,9 +170,10 @@ async def scenario_v2_docs_persisted(server):
     """An explicit persisted optional-group choice (v2) is restored intentionally
     and reported accurately."""
     async with Client(server) as client:
-        result = await sync_from(unity_response({"core", "docs"}, prefs_version=2))
+        result = await sync_from(
+            unity_response(DEFAULT_ENABLED_GROUPS | {"docs"}, prefs_version=2))
         assert result.get("synced") is True, result
-        assert result["enabled_groups"] == ["core", "docs"], result
+        assert result["enabled_groups"] == sorted(DEFAULT_GROUPS + ["docs"]), result
 
         visible = await list_tool_names(client)
         assert visible == expected_visible(["docs"]), visible

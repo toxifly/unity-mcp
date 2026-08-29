@@ -1,7 +1,7 @@
 ---
 title: import_model_file
 sidebar_label: import_model_file
-description: "Import a local 3D model file that already exists on disk (e.g. an FBX/OBJ/glTF exported from Blender or another DCC tool) into the Unity project."
+description: "Copy a local FBX, OBJ, glTF/GLB, or ZIP model into Assets/ and run Unity's model importer. source_path identifies the local file; name, output_folder, target_size, and animation_type configure the import."
 ---
 
 # `import_model_file`
@@ -12,13 +12,7 @@ description: "Import a local 3D model file that already exists on disk (e.g. an 
 
 ## Description
 
-Import a local 3D model file that already exists on disk (e.g. an FBX/OBJ/glTF exported from Blender or another DCC tool) into the Unity project. The file is copied under Assets/ and run through Unity's model-import pipeline (scale-normalize, material settings; glTF requires glTFast). Carries no API keys and no file bytes over the bridge.
-
-Params: source_path (absolute or Assets-relative path to a .fbx/.obj/.glb/.gltf/.zip), name, output_folder (under Assets/), target_size, animation_type. Returns { asset_path, asset_guid }.
-
-animation_type (FBX/OBJ only): pass 'generic' or 'humanoid' for a rigged/animated mesh so Unity surfaces its AnimationClips; omitted or 'none' imports no rig (this is the usual cause of a rigged FBX importing with zero clips); 'legacy' selects Unity's legacy Animation system (rarely needed). glTF/GLB ignore it — glTFast imports animation itself.
-
-For multi-file exports (a text .gltf with an external .bin, or an .obj with a sibling .mtl/textures), zip them and pass the .zip — a bare .gltf/.obj is copied without its sidecars.
+Copy a local FBX, OBJ, glTF/GLB, or ZIP model into Assets/ and run Unity's model importer. source_path identifies the local file; name, output_folder, target_size, and animation_type configure the import. Use generic or humanoid animation_type for rigged FBX/OBJ clips; none imports no rig, and glTF/GLB ignore this setting because glTFast handles animation. glTF/GLB requires glTFast. ZIP multi-file exports so external .bin, .mtl, and texture sidecars are copied. The operation writes project assets but sends no source-file bytes or API keys over the bridge.
 
 ## Parameters
 

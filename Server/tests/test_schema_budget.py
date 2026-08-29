@@ -6,9 +6,12 @@ import sys
 import textwrap
 
 MAX_TOOL_DESCRIPTION_CHARS = 1_000
-MAX_TOOLS_LIST_ESTIMATED_TOKENS = 28_000
+# Both numbers moved together when ``testing`` joined DEFAULT_ENABLED_GROUPS: run_tests
+# and get_test_job add ~5.3 KB of schema to every session's tools/list, paid so that an
+# agent can find them at all rather than having to know the activation call in advance.
+MAX_TOOLS_LIST_ESTIMATED_TOKENS = 29_500
 MIN_DUPLICATE_PARAGRAPH_CHARS = 80
-EXPECTED_BASELINE_TOOLS_LIST_BYTES = 109_631
+EXPECTED_BASELINE_TOOLS_LIST_BYTES = 115_207
 EXPECTED_MAX_REGRESSION_BYTES = EXPECTED_BASELINE_TOOLS_LIST_BYTES * 103 // 100
 
 

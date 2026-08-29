@@ -42,6 +42,7 @@ ALL_ACTIONS = [
     "get_active", "get_build_settings", "scene_view_frame",
     "close_scene", "set_active_scene", "get_loaded_scenes",
     "move_to_scene",
+    "apply_external_edit",
     "validate",
 ]
 
@@ -139,3 +140,61 @@ def test_none_params_omitted(mock_unity):
     assert "additive" not in params
     assert "template" not in params
     assert "autoRepair" not in params
+    assert "edits" not in params
+    assert "discard_unsaved" not in params
+    assert "dry_run" not in params
+
+
+def test_success_response_preserves_queue_metadata(mock_unity, monkeypatch):
+    queue = {"waited_ms": 64000, "reason": "main_thread_busy"}
+
+    async def fake_send(*args, **kwargs):
+        return {
+            "success": True,
+            "message": "ok",
+            "data": {"name": "SampleScene"},
+            "queue": queue,
+        }
+
+    monkeypatch.setattr("services.tools.manage_scene.send_with_unity_instance", fake_send)
+
+    result = asyncio.run(manage_scene(SimpleNamespace(), action="get_active"))
+
+    assert result["queue"] == queue
+
+
+# ── apply_external_edit ──────────────────────────────────────────────
+
+
+def test_apply_external_edit_forwards_edits_and_flags(mock_unity):
+    edits = [{"old_text": "m_Name: Old", "new_text": "m_Name: New", "count": 1}]
+    result = asyncio.run(manage_scene(
+        SimpleNamespace(), action="apply_external_edit",
+        path="Assets/Scenes/Level2.unity", edits=edits,
+        discard_unsaved=True, dry_run=False,
+    ))
+    assert result["success"] is True
+    assert mock_unity["params"]["edits"] == edits
+    assert mock_unity["params"]["discard_unsaved"] is True
+    assert mock_unity["params"]["dry_run"] is False
+
+
+def test_apply_external_edit_skips_the_refresh_that_raises_the_prompt(mock_unity, monkeypatch):
+    # A refresh is what makes Unity notice the on-disk change and raise the modal reload prompt
+    # this action exists to avoid, so it must not be the thing that runs just before it.
+    seen: list[dict] = []
+
+    async def capture(ctx, **kwargs):
+        seen.append(kwargs)
+        return None
+
+    monkeypatch.setattr("services.tools.manage_scene.preflight", capture)
+
+    asyncio.run(manage_scene(
+        SimpleNamespace(), action="apply_external_edit",
+        path="Assets/Scenes/Level2.unity",
+    ))
+    asyncio.run(manage_scene(SimpleNamespace(), action="get_loaded_scenes"))
+
+    assert seen[0]["refresh_if_dirty"] is False
+    assert seen[1]["refresh_if_dirty"] is True

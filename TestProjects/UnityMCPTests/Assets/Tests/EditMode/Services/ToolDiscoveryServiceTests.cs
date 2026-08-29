@@ -140,12 +140,12 @@ namespace MCPForUnity.Editor.Tests.EditMode.Services
         {
             var service = new ToolDiscoveryService();
             var coreTool = service.DiscoverAllTools()
-                .FirstOrDefault(t => t.IsBuiltIn && string.Equals(t.Group ?? "core", "core", StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(t => t.IsBuiltIn && McpToolGroups.IsDefaultEnabled(t.Group ?? "core"));
             var optionalTool = service.DiscoverAllTools()
-                .FirstOrDefault(t => t.IsBuiltIn && !string.Equals(t.Group ?? "core", "core", StringComparison.OrdinalIgnoreCase));
+                .FirstOrDefault(t => t.IsBuiltIn && !McpToolGroups.IsDefaultEnabled(t.Group ?? "core"));
 
-            Assert.IsNotNull(coreTool, "Expected at least one built-in core tool.");
-            Assert.IsNotNull(optionalTool, "Expected at least one built-in optional-group tool.");
+            Assert.IsNotNull(coreTool, "Expected at least one built-in default-on group tool.");
+            Assert.IsNotNull(optionalTool, "Expected at least one built-in default-off group tool.");
 
             var coreSnapshot = SnapshotPrefs(coreTool.Name);
             var optionalSnapshot = SnapshotPrefs(optionalTool.Name);
@@ -176,8 +176,8 @@ namespace MCPForUnity.Editor.Tests.EditMode.Services
         {
             var service = new ToolDiscoveryService();
             var optionalTool = service.DiscoverAllTools()
-                .FirstOrDefault(t => t.IsBuiltIn && !string.Equals(t.Group ?? "core", "core", StringComparison.OrdinalIgnoreCase));
-            Assert.IsNotNull(optionalTool, "Expected at least one built-in optional-group tool.");
+                .FirstOrDefault(t => t.IsBuiltIn && !McpToolGroups.IsDefaultEnabled(t.Group ?? "core"));
+            Assert.IsNotNull(optionalTool, "Expected at least one built-in default-off group tool.");
 
             var snapshot = SnapshotPrefs(optionalTool.Name);
             string legacyKey = EditorPrefKeys.LegacyToolEnabledPrefix + optionalTool.Name;
@@ -206,8 +206,8 @@ namespace MCPForUnity.Editor.Tests.EditMode.Services
         {
             var service = new ToolDiscoveryService();
             var coreTool = service.DiscoverAllTools()
-                .FirstOrDefault(t => t.IsBuiltIn && string.Equals(t.Group ?? "core", "core", StringComparison.OrdinalIgnoreCase));
-            Assert.IsNotNull(coreTool, "Expected at least one built-in core tool.");
+                .FirstOrDefault(t => t.IsBuiltIn && McpToolGroups.IsDefaultEnabled(t.Group ?? "core"));
+            Assert.IsNotNull(coreTool, "Expected at least one built-in default-on group tool.");
 
             var snapshot = SnapshotPrefs(coreTool.Name);
             string legacyKey = EditorPrefKeys.LegacyToolEnabledPrefix + coreTool.Name;
@@ -237,8 +237,8 @@ namespace MCPForUnity.Editor.Tests.EditMode.Services
         {
             var service = new ToolDiscoveryService();
             var optionalTool = service.DiscoverAllTools()
-                .FirstOrDefault(t => t.IsBuiltIn && !string.Equals(t.Group ?? "core", "core", StringComparison.OrdinalIgnoreCase));
-            Assert.IsNotNull(optionalTool, "Expected at least one built-in optional-group tool.");
+                .FirstOrDefault(t => t.IsBuiltIn && !McpToolGroups.IsDefaultEnabled(t.Group ?? "core"));
+            Assert.IsNotNull(optionalTool, "Expected at least one built-in default-off group tool.");
 
             var snapshot = SnapshotPrefs(optionalTool.Name);
             try

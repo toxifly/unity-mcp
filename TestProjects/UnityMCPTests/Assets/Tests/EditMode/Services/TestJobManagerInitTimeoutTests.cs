@@ -18,8 +18,12 @@ namespace MCPForUnityTests.Editor.Services
         private MethodInfo _persistMethod;
         private MethodInfo _restoreMethod;
         private Type _testJobType;
+        private FieldInfo _stallEndedField;
+        private FieldInfo _loopTickField;
 
         private string _originalJobId;
+        private long _originalStallEnded;
+        private long _originalLoopTick;
 
         [SetUp]
         public void SetUp()
@@ -46,8 +50,24 @@ namespace MCPForUnityTests.Editor.Services
             _restoreMethod = managerType.GetMethod("TryRestoreFromSessionState", BindingFlags.NonPublic | BindingFlags.Static);
             Assert.NotNull(_restoreMethod, "Could not find TryRestoreFromSessionState method");
 
+            _stallEndedField = managerType.GetField("_lastStallEndedUnixMs", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(_stallEndedField, "Could not find _lastStallEndedUnixMs field");
+
+            _loopTickField = managerType.GetField("_lastLoopTickUnixMs", BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.NotNull(_loopTickField, "Could not find _lastLoopTickUnixMs field");
+
             // Snapshot original state
             _originalJobId = _currentJobIdField.GetValue(null) as string;
+            _originalStallEnded = (long)_stallEndedField.GetValue(null);
+            _originalLoopTick = (long)_loopTickField.GetValue(null);
+
+            // These tests fabricate a job's idle time, so they have to fabricate the editor-loop
+            // liveness the watchdog weighs it against too: it refuses to charge idleness that
+            // elapsed while the loop was frozen, and it counts a domain load as one such freeze --
+            // which in a batch run happened seconds ago, so every fabricated age would be excused
+            // and no job could auto-fail. A live, unstalled loop is the premise each test is about.
+            _stallEndedField.SetValue(null, 0L);
+            _loopTickField.SetValue(null, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             // We'll restore _currentJobId in TearDown; Jobs dictionary is shared static state
         }
 
@@ -56,6 +76,8 @@ namespace MCPForUnityTests.Editor.Services
         {
             // Restore original state
             _currentJobIdField.SetValue(null, _originalJobId);
+            _stallEndedField.SetValue(null, _originalStallEnded);
+            _loopTickField.SetValue(null, _originalLoopTick);
             // Clean up any test jobs we inserted
             var jobs = _jobsField.GetValue(null) as System.Collections.IDictionary;
             jobs?.Remove("test-init-timeout-job");

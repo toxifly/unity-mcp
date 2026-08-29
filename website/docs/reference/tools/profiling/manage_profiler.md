@@ -1,7 +1,7 @@
 ---
 title: manage_profiler
 sidebar_label: manage_profiler
-description: "Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger."
+description: "Control Unity Profiler sessions, read counters and frame timing, inspect object memory, capture or compare memory snapshots, and use the Frame Debugger. action supports profiler_start/stop/status/set_areas, get_frame_timing, get_counters…"
 ---
 
 # `manage_profiler`
@@ -12,28 +12,7 @@ description: "Unity Profiler session control, counter reads, memory snapshots, a
 
 ## Description
 
-Unity Profiler session control, counter reads, memory snapshots, and Frame Debugger.
-
-SESSION:
-- profiler_start: Enable profiler, optionally record to .raw file (log_file, enable_callstacks)
-- profiler_stop: Disable profiler, stop recording
-- profiler_status: Get enabled state, active areas, recording path
-- profiler_set_areas: Toggle ProfilerAreas on/off (areas dict)
-
-COUNTERS:
-- get_frame_timing: FrameTimingManager data (12 fields, synchronous)
-- get_counters: Generic counter read by category + optional counter names (async, 1-frame wait)
-- get_object_memory: Memory size of a specific object by path
-
-MEMORY SNAPSHOT (requires com.unity.memoryprofiler):
-- memory_take_snapshot: Capture memory snapshot to file
-- memory_list_snapshots: List available .snap files
-- memory_compare_snapshots: Compare two snapshot files
-
-FRAME DEBUGGER:
-- frame_debugger_enable: Turn on Frame Debugger, report event count
-- frame_debugger_disable: Turn off Frame Debugger
-- frame_debugger_get_events: Get draw call events (paged, best-effort via reflection)
+Control Unity Profiler sessions, read counters and frame timing, inspect object memory, capture or compare memory snapshots, and use the Frame Debugger. action supports profiler_start/stop/status/set_areas, get_frame_timing, get_counters, get_object_memory, memory_take/list/compare_snapshots, and frame_debugger_enable/disable/get_events. The remaining parameters are action-specific; page_size and cursor page Frame Debugger events. Memory snapshots require com.unity.memoryprofiler and write .snap files; profiler_start may write a .raw recording. Session and Frame Debugger controls mutate transient Editor state.
 
 ## Parameters
 

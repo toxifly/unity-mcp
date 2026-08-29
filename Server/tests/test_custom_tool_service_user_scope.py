@@ -1,9 +1,10 @@
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from pydantic import ValidationError
 
 from core.config import config
-from models.models import MCPResponse, ToolDefinitionModel
+from models.models import MCPResponse, QueueWaitMetadata, ToolDefinitionModel
 from services.custom_tool_service import CustomToolService
 from services.resources.custom_tools import get_custom_tools
 from services.tools.execute_custom_tool import execute_custom_tool
@@ -60,6 +61,93 @@ async def test_execute_tool_threads_user_id_to_definition_lookup_and_transport()
     mock_get_definition.assert_awaited_once_with("project-hash", "my_tool", user_id="user-1")
     mock_send.assert_awaited_once()
     assert mock_send.call_args.kwargs["user_id"] == "user-1"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_preserves_typed_queue_metadata_for_immediate_response():
+    service = CustomToolService(_DummyMcp())
+    definition = ToolDefinitionModel(
+        name="my_tool",
+        description="My tool",
+        requires_polling=False,
+    )
+    queue = {"waited_ms": 64000, "reason": "compiling"}
+
+    with patch.object(
+        service,
+        "get_tool_definition",
+        new_callable=AsyncMock,
+        return_value=definition,
+    ):
+        with patch(
+            "services.custom_tool_service.send_with_unity_instance",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "message": "ok",
+                "data": {"value": 42},
+                "queue": queue,
+            },
+        ):
+            result = await service.execute_tool(
+                "project-hash",
+                "my_tool",
+                "Project@project-hash",
+            )
+
+    assert isinstance(result.queue, QueueWaitMetadata)
+    assert result.model_dump()["queue"] == queue
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_preserves_typed_queue_metadata_for_terminal_polled_response():
+    service = CustomToolService(_DummyMcp())
+    definition = ToolDefinitionModel(
+        name="my_tool",
+        description="My tool",
+        requires_polling=True,
+        poll_action="status",
+    )
+    queue = {"waited_ms": 2100, "reason": "main_thread_busy"}
+
+    with patch.object(
+        service,
+        "get_tool_definition",
+        new_callable=AsyncMock,
+        return_value=definition,
+    ):
+        with patch(
+            "services.custom_tool_service.send_with_unity_instance",
+            new_callable=AsyncMock,
+            return_value={
+                "success": True,
+                "message": "done",
+                "data": {"value": 42},
+                "_mcp_status": "complete",
+                "queue": queue,
+            },
+        ):
+            result = await service.execute_tool(
+                "project-hash",
+                "my_tool",
+                "Project@project-hash",
+            )
+
+    assert isinstance(result.queue, QueueWaitMetadata)
+    assert result.model_dump()["queue"] == queue
+
+
+def test_custom_tool_normalization_strictly_validates_queue_metadata():
+    service = CustomToolService(_DummyMcp())
+
+    with pytest.raises(ValidationError):
+        service._normalize_response(
+            {
+                "success": True,
+                "data": {},
+                "queue": {"waited_ms": "64000", "reason": "compiling"},
+            }
+        )
 
 
 @pytest.mark.asyncio

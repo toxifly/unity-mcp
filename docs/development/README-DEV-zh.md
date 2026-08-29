@@ -121,7 +121,7 @@ uv run python -m cli.main editor tests --async
 uv run python -m cli.main editor poll-test <job_id> --wait 60
 
 # 仅显示失败的测试
-uv run python -m cli.main editor tests --failed-only
+uv run python -m cli.main editor tests --failed
 ```
 
 **直接使用 MCP 工具**（从任意 MCP 客户端）：

@@ -500,7 +500,15 @@ class UnityConnection:
                     err = resp.get('error') or resp.get(
                         'message', 'Unknown Unity error')
                     raise Exception(err)
-                return resp.get('result', {})
+                result = resp.get('result', {})
+                # How long the command waited for Unity's main thread, and what was holding it,
+                # arrives as a sibling of result and would otherwise be dropped here. A read-only
+                # call that sat a minute behind a domain reload is indistinguishable from a slow
+                # tool without it, so carry it through.
+                queue_wait = resp.get('queue')
+                if queue_wait and isinstance(result, dict) and 'queue' not in result:
+                    result['queue'] = queue_wait
+                return result
             except Exception as e:
                 logger.warning(
                     f"Unity communication attempt {attempt+1} failed: {e}")

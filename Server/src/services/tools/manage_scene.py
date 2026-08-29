@@ -16,7 +16,10 @@ from services.tools.preflight import preflight
         "Performs CRUD operations on Unity scenes. "
         "Read-only actions: get_hierarchy, get_active, get_build_settings, get_loaded_scenes, scene_view_frame. "
         "Modifying actions: create (with optional template), load (with optional additive flag), save, "
-        "close_scene, set_active_scene, move_to_scene, and validate when auto_repair is enabled. "
+        "close_scene, set_active_scene, move_to_scene, apply_external_edit, and validate when auto_repair is enabled. "
+        "apply_external_edit rewrites a .unity file on disk and resyncs the Editor in one step, which is the "
+        "only safe way to hand-patch scene YAML: doing it outside Unity raises a modal reload prompt that "
+        "blocks the Editor's main thread and hangs this bridge until a human clicks it. "
         "get_hierarchy supports page_size, cursor, max_depth, and include_transform."
     ),
     annotations=ToolAnnotations(
@@ -38,6 +41,7 @@ async def manage_scene(
         "set_active_scene",
         "get_loaded_scenes",
         "move_to_scene",
+        "apply_external_edit",
         "validate",
     ], "Perform CRUD operations on Unity scenes and control the Scene View camera."],
     name: Annotated[str, "Scene name."] | None = None,
@@ -79,9 +83,26 @@ async def manage_scene(
     # --- Scene validation ---
     auto_repair: Annotated[bool | str,
                            "For validate: true to auto-fix missing scripts (undoable)."] | None = None,
+    # --- apply_external_edit ---
+    edits: Annotated[list[dict[str, Any]],
+                     "For apply_external_edit: literal replacements applied to the scene file, each "
+                     "{'old_text': ..., 'new_text': ..., 'count': 1}. Every anchor must match exactly "
+                     "'count' times or nothing is written. Omit for a pure discard-and-reload of a file "
+                     "already changed on disk."] | None = None,
+    discard_unsaved: Annotated[bool | str,
+                               "For apply_external_edit: true to drop the open scene's unsaved in-memory "
+                               "changes, which the rewrite would otherwise refuse to discard."] | None = None,
+    dry_run: Annotated[bool | str,
+                       "For apply_external_edit: true to report which anchors matched without writing."] | None = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
-    gate = await preflight(ctx, wait_for_no_compile=True, refresh_if_dirty=True)
+    # apply_external_edit must not be preceded by a refresh: a refresh is exactly what makes Unity
+    # notice the on-disk change and raise the modal prompt this action exists to avoid.
+    gate = await preflight(
+        ctx,
+        wait_for_no_compile=True,
+        refresh_if_dirty=action != "apply_external_edit",
+    )
     if gate is not None:
         return gate.model_dump()
     try:
@@ -145,12 +166,24 @@ async def manage_scene(
         if coerced_auto_repair is not None:
             params["autoRepair"] = coerced_auto_repair
 
+        # apply_external_edit
+        if edits is not None:
+            params["edits"] = edits
+        coerced_discard_unsaved = coerce_bool(discard_unsaved, default=None)
+        if coerced_discard_unsaved is not None:
+            params["discard_unsaved"] = coerced_discard_unsaved
+        coerced_dry_run = coerce_bool(dry_run, default=None)
+        if coerced_dry_run is not None:
+            params["dry_run"] = coerced_dry_run
+
         # Use centralized retry helper with instance routing
         response = await send_with_unity_instance(async_send_command_with_retry, unity_instance, "manage_scene", params)
 
         # Preserve structured failure data; unwrap success into a friendlier shape
         if isinstance(response, dict) and response.get("success"):
             friendly = {"success": True, "message": response.get("message", "Scene operation successful."), "data": response.get("data")}
+            if response.get("queue") is not None:
+                friendly["queue"] = response["queue"]
             return friendly
         return response if isinstance(response, dict) else {"success": False, "message": str(response)}
 

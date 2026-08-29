@@ -99,10 +99,16 @@ class RunTestsTestResult(BaseModel):
     output: str | None = None
 
 
+class SkippedReason(BaseModel):
+    reason: str
+    count: int
+
+
 class RunTestsResult(BaseModel):
     mode: str
     summary: RunTestsSummary
     results: list[RunTestsTestResult] | None = None
+    skipped_reasons: list[SkippedReason] | None = None
 
 
 class RunTestsStartData(BaseModel):
@@ -110,11 +116,23 @@ class RunTestsStartData(BaseModel):
     status: str
     mode: str | None = None
     include_details: bool | None = None
-    include_failed_tests: bool | None = None
+    include_failed: bool | None = None
+    include_skipped: bool | None = None
 
 
 class RunTestsStartResponse(MCPResponse):
     data: RunTestsStartData | None = None
+
+
+def _detail_params(include_details: bool, include_failed: bool, include_skipped: bool) -> dict[str, Any]:
+    params: dict[str, Any] = {}
+    if include_details:
+        params["includeDetails"] = True
+    if include_failed:
+        params["includeFailed"] = True
+    if include_skipped:
+        params["includeSkipped"] = True
+    return params
 
 
 class TestJobFailure(BaseModel):
@@ -173,10 +191,18 @@ async def run_tests(
                               "NUnit category names to filter by"] | None = None,
     assembly_names: Annotated[list[str] | str,
                               "Assembly names to filter tests by"] | None = None,
-    include_failed_tests: Annotated[bool,
-                                    "Include details for failed/skipped tests only (default: false)"] = False,
+    include_failed: Annotated[bool,
+                              "Include details for failed tests (default: false)"] = False,
+    include_skipped: Annotated[bool,
+                               "Include details for skipped tests. Off by default: a suite with a "
+                               "standing [Explicit] block re-sends the same sentences on every green "
+                               "run, and result.skipped_reasons already carries them as counts."] = False,
     include_details: Annotated[bool,
                                "Include details for all tests (default: false)"] = False,
+    wait_timeout: Annotated[int | None,
+                            "If set, wait up to this many seconds for the run to finish and return "
+                            "its result, instead of returning a job_id to poll. Saves the whole "
+                            "start-then-poll round trip on runs short enough to sit through."] = None,
     init_timeout: Annotated[int | None,
                             "Initialization timeout in milliseconds. PlayMode tests may need longer "
                             "due to domain reload (default: 15000). Recommended: 120000 for PlayMode."] = None,
@@ -184,7 +210,7 @@ async def run_tests(
                            "Recovery escape hatch: force-clear a wedged test job instead of starting a "
                            "run. Use when get_test_job stays 'running' forever or run_tests keeps "
                            "returning 'tests_running' after a runner crash. Bypasses preflight."] = False,
-) -> RunTestsStartResponse | MCPResponse:
+) -> RunTestsStartResponse | GetTestJobResponse | MCPResponse:
     unity_instance = await get_unity_instance_from_context(ctx)
 
     # Recovery path: clear a stuck/orphaned job without starting a new run. This must bypass
@@ -226,10 +252,7 @@ async def run_tests(
         params["categoryNames"] = c
     if (a := _coerce_string_list(assembly_names)):
         params["assemblyNames"] = a
-    if include_failed_tests:
-        params["includeFailedTests"] = True
-    if include_details:
-        params["includeDetails"] = True
+    params.update(_detail_params(include_details, include_failed, include_skipped))
     if init_timeout is not None and init_timeout > 0:
         params["initTimeout"] = init_timeout
 
@@ -240,16 +263,141 @@ async def run_tests(
         params,
     )
 
-    if isinstance(response, dict):
+    if not isinstance(response, dict):
+        return MCPResponse(success=False, error=str(response))
+    if not response.get("success", True):
+        return MCPResponse(**response)
+
+    started = RunTestsStartResponse(**response)
+    if not wait_timeout or wait_timeout <= 0 or started.data is None:
+        return started
+
+    return await _wait_for_test_job(
+        unity_instance,
+        started.data.job_id,
+        _detail_params(include_details, include_failed, include_skipped),
+        wait_timeout,
+    )
+
+
+async def _fetch_test_job(unity_instance: str | None, params: dict[str, Any]) -> Any:
+    response = await unity_transport.send_with_unity_instance(
+        async_send_command_with_retry,
+        unity_instance,
+        "get_test_job",
+        params,
+    )
+    return ensure_test_job_summary(response) if isinstance(response, dict) else response
+
+
+async def _wait_for_test_job(
+    unity_instance: str | None,
+    job_id: str,
+    detail_params: dict[str, Any],
+    wait_timeout: int,
+) -> GetTestJobResponse | MCPResponse:
+    """Poll Unity until the job reaches a terminal state, the deadline passes, or it errors.
+
+    Shared by run_tests and get_test_job so a caller who is willing to sit through the run
+    pays for one round trip rather than a start plus a poll loop.
+    """
+    params: dict[str, Any] = {"job_id": job_id, **detail_params}
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_timeout
+    poll_interval = 2.0  # Poll Unity every 2 seconds
+    prev_last_update_unix_ms = None
+    last_response: dict[str, Any] | None = None
+
+    # Get project path once for focus nudging (multi-instance support)
+    project_path = await _get_unity_project_path(unity_instance)
+
+    while True:
+        # Check before starting another transport call: the preceding sleep may have consumed the
+        # entire budget. Bound the call itself as well, since transport retries can otherwise make
+        # a short wait_timeout take tens of seconds.
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            if last_response is not None:
+                return GetTestJobResponse(**last_response)
+            return MCPResponse(
+                success=False,
+                error=f"wait_timeout expired before test job '{job_id}' status could be fetched",
+                data={"job_id": job_id},
+            )
+
+        try:
+            response = await asyncio.wait_for(
+                _fetch_test_job(unity_instance, params),
+                timeout=remaining,
+            )
+        except asyncio.TimeoutError:
+            if last_response is not None:
+                return GetTestJobResponse(**last_response)
+            return MCPResponse(
+                success=False,
+                error=f"wait_timeout expired while fetching test job '{job_id}' status",
+                data={"job_id": job_id},
+            )
+
+        if not isinstance(response, dict):
+            return MCPResponse(success=False, error=str(response))
+
         if not response.get("success", True):
             return MCPResponse(**response)
-        return RunTestsStartResponse(**response)
-    return MCPResponse(success=False, error=str(response))
+
+        last_response = response
+
+        # Check if tests are done
+        data = response.get("data", {})
+        status = data.get("status", "")
+        if status in ("succeeded", "failed", "cancelled"):
+            return GetTestJobResponse(**response)
+
+        # Detect progress and reset exponential backoff
+        last_update_unix_ms = data.get("last_update_unix_ms")
+        if prev_last_update_unix_ms is not None and last_update_unix_ms != prev_last_update_unix_ms:
+            # Progress detected - reset exponential backoff for next potential stall
+            reset_nudge_backoff()
+            logger.debug(f"Test job {job_id} made progress - reset nudge backoff")
+        prev_last_update_unix_ms = last_update_unix_ms
+
+        # Check if Unity needs a focus nudge to make progress
+        # This handles OS-level throttling (e.g., macOS App Nap) that can
+        # stall PlayMode tests when Unity is in the background.
+        # Uses exponential backoff: 1s, 2s, 4s, 8s, 10s max between nudges.
+        progress = data.get("progress") or {}
+        editor_is_focused = progress.get("editor_is_focused", True)
+        current_time_ms = int(time.time() * 1000)
+
+        if should_nudge(
+            status=status,
+            editor_is_focused=editor_is_focused,
+            last_update_unix_ms=last_update_unix_ms,
+            current_time_ms=current_time_ms,
+            # Use default stall_threshold_ms (3s)
+        ):
+            logger.info(f"Test job {job_id} appears stalled (unfocused Unity), attempting nudge...")
+            # Lazily resolve project path if not yet available (registry may have become ready)
+            if project_path is None:
+                project_path = await _get_unity_project_path(unity_instance)
+            # Pass project path for multi-instance support
+            nudged = await nudge_unity_focus(unity_project_path=project_path)
+            if nudged:
+                logger.info(f"Test job {job_id} nudge completed")
+
+        # Check timeout
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            # Timeout reached, return current status
+            return GetTestJobResponse(**response)
+
+        # Wait before next poll (but don't exceed remaining time)
+        await asyncio.sleep(min(poll_interval, remaining))
 
 
 @mcp_for_unity_tool(
     group="testing",
-    description="Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed_tests and include_details control returned result detail.",
+    description="Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed, include_skipped and include_details control returned result detail.",
     annotations=ToolAnnotations(
         title="Get Test Job",
         readOnlyHint=True,
@@ -258,8 +406,11 @@ async def run_tests(
 async def get_test_job(
     ctx: Context,
     job_id: Annotated[str, "Job id returned by run_tests"],
-    include_failed_tests: Annotated[bool,
-                                    "Include details for failed/skipped tests only (default: false)"] = False,
+    include_failed: Annotated[bool,
+                              "Include details for failed tests (default: false)"] = False,
+    include_skipped: Annotated[bool,
+                               "Include details for skipped tests. Off by default: result."
+                               "skipped_reasons already carries them as reason -> count."] = False,
     include_details: Annotated[bool,
                                "Include details for all tests (default: false)"] = False,
     wait_timeout: Annotated[int | None,
@@ -268,89 +419,12 @@ async def get_test_job(
                             "Recommended: 30-60 seconds. Returns immediately if tests complete sooner."] = None,
 ) -> GetTestJobResponse | MCPResponse:
     unity_instance = await get_unity_instance_from_context(ctx)
+    detail_params = _detail_params(include_details, include_failed, include_skipped)
 
-    params: dict[str, Any] = {"job_id": job_id}
-    if include_failed_tests:
-        params["includeFailedTests"] = True
-    if include_details:
-        params["includeDetails"] = True
-
-    async def _fetch_status() -> dict[str, Any]:
-        response = await unity_transport.send_with_unity_instance(
-            async_send_command_with_retry,
-            unity_instance,
-            "get_test_job",
-            params,
-        )
-        return ensure_test_job_summary(response) if isinstance(response, dict) else response
-
-    # If wait_timeout is specified, poll server-side until complete or timeout
     if wait_timeout and wait_timeout > 0:
-        deadline = asyncio.get_event_loop().time() + wait_timeout
-        poll_interval = 2.0  # Poll Unity every 2 seconds
-        prev_last_update_unix_ms = None
+        return await _wait_for_test_job(unity_instance, job_id, detail_params, wait_timeout)
 
-        # Get project path once for focus nudging (multi-instance support)
-        project_path = await _get_unity_project_path(unity_instance)
-
-        while True:
-            response = await _fetch_status()
-
-            if not isinstance(response, dict):
-                return MCPResponse(success=False, error=str(response))
-
-            if not response.get("success", True):
-                return MCPResponse(**response)
-
-            # Check if tests are done
-            data = response.get("data", {})
-            status = data.get("status", "")
-            if status in ("succeeded", "failed", "cancelled"):
-                return GetTestJobResponse(**response)
-
-            # Detect progress and reset exponential backoff
-            last_update_unix_ms = data.get("last_update_unix_ms")
-            if prev_last_update_unix_ms is not None and last_update_unix_ms != prev_last_update_unix_ms:
-                # Progress detected - reset exponential backoff for next potential stall
-                reset_nudge_backoff()
-                logger.debug(f"Test job {job_id} made progress - reset nudge backoff")
-            prev_last_update_unix_ms = last_update_unix_ms
-
-            # Check if Unity needs a focus nudge to make progress
-            # This handles OS-level throttling (e.g., macOS App Nap) that can
-            # stall PlayMode tests when Unity is in the background.
-            # Uses exponential backoff: 1s, 2s, 4s, 8s, 10s max between nudges.
-            progress = data.get("progress") or {}
-            editor_is_focused = progress.get("editor_is_focused", True)
-            current_time_ms = int(time.time() * 1000)
-
-            if should_nudge(
-                status=status,
-                editor_is_focused=editor_is_focused,
-                last_update_unix_ms=last_update_unix_ms,
-                current_time_ms=current_time_ms,
-                # Use default stall_threshold_ms (3s)
-            ):
-                logger.info(f"Test job {job_id} appears stalled (unfocused Unity), attempting nudge...")
-                # Lazily resolve project path if not yet available (registry may have become ready)
-                if project_path is None:
-                    project_path = await _get_unity_project_path(unity_instance)
-                # Pass project path for multi-instance support
-                nudged = await nudge_unity_focus(unity_project_path=project_path)
-                if nudged:
-                    logger.info(f"Test job {job_id} nudge completed")
-
-            # Check timeout
-            remaining = deadline - asyncio.get_event_loop().time()
-            if remaining <= 0:
-                # Timeout reached, return current status
-                return GetTestJobResponse(**response)
-
-            # Wait before next poll (but don't exceed remaining time)
-            await asyncio.sleep(min(poll_interval, remaining))
-    
-    # No wait_timeout - return immediately (original behavior)
-    response = await _fetch_status()
+    response = await _fetch_test_job(unity_instance, {"job_id": job_id, **detail_params})
     if not isinstance(response, dict):
         return MCPResponse(success=False, error=str(response))
     if not response.get("success", True):

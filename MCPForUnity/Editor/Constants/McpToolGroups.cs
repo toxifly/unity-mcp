@@ -19,7 +19,7 @@ namespace MCPForUnity.Editor.Constants
         internal const int PreferencesVersion = 2;
 
         private static readonly HashSet<string> DefaultEnabledGroups =
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "core" };
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "core", "testing" };
 
         internal static bool IsDefaultEnabled(string group)
         {

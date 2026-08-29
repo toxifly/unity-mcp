@@ -89,7 +89,7 @@ async def manage_something(
     return response
 ```
 
-The `group` parameter controls tool visibility. Only `"core"` is enabled by default. Non-core groups (vfx, animation, etc.) start disabled and are toggled via `manage_tools`.
+The `group` parameter controls tool visibility. `"core"` and `"testing"` are enabled by default. Non-core groups (vfx, animation, etc.) start disabled and are toggled via `manage_tools`.
 
 ### Python CLI Error Handling
 CLI commands (not MCP tools) use the `@handle_unity_errors` decorator:

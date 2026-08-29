@@ -387,7 +387,7 @@ namespace MCPForUnity.Editor.Tools
                             if (!File.Exists(fullPath))
                                 return new ErrorResponse($"Script not found at '{relativePath}'.");
 
-                            string text = File.ReadAllText(fullPath);
+                            string text = ReadTextPreservingEncoding(fullPath, out var fileEncoding);
                             string sha = ComputeSha256(text);
                             var fi = new FileInfo(fullPath);
                             long lengthBytes;
@@ -399,6 +399,10 @@ namespace MCPForUnity.Editor.Tools
                                 path = relativePath,
                                 sha256 = sha,
                                 lengthBytes,
+                                // The caller is about to splice text into this file; these say what
+                                // shape it has to come back in.
+                                lineEnding = fileEncoding.Name,
+                                bom = fileEncoding.HasBom,
                                 lastModifiedUtc = fi.Exists ? fi.LastWriteTimeUtc.ToString("o") : string.Empty
                             };
                             return new SuccessResponse($"SHA computed for '{relativePath}'.", data);
@@ -652,7 +656,8 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("No edits provided.");
 
             string original;
-            try { original = File.ReadAllText(fullPath); }
+            TextFileEncoding encoding;
+            try { original = ReadTextPreservingEncoding(fullPath, out encoding); }
             catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
             // Require precondition to avoid drift on large files
@@ -802,7 +807,8 @@ namespace MCPForUnity.Editor.Tools
             bool syntaxOnly = string.Equals(validateMode, "syntax", StringComparison.OrdinalIgnoreCase);
             foreach (var sp in spans)
             {
-                working = working.Remove(sp.start, sp.end - sp.start).Insert(sp.start, sp.text ?? string.Empty);
+                working = working.Remove(sp.start, sp.end - sp.start)
+                    .Insert(sp.start, encoding.Adopt(sp.text ?? string.Empty));
             }
 
             // No-op guard: if resulting text is identical, avoid writes and return explicit no-op
@@ -868,9 +874,8 @@ namespace MCPForUnity.Editor.Tools
             // Atomic write and schedule refresh
             try
             {
-                var enc = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
                 var tmp = fullPath + ".tmp";
-                File.WriteAllText(tmp, working, enc);
+                File.WriteAllText(tmp, working, encoding.Writer);
                 string backup = fullPath + ".bak";
                 try
                 {
@@ -918,6 +923,8 @@ namespace MCPForUnity.Editor.Tools
                         path = relativePath,
                         editsApplied = spans.Count,
                         sha256 = newSha,
+                        lineEnding = encoding.Name,
+                        bom = encoding.HasBom,
                         scheduledRefresh = !immediate
                     }
                 );
@@ -1381,7 +1388,8 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("No edits provided.");
 
             string original;
-            try { original = File.ReadAllText(fullPath); }
+            TextFileEncoding encoding;
+            try { original = ReadTextPreservingEncoding(fullPath, out encoding); }
             catch (Exception ex) { return new ErrorResponse($"Failed to read script: {ex.Message}"); }
 
             string working = original;
@@ -1422,12 +1430,12 @@ namespace MCPForUnity.Editor.Tools
 
                                 if (applySequentially)
                                 {
-                                    working = working.Remove(spanStart, spanLength).Insert(spanStart, NormalizeNewlines(replacement));
+                                    working = working.Remove(spanStart, spanLength).Insert(spanStart, encoding.Adopt(replacement));
                                     appliedCount++;
                                 }
                                 else
                                 {
-                                    replacements.Add((spanStart, spanLength, NormalizeNewlines(replacement)));
+                                    replacements.Add((spanStart, spanLength, encoding.Adopt(replacement)));
                                 }
                                 break;
                             }
@@ -1483,12 +1491,12 @@ namespace MCPForUnity.Editor.Tools
 
                                 if (applySequentially)
                                 {
-                                    working = working.Remove(mStart, mLen).Insert(mStart, NormalizeNewlines(replacement));
+                                    working = working.Remove(mStart, mLen).Insert(mStart, encoding.Adopt(replacement));
                                     appliedCount++;
                                 }
                                 else
                                 {
-                                    replacements.Add((mStart, mLen, NormalizeNewlines(replacement)));
+                                    replacements.Add((mStart, mLen, encoding.Adopt(replacement)));
                                 }
                                 break;
                             }
@@ -1556,7 +1564,7 @@ namespace MCPForUnity.Editor.Tools
                                     if (!TryComputeMethodSpan(working, clsStart, clsLen, afterMethodName, afterReturnType, afterParameters, afterAttributesContains, out var aStart, out var aLen, out var whyAfter))
                                         return new ErrorResponse($"insert_method(after) failed to locate anchor method: {whyAfter}");
                                     int insAt = aStart + aLen;
-                                    string text = NormalizeNewlines("\n\n" + snippet.TrimEnd() + "\n");
+                                    string text = encoding.Adopt("\n\n" + snippet.TrimEnd() + "\n");
                                     if (applySequentially)
                                     {
                                         working = working.Insert(insAt, text);
@@ -1571,7 +1579,7 @@ namespace MCPForUnity.Editor.Tools
                                     return new ErrorResponse($"insert_method failed: {whyIns}");
                                 else
                                 {
-                                    string text = NormalizeNewlines("\n\n" + snippet.TrimEnd() + "\n");
+                                    string text = encoding.Adopt("\n\n" + snippet.TrimEnd() + "\n");
                                     if (applySequentially)
                                     {
                                         working = working.Insert(insAt, text);
@@ -1601,11 +1609,7 @@ namespace MCPForUnity.Editor.Tools
                                     var m = FindBestAnchorMatch(allMatches, working, anchor);
                                     if (m == null) return new ErrorResponse($"anchor_insert: anchor not found (filtered): {anchor}");
                                     int insAt = position == "after" ? m.Index + m.Length : m.Index;
-                                    string norm = NormalizeNewlines(text);
-                                    if (!norm.EndsWith("\n"))
-                                    {
-                                        norm += "\n";
-                                    }
+                                    string norm = encoding.AdoptWithTrailingLineEnding(text);
 
                                     // Duplicate guard: if identical snippet already exists within this class, skip insert
                                     if (TryComputeClassSpan(working, TypeNameFromFileStem(name), null, out var clsStartDG, out var clsLenDG, out _))
@@ -1678,7 +1682,7 @@ namespace MCPForUnity.Editor.Tools
                                     if (m == null) return new ErrorResponse($"anchor_replace: anchor not found (filtered): {anchor}");
                                     int at = m.Index;
                                     int len = m.Length;
-                                    string norm = NormalizeNewlines(replacement);
+                                    string norm = encoding.Adopt(replacement);
                                     if (applySequentially)
                                     {
                                         working = working.Remove(at, len).Insert(at, norm);
@@ -1772,10 +1776,10 @@ namespace MCPForUnity.Editor.Tools
                 string refreshMode = options?["refresh"]?.ToString()?.ToLowerInvariant();
                 bool immediate = refreshMode == "immediate" || refreshMode == "sync";
 
-                // Persist changes atomically (no BOM), then compute/return new file SHA
-                var enc = new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+                // Persist changes atomically, in the encoding the file was read in, then
+                // compute/return the new file SHA
                 var tmp = fullPath + ".tmp";
-                File.WriteAllText(tmp, working, enc);
+                File.WriteAllText(tmp, working, encoding.Writer);
                 var backup = fullPath + ".bak";
                 try
                 {
@@ -1804,7 +1808,9 @@ namespace MCPForUnity.Editor.Tools
                         uri = $"mcpforunity://path/{relativePath}",
                         editsApplied = appliedCount,
                         scheduledRefresh = !immediate,
-                        sha256 = newSha
+                        sha256 = newSha,
+                        lineEnding = encoding.Name,
+                        bom = encoding.HasBom
                     }
                 );
 
@@ -1850,10 +1856,72 @@ namespace MCPForUnity.Editor.Tools
             return null;
         }
 
-        private static string NormalizeNewlines(string t)
+        private static string NormalizeNewlines(string t, string lineEnding)
         {
             if (string.IsNullOrEmpty(t)) return t;
-            return t.Replace("\r\n", "\n").Replace("\r", "\n");
+            string lf = t.Replace("\r\n", "\n").Replace("\r", "\n");
+            return lineEnding == "\n" ? lf : lf.Replace("\n", lineEnding);
+        }
+
+        /// <summary>
+        /// How a file was encoded on disk, so an edit can hand it back the way it was found.
+        /// A caller sends LF in JSON whatever the file uses, and File.ReadAllText eats a BOM,
+        /// so writing the naive way turns a three-line edit into a whole-file diff.
+        /// </summary>
+        internal readonly struct TextFileEncoding
+        {
+            internal readonly bool HasBom;
+            internal readonly string LineEnding;
+
+            internal TextFileEncoding(bool hasBom, string lineEnding)
+            {
+                HasBom = hasBom;
+                LineEnding = lineEnding;
+            }
+
+            internal System.Text.Encoding Writer => new System.Text.UTF8Encoding(HasBom);
+
+            internal string Adopt(string t) => NormalizeNewlines(t, LineEnding);
+
+            internal string AdoptWithTrailingLineEnding(string t)
+            {
+                string adopted = Adopt(t);
+                return adopted.EndsWith(LineEnding, StringComparison.Ordinal)
+                    ? adopted
+                    : adopted + LineEnding;
+            }
+
+            internal string Name => LineEnding == "\r\n" ? "crlf" : "lf";
+        }
+
+        /// <summary>
+        /// Reads a script and reports its BOM and dominant line ending alongside the text.
+        /// Mixed files are real; the majority ending is the one an inserted line should adopt.
+        /// </summary>
+        internal static string ReadTextPreservingEncoding(string fullPath, out TextFileEncoding encoding)
+        {
+            byte[] bytes = File.ReadAllBytes(fullPath);
+            if (bytes.Length >= 2 && (bytes[0] == 0xFF && bytes[1] == 0xFE
+                || bytes[0] == 0xFE && bytes[1] == 0xFF))
+            {
+                // Decoding this as UTF-8 would hand back mojibake and then write it out as the
+                // file's new contents. Unity scripts are UTF-8; say so rather than corrupt it.
+                throw new InvalidDataException("Script is UTF-16 encoded; expected UTF-8.");
+            }
+
+            bool hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+            int offset = hasBom ? 3 : 0;
+            string text = new System.Text.UTF8Encoding(false).GetString(bytes, offset, bytes.Length - offset);
+
+            int crlf = 0, lf = 0;
+            for (int i = 0; i < text.Length; i++)
+            {
+                if (text[i] != '\n') continue;
+                if (i > 0 && text[i - 1] == '\r') crlf++; else lf++;
+            }
+
+            encoding = new TextFileEncoding(hasBom, crlf > lf ? "\r\n" : "\n");
+            return text;
         }
 
         private static bool ValidateClassSnippet(string snippet, string expectedName, out string err)

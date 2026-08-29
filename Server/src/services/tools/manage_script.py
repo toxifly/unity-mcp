@@ -670,9 +670,18 @@ async def get_sha(
         )
         if isinstance(resp, dict) and resp.get("success"):
             data = resp.get("data", {})
-            minimal = {"sha256": data.get(
-                "sha256"), "lengthBytes": data.get("lengthBytes")}
-            return {"success": True, "data": minimal}
+            # lineEnding/bom ride along because the caller asking for a precondition sha is
+            # about to splice text in, and apply_text_edits puts the file back in this shape.
+            minimal = {
+                "sha256": data.get("sha256"),
+                "lengthBytes": data.get("lengthBytes"),
+                "lineEnding": data.get("lineEnding"),
+                "bom": data.get("bom"),
+            }
+            shaped = {"success": True, "data": minimal}
+            if resp.get("queue") is not None:
+                shaped["queue"] = resp["queue"]
+            return shaped
         return resp if isinstance(resp, dict) else {"success": False, "message": str(resp)}
     except Exception as e:
         return {"success": False, "message": f"get_sha error: {e}"}

@@ -628,7 +628,11 @@ namespace MCPForUnity.Editor.Services
         public int Failed => Summary.Failed;
         public int Skipped => Summary.Skipped;
 
-        public object ToSerializable(string mode, bool includeDetails = false, bool includeFailedTests = false)
+        public object ToSerializable(
+            string mode,
+            bool includeDetails = false,
+            bool includeFailed = false,
+            bool includeSkipped = false)
         {
             // Determine which results to include
             IEnumerable<object> resultsToSerialize;
@@ -637,11 +641,10 @@ namespace MCPForUnity.Editor.Services
                 // Include all test results
                 resultsToSerialize = Results.Select(r => r.ToSerializable());
             }
-            else if (includeFailedTests)
+            else if (includeFailed || includeSkipped)
             {
-                // Include only failed and skipped tests
                 resultsToSerialize = Results
-                    .Where(r => !string.Equals(r.State, "Passed", StringComparison.OrdinalIgnoreCase))
+                    .Where(r => includeFailed && IsFailure(r) || includeSkipped && IsSkipped(r))
                     .Select(r => r.ToSerializable());
             }
             else
@@ -655,7 +658,40 @@ namespace MCPForUnity.Editor.Services
                 mode,
                 summary = Summary.ToSerializable(),
                 results = resultsToSerialize?.ToList(),
+                skipped_reasons = BuildSkippedReasons(),
             };
+        }
+
+        // NUnit qualifies a ResultState with its reason and its origin -- a run reports
+        // "Skipped:Explicit(Parent)", never a bare "Skipped". Matching the whole string treats
+        // every real skip as a failure, which is exactly what it did.
+        private static bool HasState(TestRunTestResult r, string state) =>
+            r.State != null && r.State.StartsWith(state, StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsSkipped(TestRunTestResult r) =>
+            HasState(r, "Skipped") || HasState(r, "Inconclusive");
+
+        private static bool IsFailure(TestRunTestResult r) =>
+            !HasState(r, "Passed") && !IsSkipped(r);
+
+        /// <summary>
+        /// Why the run skipped what it skipped, as reason -> count. A suite with a standing
+        /// [Explicit] block re-sends the same handful of sentences on every green run, and the
+        /// count is the whole of what a caller reads from them.
+        /// </summary>
+        private object BuildSkippedReasons()
+        {
+            if (Summary.Skipped <= 0)
+            {
+                return null;
+            }
+
+            return Results
+                .Where(IsSkipped)
+                .GroupBy(r => string.IsNullOrWhiteSpace(r.Message) ? "(no reason given)" : r.Message.Trim())
+                .OrderByDescending(g => g.Count())
+                .Select(g => new { reason = g.Key, count = g.Count() })
+                .ToList();
         }
 
         internal static TestRunResult Create(ITestResultAdaptor summary, IReadOnlyList<ITestResultAdaptor> tests)
@@ -663,11 +699,11 @@ namespace MCPForUnity.Editor.Services
             var materializedTests = tests.Select(TestRunTestResult.FromAdaptor).ToList();
 
             int passed = summary?.PassCount
-                ?? materializedTests.Count(t => string.Equals(t.State, "Passed", StringComparison.OrdinalIgnoreCase));
+                ?? materializedTests.Count(t => HasState(t, "Passed"));
             int failed = summary?.FailCount
-                ?? materializedTests.Count(t => string.Equals(t.State, "Failed", StringComparison.OrdinalIgnoreCase));
+                ?? materializedTests.Count(t => HasState(t, "Failed"));
             int skipped = summary?.SkipCount
-                ?? materializedTests.Count(t => string.Equals(t.State, "Skipped", StringComparison.OrdinalIgnoreCase));
+                ?? materializedTests.Count(t => HasState(t, "Skipped"));
 
             double duration = summary?.Duration
                 ?? materializedTests.Sum(t => t.DurationSeconds);

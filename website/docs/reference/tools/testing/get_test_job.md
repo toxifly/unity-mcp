@@ -12,14 +12,15 @@ description: "Read the status or results of an asynchronous Unity test job by jo
 
 ## Description
 
-Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed_tests and include_details control returned result detail.
+Read the status or results of an asynchronous Unity test job by job_id. Polling is read-only; include_failed, include_skipped and include_details control returned result detail.
 
 ## Parameters
 
 | Name | Type | Required | Description |
 |------|------|----------|-------------|
 | `job_id` | `str` | yes | Job id returned by run_tests |
-| `include_failed_tests` | `bool` | — | Include details for failed/skipped tests only (default: false) |
+| `include_failed` | `bool` | — | Include details for failed tests (default: false) |
+| `include_skipped` | `bool` | — | Include details for skipped tests. Off by default: result.skipped_reasons already carries them as reason -> count. |
 | `include_details` | `bool` | — | Include details for all tests (default: false) |
 | `wait_timeout` | `int \| None` | — | If set, wait up to this many seconds for tests to complete before returning. Reduces polling frequency and avoids client-side loop detection. Recommended: 30-60 seconds. Returns immediately if tests complete sooner. |
 
