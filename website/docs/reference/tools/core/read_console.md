@@ -12,7 +12,7 @@ description: "Gets messages from or clears the Unity Editor console."
 
 ## Description
 
-Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data).
+Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Set exclude_test_runs=true after a test run to drop the errors its tests declared with LogAssert. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data).
 
 ## Parameters
 
@@ -26,6 +26,7 @@ Gets messages from or clears the Unity Editor console. Defaults to 10 most recen
 | `cursor` | `int \| str \| None` | — | Opaque cursor for paging (0-based offset). Defaults to 0. |
 | `format` | `Literal['plain', 'detailed', 'json'] \| None` | — | Output format; defaults to structured JSON records |
 | `include_stacktrace` | `bool \| str \| None` | — | Include stack traces in output (accepts true/false or 'true'/'false') |
+| `exclude_test_runs` | `bool \| str \| None` | — | Drop entries logged while a test run was in flight |
 
 ## Returns
 

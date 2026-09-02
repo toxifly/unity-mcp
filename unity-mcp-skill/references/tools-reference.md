@@ -98,6 +98,15 @@ refresh_unity(
 )
 ```
 
+A failed compile returns the first errors inline, so no follow-up `read_console` is needed:
+
+```python
+{"success": False, "error": "COMPILE_FAILED",
+ "message": "Unity compilation failed: Assets/Foo.cs(12,9): CS0103: The name 'bar' does not exist ...",
+ "data": {"summary": {"errors": 2, "error_details": [
+     {"file": "Assets/Foo.cs", "line": 12, "column": 9, "message": "CS0103: ..."}]}}}
+```
+
 ---
 
 ## Scene Tools
@@ -759,6 +768,12 @@ manage_editor(action="remove_tag", tag_name="OldTag")
 manage_editor(action="add_layer", layer_name="Projectiles")
 manage_editor(action="remove_layer", layer_name="OldLayer")
 
+# Scripting define symbols (no execute_code needed)
+manage_editor(action="get_scripting_defines")                      # active build target
+manage_editor(action="get_scripting_defines", target="android")
+manage_editor(action="set_scripting_defines", defines=["DEBUG_HUD", "MY_FEATURE"])
+manage_editor(action="set_scripting_defines", defines=[])          # clear them all
+
 manage_prefabs(action="open_prefab_stage", prefab_path="Assets/Prefabs/Enemy.prefab")
 manage_prefabs(action="save_prefab_stage")   # Save changes in the open prefab stage
 manage_prefabs(action="close_prefab_stage")  # Exit prefab editing mode back to main scene
@@ -767,6 +782,13 @@ manage_prefabs(action="close_prefab_stage")  # Exit prefab editing mode back to 
 manage_editor(action="deploy_package")     # Copy configured MCPForUnity source into installed package
 manage_editor(action="restore_package")    # Revert to pre-deployment backup
 ```
+
+**Scripting defines:** `set_scripting_defines` replaces the whole symbol list for one build
+target (it is not additive — read first, then write the merged list), writes via `PlayerSettings`
++ `SaveAssets`, and triggers a recompile. It refuses while tests are running or the Editor is in
+play mode. Writing the symbols already set is a no-op and returns `changed: false`. Unlike
+`manage_build(action="settings", property="defines")`, an empty list clears the symbols instead
+of being read as a query.
 
 **Deploy workflow:** Set the source path in MCP for Unity Advanced Settings first. `deploy_package` copies the source into the project's package location, creates a backup, and triggers `AssetDatabase.Refresh`. Follow with `refresh_unity(wait_for_ready=True)` to wait for recompilation.
 
@@ -794,12 +816,18 @@ read_console(
     page_size=50,
     cursor=0,
     format="detailed",           # "plain"|"detailed"|"json"
-    include_stacktrace=True
+    include_stacktrace=True,
+    exclude_test_runs=False      # drop entries logged while a test run was in flight
 )
 
 # Clear console
 read_console(action="clear")
 ```
+
+**After a test run:** pass `exclude_test_runs=True`. A green run still leaves the errors its
+tests declared with `LogAssert.Expect` in the console; this drops every entry logged between a
+run's start and finish so agents stop chasing phantom breakage. The response message reports how
+many were excluded.
 
 ---
 
@@ -823,6 +851,15 @@ result = run_tests(
     include_details=False        # include all test details
 )
 # Returns: {"job_id": "abc123", ...}
+```
+
+If the project does not compile, `run_tests` refuses before starting a run that could not have
+begun, and hands back the errors themselves:
+
+```python
+{"success": False, "error": "compile_errors",
+ "message": "Scripts do not compile (2 error(s)); tests cannot run. Assets/Foo.cs(12,9): CS0103: ... Fix the errors, then refresh_unity(compile=\"request\").",
+ "data": {"reason": "compile_errors", "errors": 2, "error_details": [...]}}
 ```
 
 ### get_test_job

@@ -12,7 +12,7 @@ description: "Refresh Unity's asset database and optionally request script compi
 
 ## Description
 
-Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job.
+Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job. A failed compile returns the first errors inline as summary.error_details, so no follow-up read_console is needed.
 
 ## Parameters
 

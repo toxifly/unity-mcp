@@ -45,6 +45,7 @@ namespace MCPForUnity.Editor.Services
                 _startedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _finishedUnixMs = null;
             }
+            TestRunConsoleWindows.MarkRunStarted();
         }
 
         public static void MarkFinished()
@@ -55,6 +56,7 @@ namespace MCPForUnity.Editor.Services
                 _finishedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                 _mode = null;
             }
+            TestRunConsoleWindows.MarkRunFinished();
         }
     }
 }

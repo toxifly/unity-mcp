@@ -77,12 +77,18 @@ def stop():
     help="Include stack traces."
 )
 @click.option(
+    "--exclude-test-runs",
+    is_flag=True,
+    help="Drop entries logged while a test run was in flight (LogAssert-expected errors)."
+)
+@click.option(
     "--clear",
     is_flag=True,
     help="Clear the console instead of reading."
 )
 @handle_unity_errors
-def console(log_types: tuple, count: int, filter_text: Optional[str], stacktrace: bool, clear: bool):
+def console(log_types: tuple, count: int, filter_text: Optional[str], stacktrace: bool,
+            exclude_test_runs: bool, clear: bool):
     """Read or clear the Unity console.
 
     \b
@@ -90,6 +96,7 @@ def console(log_types: tuple, count: int, filter_text: Optional[str], stacktrace
         unity-mcp editor console
         unity-mcp editor console --type error --count 20
         unity-mcp editor console --filter "NullReference" --stacktrace
+        unity-mcp editor console --exclude-test-runs
         unity-mcp editor console --clear
     """
     config = get_config()
@@ -106,6 +113,7 @@ def console(log_types: tuple, count: int, filter_text: Optional[str], stacktrace
         "types": list(log_types),
         "count": count,
         "include_stacktrace": stacktrace,
+        "exclude_test_runs": exclude_test_runs,
     }
 
     if filter_text:
@@ -186,6 +194,52 @@ def remove_layer(layer_name: str):
     click.echo(format_output(result, config.format))
     if result.get("success"):
         print_success(f"Removed layer: {layer_name}")
+
+
+@editor.command("defines")
+@click.argument("defines", nargs=-1)
+@click.option("--target", "-t", default=None,
+              help="Build target (e.g. windows64, android). Defaults to the active one.")
+@click.option("--clear", is_flag=True, help="Remove every scripting define symbol.")
+@handle_unity_errors
+def scripting_defines(defines: tuple, target: Optional[str], clear: bool):
+    """Read or replace scripting define symbols.
+
+    Passing symbols replaces the whole list, so include the ones you want to keep.
+
+    
+    Examples:
+        unity-mcp editor defines
+        unity-mcp editor defines --target android
+        unity-mcp editor defines MY_FLAG OTHER_FLAG
+        unity-mcp editor defines --clear
+    """
+    if defines and clear:
+        print_error("Pass either symbols or --clear, not both.")
+        sys.exit(1)
+
+    config = get_config()
+    params: dict[str, Any] = {"action": "get_scripting_defines"}
+    if defines or clear:
+        params = {"action": "set_scripting_defines", "defines": list(defines)}
+    if target:
+        params["target"] = target
+
+    # Define writes can disconnect Unity while the domain reload starts. Route those
+    # through the Python service so send_mutation can wait, reconnect, and verify the
+    # applied symbols instead of surfacing a false CLI failure.
+    result = run_command(
+        "manage_editor",
+        params,
+        config,
+        invoke_service=params["action"] == "set_scripting_defines",
+    )
+    click.echo(format_output(result, config.format))
+    if result.get("success") and params["action"] == "set_scripting_defines":
+        applied = (result.get("data") or {}).get("defines") or []
+        print_success(
+            "Cleared scripting defines" if not applied
+            else f"Set scripting defines: {';'.join(applied)}")
 
 
 @editor.command("tool")

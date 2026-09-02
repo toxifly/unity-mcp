@@ -1,6 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Services;
+using MCPForUnity.Editor.Tools.Build;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditorInternal; // Required for tag management
@@ -134,6 +139,12 @@ namespace MCPForUnity.Editor.Tools
                 //     // Handle string name or int index
                 //     return SetQualityLevel(@params["qualityLevel"]);
 
+                // Scripting Defines
+                case "get_scripting_defines":
+                    return GetScriptingDefines(p.Get("target"));
+                case "set_scripting_defines":
+                    return SetScriptingDefines(p.Get("target"), p.GetRaw("defines"));
+
                 // Package Deployment
                 case "deploy_package":
                     return DeployPackage();
@@ -171,7 +182,7 @@ namespace MCPForUnity.Editor.Tools
 
                 default:
                     return new ErrorResponse(
-                        $"Unknown action: '{action}'. Supported actions: play, pause, stop, set_active_tool, add_tag, remove_tag, add_layer, remove_layer, deploy_package, restore_package, undo, redo. For prefab editing (open/save/close prefab stage), use manage_prefabs. Use MCP resources for reading editor state, project info, tags, layers, selection, windows, prefab stage, and active tool."
+                        $"Unknown action: '{action}'. Supported actions: play, pause, stop, set_active_tool, add_tag, remove_tag, add_layer, remove_layer, get_scripting_defines, set_scripting_defines, deploy_package, restore_package, undo, redo. For prefab editing (open/save/close prefab stage), use manage_prefabs. Use MCP resources for reading editor state, project info, tags, layers, selection, windows, prefab stage, and active tool."
                     );
             }
         }
@@ -389,6 +400,211 @@ namespace MCPForUnity.Editor.Tools
             {
                 return new ErrorResponse($"Failed to remove layer '{layerName}': {e.Message}");
             }
+        }
+
+        // --- Scripting Define Methods ---
+
+        private static object GetScriptingDefines(string targetName)
+        {
+            string targetError = BuildTargetMapping.TryResolveNamedBuildTarget(targetName, out var namedTarget);
+            if (targetError != null)
+                return new ErrorResponse(targetError);
+
+            string raw = PlayerSettings.GetScriptingDefineSymbols(namedTarget);
+            return new SuccessResponse($"Read scripting defines for '{namedTarget.TargetName}'.", new
+            {
+                target = namedTarget.TargetName,
+                defines = SplitDefines(raw),
+                raw
+            });
+        }
+
+        private static object SetScriptingDefines(string targetName, JToken definesToken)
+        {
+            if (definesToken == null || definesToken.Type == JTokenType.Undefined)
+                return new ErrorResponse("'defines' parameter required for set_scripting_defines. Pass an empty list to clear.");
+
+            // Rewriting defines recompiles every script and reloads the domain, which races a play
+            // session or an in-flight test run the same way a forced refresh does.
+            if (TestRunStatus.IsRunning)
+            {
+                return new ErrorResponse("tests_running", new { reason = "tests_running", retry_after_ms = 5000 });
+            }
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return new ErrorResponse("play_mode_active", new
+                {
+                    reason = "play_mode_active",
+                    message = "Refusing to change scripting defines while the editor is playing; the "
+                              + "domain reload can wedge play-exit. Stop Play Mode (manage_editor action=stop), then retry."
+                });
+            }
+
+            string targetError = BuildTargetMapping.TryResolveNamedBuildTarget(targetName, out var namedTarget);
+            if (targetError != null)
+                return new ErrorResponse(targetError);
+
+            string parseError = NormalizeDefines(definesToken, out var defines);
+            if (parseError != null)
+                return new ErrorResponse(parseError);
+
+            string previousRaw = PlayerSettings.GetScriptingDefineSymbols(namedTarget);
+            string raw = string.Join(";", defines);
+            if (string.Equals(previousRaw, raw, StringComparison.Ordinal))
+            {
+                return new SuccessResponse(
+                    $"Scripting defines for '{namedTarget.TargetName}' already match; nothing to do.",
+                    new
+                    {
+                        target = namedTarget.TargetName,
+                        defines,
+                        raw,
+                        previous = SplitDefines(previousRaw),
+                        changed = false
+                    });
+            }
+
+            try
+            {
+                PlayerSettings.SetScriptingDefineSymbols(namedTarget, raw);
+                AssetDatabase.SaveAssets();
+            }
+            catch (Exception e)
+            {
+                return new ErrorResponse($"Failed to set scripting defines: {e.Message}");
+            }
+
+            return new SuccessResponse($"Set scripting defines for '{namedTarget.TargetName}'.", new
+            {
+                target = namedTarget.TargetName,
+                defines,
+                raw,
+                previous = SplitDefines(previousRaw),
+                changed = true,
+                hint = "Unity will recompile; poll editor_state or call refresh_unity(wait_for_ready=true)."
+            });
+        }
+
+        internal static string[] SplitDefines(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return Array.Empty<string>();
+
+            return raw
+                .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(symbol => symbol.Trim())
+                .Where(symbol => symbol.Length > 0)
+                .ToArray();
+        }
+
+        /// <summary>
+        /// Accepts a JSON array or a ';'/','-separated string, and yields trimmed, deduplicated
+        /// symbols in the order given. Returns an error message when an entry is not a usable symbol.
+        /// </summary>
+        internal static string NormalizeDefines(JToken token, out string[] defines)
+        {
+            defines = Array.Empty<string>();
+
+            IEnumerable<string> raw;
+            if (token.Type == JTokenType.Array)
+            {
+                raw = ((JArray)token).Select(entry => entry?.ToString());
+            }
+            else if (token.Type == JTokenType.Null)
+            {
+                raw = Array.Empty<string>();
+            }
+            else
+            {
+                // Clients serialize lists inconsistently, so accept a stringified JSON array
+                // as well as the ';'-separated form Unity itself stores.
+                string text = token.ToString().Trim();
+                if (text.StartsWith("[", StringComparison.Ordinal) && text.EndsWith("]", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        raw = JArray.Parse(text).Select(entry => entry?.ToString()).ToArray();
+                    }
+                    catch (JsonException)
+                    {
+                        return $"Invalid scripting defines '{text}': expected a JSON array of symbols.";
+                    }
+                }
+                else
+                {
+                    raw = text.Split(new[] { ';', ',' }, StringSplitOptions.RemoveEmptyEntries);
+                }
+            }
+
+            var ordered = new List<string>();
+            foreach (var entry in raw)
+            {
+                string symbol = entry?.Trim();
+                if (string.IsNullOrEmpty(symbol))
+                    continue;
+                if (!IsValidConditionalCompilationSymbol(symbol))
+                {
+                    return $"Invalid scripting define '{entry}': symbols must be valid C# "
+                           + "conditional-compilation identifiers (a letter or '_' first, followed "
+                           + "by identifier characters), and cannot be 'true' or 'false'.";
+                }
+                if (!ordered.Contains(symbol, StringComparer.Ordinal))
+                    ordered.Add(symbol);
+            }
+
+            defines = ordered.ToArray();
+            return null;
+        }
+
+        private static bool IsValidConditionalCompilationSymbol(string symbol)
+        {
+            // C#'s PP_Conditional_Symbol grammar is Basic_Identifier, except for the
+            // reserved tokens true and false. Walk Unicode code points so non-ASCII C#
+            // identifiers remain valid without accidentally accepting punctuation or a
+            // delimiter embedded in an array entry.
+            if (string.Equals(symbol, "true", StringComparison.Ordinal)
+                || string.Equals(symbol, "false", StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            for (int index = 0; index < symbol.Length;)
+            {
+                UnicodeCategory category;
+                try
+                {
+                    category = CharUnicodeInfo.GetUnicodeCategory(symbol, index);
+                }
+                catch (ArgumentException)
+                {
+                    return false;
+                }
+
+                bool isFirst = index == 0;
+                bool isLetter = category == UnicodeCategory.UppercaseLetter
+                                || category == UnicodeCategory.LowercaseLetter
+                                || category == UnicodeCategory.TitlecaseLetter
+                                || category == UnicodeCategory.ModifierLetter
+                                || category == UnicodeCategory.OtherLetter
+                                || category == UnicodeCategory.LetterNumber;
+                bool isPart = isLetter
+                              || category == UnicodeCategory.DecimalDigitNumber
+                              || category == UnicodeCategory.ConnectorPunctuation
+                              || category == UnicodeCategory.NonSpacingMark
+                              || category == UnicodeCategory.SpacingCombiningMark
+                              || category == UnicodeCategory.Format;
+
+                if (isFirst ? symbol[index] != '_' && !isLetter : !isPart)
+                {
+                    return false;
+                }
+
+                index += char.IsHighSurrogate(symbol[index])
+                         && index + 1 < symbol.Length
+                         && char.IsLowSurrogate(symbol[index + 1]) ? 2 : 1;
+            }
+
+            return symbol.Length > 0;
         }
 
         // --- Package Deployment Methods ---

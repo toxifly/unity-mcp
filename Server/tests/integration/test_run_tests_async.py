@@ -443,3 +443,100 @@ async def test_get_test_job_carries_skipped_reasons_without_the_skipped_tests(mo
 
     assert resp.data.result.results is None
     assert resp.data.result.skipped_reasons[0].count == 8
+
+
+@pytest.mark.asyncio
+async def test_run_tests_refuses_red_compile_with_the_error_list(monkeypatch):
+    """A run that cannot start must say what broke, not just that it is blocked."""
+    from services.tools.run_tests import run_tests
+    import services.tools.preflight as preflight_mod
+    import services.tools.run_tests as mod
+
+    details = [
+        {"file": "Assets/Scripts/Player.cs", "line": 42, "column": 9,
+         "message": "error CS1002: ; expected"},
+    ]
+
+    async def fake_state(ctx):
+        return {"success": True, "data": {
+            "tests": {"is_running": False},
+            "compilation": {"is_compiling": False, "last_compile_errors": 1,
+                            "last_compile_error_details": details},
+        }}
+
+    async def unreachable_send(*args, **kwargs):
+        raise AssertionError("run_tests must not reach Unity while scripts are red")
+
+    monkeypatch.setattr(preflight_mod, "_in_pytest", lambda: False)
+    monkeypatch.setattr(
+        "services.resources.editor_state.get_editor_state", fake_state)
+    monkeypatch.setattr(mod.unity_transport,
+                        "send_with_unity_instance", unreachable_send)
+
+    resp = await run_tests(DummyContext())
+
+    assert resp.success is False
+    assert resp.error == "compile_errors"
+    assert resp.data["error_details"] == details
+    assert "Assets/Scripts/Player.cs(42,9): error CS1002: ; expected" in resp.message
+    assert "refresh_unity" in resp.message
+
+
+@pytest.mark.asyncio
+async def test_run_tests_proceeds_when_the_last_compile_was_clean(monkeypatch):
+    from services.tools.run_tests import run_tests
+    import services.tools.preflight as preflight_mod
+    import services.tools.run_tests as mod
+
+    async def fake_state(ctx):
+        return {"success": True, "data": {
+            "tests": {"is_running": False},
+            "compilation": {"is_compiling": False, "last_compile_errors": 0},
+        }}
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        return {"success": True, "data": {"job_id": "job-1", "status": "running", "mode": "EditMode"}}
+
+    monkeypatch.setattr(preflight_mod, "_in_pytest", lambda: False)
+    monkeypatch.setattr(
+        "services.resources.editor_state.get_editor_state", fake_state)
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send)
+
+    resp = await run_tests(DummyContext())
+
+    assert resp.success is True
+    assert resp.data.job_id == "job-1"
+
+
+@pytest.mark.asyncio
+async def test_preflight_rechecks_state_after_its_own_refresh(monkeypatch):
+    """refresh_if_dirty can itself compile, so the stale pre-refresh record must not decide."""
+    import services.tools.preflight as preflight_mod
+
+    reads = 0
+
+    async def fake_state(ctx):
+        nonlocal reads
+        reads += 1
+        # First read is the dirty, still-red snapshot; the refresh below fixes it.
+        errors = 1 if reads == 1 else 0
+        return {"success": True, "data": {
+            "assets": {"external_changes_dirty": reads == 1},
+            "tests": {"is_running": False},
+            "compilation": {"is_compiling": False, "last_compile_errors": errors},
+        }}
+
+    async def fake_refresh(ctx, **kwargs):
+        return {"success": True}
+
+    monkeypatch.setattr(preflight_mod, "_in_pytest", lambda: False)
+    monkeypatch.setattr(
+        "services.resources.editor_state.get_editor_state", fake_state)
+    monkeypatch.setattr("services.tools.refresh_unity.refresh_unity", fake_refresh)
+
+    gate = await preflight_mod.preflight(
+        DummyContext(), requires_no_tests=True, wait_for_no_compile=True,
+        requires_clean_compile=True, refresh_if_dirty=True)
+
+    assert gate is None
+    assert reads == 2

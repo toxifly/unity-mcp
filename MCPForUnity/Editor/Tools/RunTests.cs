@@ -1,9 +1,11 @@
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Resources.Tests;
 using MCPForUnity.Editor.Services;
 using Newtonsoft.Json.Linq;
+using UnityEditor;
 using UnityEditor.TestTools.TestRunner.Api;
 
 namespace MCPForUnity.Editor.Tools
@@ -27,6 +29,15 @@ namespace MCPForUnity.Editor.Tools
                         wasCleared ? "Stuck job cleared." : "No running job to clear.",
                         new { cleared = wasCleared }
                     ));
+                }
+
+                var compileRefusal = CompileErrorRefusal(
+                    EditorUtility.scriptCompilationFailed,
+                    CompilationStateTracker.LastErrors,
+                    CompilationStateTracker.LastErrorDetails);
+                if (compileRefusal != null)
+                {
+                    return Task.FromResult(compileRefusal);
                 }
 
                 string modeStr = @params?["mode"]?.ToString();
@@ -80,6 +91,45 @@ namespace MCPForUnity.Editor.Tools
                 }
                 return Task.FromResult<object>(new ErrorResponse($"Failed to start test job: {ex.Message}"));
             }
+        }
+
+        /// <summary>
+        /// Unity Test Framework cannot build a run against assemblies that failed to compile.
+        /// Returns the refusal — carrying the errors themselves — instead of starting a run that
+        /// dies during initialization and leaves the caller guessing why, or null when the
+        /// project is green.
+        /// </summary>
+        internal static object CompileErrorRefusal(bool compilationFailed, int errorCount, JArray errors)
+        {
+            if (!compilationFailed && errorCount <= 0)
+            {
+                return null;
+            }
+
+            return new ErrorResponse("compile_errors", new
+            {
+                reason = "compile_errors",
+                errors = errorCount,
+                error_details = errors,
+                message = "Scripts do not compile; tests cannot run. "
+                          + DescribeCompileErrors(errors, errorCount)
+                          + "Fix the errors, then refresh_unity(compile=\"request\")."
+            });
+        }
+
+        /// <summary>Renders the first few captured compile errors for the refusal message.</summary>
+        private static string DescribeCompileErrors(JArray errors, int errorCount)
+        {
+            if (errors == null || errors.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            var parts = errors.Take(3).Select(e =>
+                $"{e["file"]}({e["line"]},{e["column"]}): {e["message"]}");
+            string digest = string.Join("; ", parts);
+            int remaining = Math.Max(0, errorCount - Math.Min(errors.Count, 3));
+            return remaining > 0 ? $"{digest} (+{remaining} more). " : $"{digest}. ";
         }
 
         private static TestFilterOptions GetFilterOptions(JObject @params)

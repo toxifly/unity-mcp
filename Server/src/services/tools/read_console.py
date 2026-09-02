@@ -23,7 +23,7 @@ def _strip_stacktrace_from_list(items: list) -> None:
 
 
 @mcp_for_unity_tool(
-    description="Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data).",
+    description="Gets messages from or clears the Unity Editor console. Defaults to 10 most recent entries. Use page_size/cursor for paging. Set exclude_test_runs=true after a test run to drop the errors its tests declared with LogAssert. Note: For maximum client compatibility, pass count as a quoted string (e.g., '5'). The 'get' action is read-only; 'clear' modifies ephemeral UI state (not project data).",
     annotations=ToolAnnotations(
         title="Read Console",
     ),
@@ -46,6 +46,8 @@ async def read_console(
                               'json'], "Output format; defaults to structured JSON records"] | None = None,
     include_stacktrace: Annotated[bool | str,
                                   "Include stack traces in output (accepts true/false or 'true'/'false')"] | None = None,
+    exclude_test_runs: Annotated[bool | str,
+                                 "Drop entries logged while a test run was in flight"] | None = None,
 ) -> dict[str, Any]:
     # Get active instance from session state
     # Removed session_state import
@@ -92,6 +94,7 @@ async def read_console(
     # Coerce booleans defensively (strings like 'true'/'false')
 
     include_stacktrace = coerce_bool(include_stacktrace, default=False)
+    exclude_test_runs = coerce_bool(exclude_test_runs, default=False)
     coerced_page_size = coerce_int(page_size, default=None)
     coerced_cursor = coerce_int(cursor, default=None)
 
@@ -121,7 +124,8 @@ async def read_console(
         "pageSize": coerced_page_size,
         "cursor": coerced_cursor,
         "format": format.lower() if isinstance(format, str) else format,
-        "includeStacktrace": include_stacktrace
+        "includeStacktrace": include_stacktrace,
+        "excludeTestRuns": exclude_test_runs
     }
 
     # Remove None values unless it's 'count' (as None might mean 'all')

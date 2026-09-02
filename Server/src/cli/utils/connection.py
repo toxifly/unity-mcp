@@ -72,6 +72,8 @@ async def send_command(
     params: Dict[str, Any],
     config: Optional[CLIConfig] = None,
     timeout: Optional[int] = None,
+    *,
+    invoke_service: bool = False,
 ) -> Dict[str, Any]:
     """Send a command to Unity via the MCP HTTP server.
 
@@ -80,6 +82,8 @@ async def send_command(
         params: Command parameters
         config: Optional CLI configuration
         timeout: Optional timeout override
+        invoke_service: Route through the Python tool service instead of forwarding
+            directly to Unity. Required for mutations with server-side recovery logic.
 
     Returns:
         Response dict from Unity
@@ -94,6 +98,8 @@ async def send_command(
         "type": command_type,
         "params": params,
     }
+    if invoke_service:
+        payload["invoke_service"] = True
 
     if cfg.unity_instance:
         payload["unity_instance"] = cfg.unity_instance
@@ -131,6 +137,8 @@ def run_command(
     params: Dict[str, Any],
     config: Optional[CLIConfig] = None,
     timeout: Optional[int] = None,
+    *,
+    invoke_service: bool = False,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for send_command.
 
@@ -139,11 +147,19 @@ def run_command(
         params: Command parameters
         config: Optional CLI configuration
         timeout: Optional timeout override
+        invoke_service: Route through the Python tool service instead of forwarding
+            directly to Unity.
 
     Returns:
         Response dict from Unity
     """
-    return asyncio.run(send_command(command_type, params, config, timeout))
+    return asyncio.run(send_command(
+        command_type,
+        params,
+        config,
+        timeout,
+        invoke_service=invoke_service,
+    ))
 
 
 async def check_connection(config: Optional[CLIConfig] = None) -> bool:

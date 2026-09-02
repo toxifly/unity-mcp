@@ -47,6 +47,13 @@ class EditorStateActivity(BaseModel):
     reasons: list[str] | None = None
 
 
+class CompileError(BaseModel):
+    file: str | None = None
+    line: int | None = None
+    column: int | None = None
+    message: str | None = None
+
+
 class EditorStateCompilation(BaseModel):
     is_compiling: bool | None = None
     is_domain_reload_pending: bool | None = None
@@ -57,6 +64,7 @@ class EditorStateCompilation(BaseModel):
     last_compile_errors: int | None = None
     last_compile_warnings: int | None = None
     last_compile_duration_seconds: float | None = None
+    last_compile_error_details: list[CompileError] | None = None
 
 
 class EditorStateRefresh(BaseModel):

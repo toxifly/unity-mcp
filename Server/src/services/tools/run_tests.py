@@ -229,7 +229,8 @@ async def run_tests(
     if init_timeout is not None and init_timeout <= 0:
         return MCPResponse(success=False, error="init_timeout must be a positive integer (milliseconds) or None")
 
-    gate = await preflight(ctx, requires_no_tests=True, wait_for_no_compile=True, refresh_if_dirty=True)
+    gate = await preflight(ctx, requires_no_tests=True, wait_for_no_compile=True,
+                           requires_clean_compile=True, refresh_if_dirty=True)
     if isinstance(gate, MCPResponse):
         return gate
 
@@ -392,7 +393,13 @@ async def _wait_for_test_job(
             return GetTestJobResponse(**response)
 
         # Wait before next poll (but don't exceed remaining time)
-        await asyncio.sleep(min(poll_interval, remaining))
+        sleep_for = min(poll_interval, remaining)
+        await asyncio.sleep(sleep_for)
+        if sleep_for >= remaining:
+            # Event-loop clocks can wake a fraction before the requested deadline on some
+            # platforms. The whole remaining budget was assigned to sleeping, so return the
+            # last status instead of starting one more transport request.
+            return GetTestJobResponse(**response)
 
 
 @mcp_for_unity_tool(

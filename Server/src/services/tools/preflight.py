@@ -14,6 +14,20 @@ def _in_pytest() -> bool:
     return bool(os.environ.get("PYTEST_CURRENT_TEST"))
 
 
+async def _read_state(ctx) -> dict[str, Any] | None:
+    """The canonical editor_state payload, or None when it cannot be determined."""
+    try:
+        from services.resources.editor_state import get_editor_state
+        state_resp = await get_editor_state(ctx)
+        state = state_resp.model_dump() if hasattr(state_resp, "model_dump") else state_resp
+    except Exception:
+        return None
+    if not isinstance(state, dict) or not state.get("success", False):
+        return None
+    data = state.get("data")
+    return data if isinstance(data, dict) else None
+
+
 def _busy(reason: str, retry_after_ms: int) -> MCPResponse:
     return MCPResponse(
         success=False,
@@ -24,11 +38,36 @@ def _busy(reason: str, retry_after_ms: int) -> MCPResponse:
     )
 
 
+def _compile_errors(data: dict[str, Any]) -> MCPResponse | None:
+    """Refuse with the actual errors when the last compilation left the project red."""
+    from services.tools.refresh_unity import compile_errors_from_state, format_compile_errors
+
+    compilation = data.get("compilation")
+    if not isinstance(compilation, dict):
+        return None
+    errors = int(compilation.get("last_compile_errors") or 0)
+    if errors <= 0 or compilation.get("is_compiling") is True:
+        return None
+
+    details = compile_errors_from_state(data)
+    digest = format_compile_errors(details, errors) if details else ""
+    return MCPResponse(
+        success=False,
+        error="compile_errors",
+        message=(
+            f"Scripts do not compile ({errors} error(s)); tests cannot run. {digest}"
+            .strip() + " Fix the errors, then refresh_unity(compile=\"request\")."
+        ),
+        data={"reason": "compile_errors", "errors": errors, "error_details": details},
+    )
+
+
 async def preflight(
     ctx,
     *,
     requires_no_tests: bool = False,
     wait_for_no_compile: bool = False,
+    requires_clean_compile: bool = False,
     refresh_if_dirty: bool = False,
     max_wait_s: float = 30.0,
 ) -> MCPResponse | None:
@@ -42,22 +81,11 @@ async def preflight(
     if _in_pytest():
         return None
 
-    # Load canonical editor state (server enriches advice + staleness).
-    try:
-        from services.resources.editor_state import get_editor_state
-        state_resp = await get_editor_state(ctx)
-        state = state_resp.model_dump() if hasattr(
-            state_resp, "model_dump") else state_resp
-    except Exception:
-        # If we cannot determine readiness, fall back to proceeding (tools already contain retry logic).
-        return None
-
-    if not isinstance(state, dict) or not state.get("success", False):
-        # Unknown state; proceed rather than blocking (avoids false positives when Unity is reachable but status isn't).
-        return None
-
-    data = state.get("data")
-    if not isinstance(data, dict):
+    # Load canonical editor state (server enriches advice + staleness). If we cannot determine
+    # readiness, proceed rather than blocking (tools already contain retry logic, and Unity may
+    # be reachable even when status is not).
+    data = await _read_state(ctx)
+    if data is None:
         return None
 
     # Optional refresh-if-dirty
@@ -70,6 +98,10 @@ async def preflight(
             except Exception:
                 # Best-effort only; fall through to normal tool dispatch.
                 pass
+            # That refresh may have compiled, so every check below needs the post-refresh state.
+            data = await _read_state(ctx)
+            if data is None:
+                return None
 
     # Tests running: fail fast for tools that require exclusivity.
     if requires_no_tests:
@@ -94,16 +126,15 @@ async def preflight(
             await asyncio.sleep(0.25)
 
             # Refresh state for the next loop iteration.
-            try:
-                from services.resources.editor_state import get_editor_state
-                state_resp = await get_editor_state(ctx)
-                state = state_resp.model_dump() if hasattr(
-                    state_resp, "model_dump") else state_resp
-                data = state.get("data") if isinstance(state, dict) else None
-                if not isinstance(data, dict):
-                    return None
-            except Exception:
+            data = await _read_state(ctx)
+            if data is None:
                 return None
+
+    # Red scripts: refuse with the error list rather than let the caller start work that cannot run.
+    if requires_clean_compile:
+        refusal = _compile_errors(data)
+        if refusal is not None:
+            return refusal
 
     # Staleness: if the snapshot is stale, proceed (tools will still run), but callers that read resources can back off.
     # In future we may make this strict for some tools.

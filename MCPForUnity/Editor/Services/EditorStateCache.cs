@@ -178,6 +178,13 @@ namespace MCPForUnity.Editor.Services
 
             [JsonProperty("last_compile_duration_seconds")]
             public double LastCompileDurationSeconds { get; set; }
+
+            /// <summary>
+            /// The first few errors of the last compilation, so a caller learns what broke
+            /// without a follow-up read_console. Null when the compilation was clean.
+            /// </summary>
+            [JsonProperty("last_compile_error_details")]
+            public JArray LastCompileErrorDetails { get; set; }
         }
 
         private sealed class EditorStateAssets
@@ -479,7 +486,8 @@ namespace MCPForUnity.Editor.Services
                     LastDomainReloadAfterUnixMs = _domainReloadAfterUnixMs,
                     LastCompileErrors = CompilationStateTracker.LastErrors,
                     LastCompileWarnings = CompilationStateTracker.LastWarnings,
-                    LastCompileDurationSeconds = CompilationStateTracker.LastDurationSeconds
+                    LastCompileDurationSeconds = CompilationStateTracker.LastDurationSeconds,
+                    LastCompileErrorDetails = CompilationStateTracker.LastErrorDetails
                 },
                 Assets = new EditorStateAssets
                 {

@@ -214,16 +214,52 @@ async def wait_for_editor_ready(
     return EditorReadyResult(False, time.monotonic() - start, last_state, observed_busy, observed_compile)
 
 
+def compile_errors_from_state(state: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """The captured errors of the last compilation, as Unity recorded them."""
+    compilation = (state or {}).get("compilation")
+    compilation = compilation if isinstance(compilation, dict) else {}
+    details = compilation.get("last_compile_error_details")
+    return [d for d in details if isinstance(d, dict)] if isinstance(details, list) else []
+
+
+def format_compile_error(detail: dict[str, Any]) -> str:
+    """Render one captured error as `file(line,col): message`."""
+    location = detail.get("file") or "<unknown>"
+    line, column = detail.get("line"), detail.get("column")
+    if line:
+        location += f"({line},{column})" if column else f"({line})"
+    return f"{location}: {detail.get('message') or 'compile error'}"
+
+
+def format_compile_errors(details: list[dict[str, Any]], total: int) -> str:
+    """One-line digest of the captured errors, for an error message."""
+    shown = "; ".join(format_compile_error(d) for d in details[:3])
+    remaining = total - min(len(details), 3)
+    return f"{shown} (+{remaining} more)" if remaining > 0 else shown
+
+
+def _compile_failed_message(summary: dict[str, Any]) -> str:
+    details = summary.get("error_details") or []
+    if not details:
+        return f"Unity compilation completed with {summary['errors']} error(s)."
+    return f"Unity compilation failed: {format_compile_errors(details, summary['errors'])}"
+
+
 def _compile_summary(state: dict[str, Any] | None, elapsed: float, compiled: bool) -> dict[str, Any]:
     compilation = (state or {}).get("compilation")
     compilation = compilation if isinstance(compilation, dict) else {}
     duration = compilation.get("last_compile_duration_seconds")
-    return {
+    errors = int(compilation.get("last_compile_errors") or 0) if compiled else 0
+    summary = {
         "compiled": compiled,
-        "errors": int(compilation.get("last_compile_errors") or 0) if compiled else 0,
+        "errors": errors,
         "warnings": int(compilation.get("last_compile_warnings") or 0) if compiled else 0,
         "duration_seconds": round(float(duration if duration is not None else elapsed), 3),
     }
+    # Inline the errors so a failed refresh is actionable without a second read_console call.
+    if errors > 0 and (details := compile_errors_from_state(state)):
+        summary["error_details"] = details
+    return summary
 
 
 def is_reloading_rejection(resp: Any) -> bool:
@@ -334,7 +370,7 @@ async def verify_edit_by_sha(
 
 
 @mcp_for_unity_tool(
-    description="Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job.",
+    description="Refresh Unity's asset database and optionally request script compilation. This mutates transient Editor state and may trigger a domain reload. mode, scope, and compile select the work; wait_for_ready can block for readiness, and job_id resumes a timed-out refresh job. A failed compile returns the first errors inline as summary.error_details, so no follow-up read_console is needed.",
     annotations=ToolAnnotations(
         title="Refresh Unity",
         destructiveHint=True,
@@ -380,7 +416,7 @@ async def refresh_unity(
         summary = _compile_summary(result.last_state, result.elapsed_seconds, result.observed_compile)
         if summary["errors"] > 0:
             return MCPResponse(
-                success=False, error="COMPILE_FAILED", message="Unity compilation completed with errors.",
+                success=False, error="COMPILE_FAILED", message=_compile_failed_message(summary),
                 data={"job_id": job_id, "status": "failed", "resulting_state": "idle", "summary": summary},
             )
         return MCPResponse(
@@ -529,7 +565,7 @@ async def refresh_unity(
                                    ready_result.observed_compile)
         if summary["errors"] > 0:
             return MCPResponse(
-                success=False, error="COMPILE_FAILED", message="Unity compilation completed with errors.",
+                success=False, error="COMPILE_FAILED", message=_compile_failed_message(summary),
                 data={"job_id": refresh_job_id, "status": "failed", "resulting_state": "idle",
                       "recovered_from_disconnect": recovered_from_disconnect, "summary": summary},
             )

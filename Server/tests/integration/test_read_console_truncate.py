@@ -282,3 +282,26 @@ async def test_read_console_types_validation(monkeypatch):
     assert resp["success"] is False
     assert "types entries must be strings" in resp["message"]
     assert captured == {}
+
+
+@pytest.mark.asyncio
+async def test_read_console_forwards_exclude_test_runs(monkeypatch):
+    """The flag is what lets an agent skip a green run's LogAssert-declared errors."""
+    tools = setup_console_tools()
+    read_console = tools["read_console"]
+
+    captured = {}
+
+    async def fake_send(_cmd, params, **_kwargs):
+        captured["params"] = params
+        return {"success": True, "data": {"items": [], "total": 0}}
+
+    import services.tools.read_console
+    monkeypatch.setattr(
+        services.tools.read_console, "async_send_command_with_retry", fake_send)
+
+    await read_console(ctx=DummyContext(), action="get", exclude_test_runs="true")
+    assert captured["params"]["excludeTestRuns"] is True
+
+    await read_console(ctx=DummyContext(), action="get")
+    assert captured["params"]["excludeTestRuns"] is False

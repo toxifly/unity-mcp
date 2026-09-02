@@ -461,6 +461,24 @@ def create_mcp_server(project_scoped_tools: bool) -> FastMCP:
                     )
                     return JSONResponse(result.model_dump())
 
+                if body.get("invoke_service") is True:
+                    # The direct /api/command path skips tool-service behavior. In
+                    # particular, scripting-define writes need send_mutation's reload
+                    # recovery because Unity may apply the write and disconnect before
+                    # its response reaches this server.
+                    selected_instance = unity_instance
+                    if session_details and session_details.hash:
+                        selected_instance = (
+                            f"{session_details.project}@{session_details.hash}"
+                            if session_details.project
+                            else session_details.hash
+                        )
+                    from services.cli_service import invoke_cli_service
+
+                    result = await invoke_cli_service(
+                        command_type, params, selected_instance)
+                    return JSONResponse(result)
+
                 # Send command to Unity
                 result = await PluginHub.send_command(session_id, command_type, params)
                 return JSONResponse(result)

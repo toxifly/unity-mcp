@@ -55,7 +55,7 @@ def test_redo_forwards_to_unity(mock_unity):
 UNITY_FORWARDED_ACTIONS = [
     "play", "pause", "stop", "set_active_tool",
     "add_tag", "remove_tag", "add_layer", "remove_layer",
-    "deploy_package", "restore_package",
+    "get_scripting_defines", "deploy_package", "restore_package",
     "undo", "redo",
 ]
 
@@ -95,3 +95,63 @@ def test_undo_omits_none_params(mock_unity):
     assert "layerName" not in params
 
 
+
+
+# ── Scripting defines ───────────────────────────────────────────────
+
+
+@pytest.fixture
+def mock_mutation(monkeypatch):
+    """set_scripting_defines routes through send_mutation, which owns its own transport."""
+    captured: dict[str, object] = {}
+
+    async def fake_send(send_fn, unity_instance, tool_name, params, **kwargs):
+        captured["tool_name"] = tool_name
+        captured["params"] = params
+        captured["kwargs"] = kwargs
+        return {"success": True, "message": "ok", "data": {"defines": params.get("defines"), "changed": True}}
+
+    monkeypatch.setattr(
+        "services.tools.manage_editor.get_unity_instance_from_context",
+        AsyncMock(return_value="unity-instance-1"),
+    )
+    import services.tools.refresh_unity as refresh_mod
+    monkeypatch.setattr(refresh_mod.unity_transport,
+                        "send_with_unity_instance", fake_send)
+    return captured
+
+
+def test_get_scripting_defines_forwards_target(mock_unity):
+    result = asyncio.run(manage_editor(
+        SimpleNamespace(), action="get_scripting_defines", target="android"))
+    assert result["success"] is True
+    assert mock_unity["params"] == {"action": "get_scripting_defines", "target": "android"}
+
+
+def test_set_scripting_defines_requires_defines(mock_unity):
+    result = asyncio.run(manage_editor(
+        SimpleNamespace(), action="set_scripting_defines"))
+    assert result["success"] is False
+    assert "defines is required" in result["message"]
+    assert "params" not in mock_unity
+
+
+def test_set_scripting_defines_forwards_the_full_list(mock_mutation):
+    result = asyncio.run(manage_editor(
+        SimpleNamespace(), action="set_scripting_defines", defines=["A", "B"]))
+    assert result["success"] is True
+    assert mock_mutation["params"]["defines"] == ["A", "B"]
+    # send_mutation must not re-send into a reload; that is what causes double compiles.
+    assert mock_mutation["kwargs"]["retry_on_reload"] is False
+
+
+def test_set_scripting_defines_unwraps_a_json_array_string(mock_mutation):
+    asyncio.run(manage_editor(
+        SimpleNamespace(), action="set_scripting_defines", defines='["A", "B"]'))
+    assert mock_mutation["params"]["defines"] == ["A", "B"]
+
+
+def test_set_scripting_defines_keeps_an_empty_list_so_clearing_works(mock_mutation):
+    asyncio.run(manage_editor(
+        SimpleNamespace(), action="set_scripting_defines", defines=[]))
+    assert mock_mutation["params"]["defines"] == []

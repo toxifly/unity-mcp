@@ -1,4 +1,6 @@
 using System;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditor.Compilation;
 
@@ -15,6 +17,11 @@ namespace MCPForUnity.Editor.Services
         private const string ErrorsKey = Prefix + "Errors";
         private const string WarningsKey = Prefix + "Warnings";
         private const string DurationKey = Prefix + "DurationSeconds";
+        private const string ErrorDetailsKey = Prefix + "ErrorDetails";
+
+        /// <summary>How many compiler errors are kept verbatim so callers can act without a console read.</summary>
+        private const int MaxCapturedErrors = 10;
+        private const int MaxCapturedMessageChars = 400;
 
         static CompilationStateTracker()
         {
@@ -30,6 +37,25 @@ namespace MCPForUnity.Editor.Services
         internal static int LastWarnings => SessionState.GetInt(WarningsKey, 0);
         internal static long? LastStartedUnixMs => ReadLong(StartedKey);
         internal static long? LastFinishedUnixMs => ReadLong(FinishedKey);
+        /// <summary>The first <see cref="MaxCapturedErrors"/> errors of the last compilation, oldest first.</summary>
+        internal static JArray LastErrorDetails
+        {
+            get
+            {
+                string raw = SessionState.GetString(ErrorDetailsKey, string.Empty);
+                if (string.IsNullOrEmpty(raw)) return null;
+                try
+                {
+                    var parsed = JArray.Parse(raw);
+                    return parsed.Count > 0 ? parsed : null;
+                }
+                catch (JsonException)
+                {
+                    return null;
+                }
+            }
+        }
+
         internal static double LastDurationSeconds
         {
             get
@@ -49,19 +75,65 @@ namespace MCPForUnity.Editor.Services
             SessionState.SetInt(ErrorsKey, 0);
             SessionState.SetInt(WarningsKey, 0);
             SessionState.SetString(DurationKey, "0");
+            SessionState.SetString(ErrorDetailsKey, string.Empty);
         }
 
         private static void OnAssemblyCompilationFinished(string _, CompilerMessage[] messages)
         {
             var errors = SessionState.GetInt(ErrorsKey, 0);
             var warnings = SessionState.GetInt(WarningsKey, 0);
+            var details = LastErrorDetails ?? new JArray();
+            bool detailsChanged = false;
             foreach (var message in messages ?? Array.Empty<CompilerMessage>())
             {
-                if (message.type == CompilerMessageType.Error) errors++;
+                if (message.type == CompilerMessageType.Error)
+                {
+                    errors++;
+                    if (details.Count < MaxCapturedErrors)
+                    {
+                        details.Add(Describe(message));
+                        detailsChanged = true;
+                    }
+                }
                 else if (message.type == CompilerMessageType.Warning) warnings++;
             }
             SessionState.SetInt(ErrorsKey, errors);
             SessionState.SetInt(WarningsKey, warnings);
+            if (detailsChanged)
+            {
+                SessionState.SetString(ErrorDetailsKey, details.ToString(Formatting.None));
+            }
+        }
+
+        /// <summary>
+        /// Flattens a compiler error into the shape the server surfaces inline. Unity prefixes
+        /// CompilerMessage.message with "file(line,col): "; the structured fields already carry
+        /// that, so a prefix that literally starts with the message's own file is stripped.
+        /// </summary>
+        internal static JObject Describe(CompilerMessage message)
+        {
+            string text = message.message ?? string.Empty;
+            if (!string.IsNullOrEmpty(message.file) && text.StartsWith(message.file, StringComparison.Ordinal))
+            {
+                int afterLocation = text.IndexOf("): ", message.file.Length, StringComparison.Ordinal);
+                if (afterLocation >= 0)
+                {
+                    text = text.Substring(afterLocation + 3);
+                }
+            }
+            text = text.Trim();
+            if (text.Length > MaxCapturedMessageChars)
+            {
+                text = text.Substring(0, MaxCapturedMessageChars) + "...";
+            }
+
+            return new JObject
+            {
+                ["file"] = message.file,
+                ["line"] = message.line,
+                ["column"] = message.column,
+                ["message"] = text
+            };
         }
 
         private static void OnCompilationFinished(object _)

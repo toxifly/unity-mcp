@@ -221,6 +221,26 @@ class TestConnection:
             assert result == mock_unity_response
 
     @pytest.mark.asyncio
+    async def test_send_command_can_request_python_service_routing(self, mock_unity_response):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = mock_unity_response
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("httpx.AsyncClient") as mock_client:
+            post = mock_client.return_value.__aenter__.return_value.post = AsyncMock(
+                return_value=mock_response
+            )
+
+            await send_command(
+                "manage_editor",
+                {"action": "set_scripting_defines", "defines": ["FEATURE"]},
+                invoke_service=True,
+            )
+
+            assert post.await_args.kwargs["json"]["invoke_service"] is True
+
+    @pytest.mark.asyncio
     async def test_send_command_connection_error(self):
         """Test command sending with connection error."""
         with patch("httpx.AsyncClient") as mock_client:
@@ -598,6 +618,27 @@ class TestEditorCommands:
         with patch("cli.commands.editor.run_command", return_value=mock_unity_response):
             result = runner.invoke(cli, ["editor", "stop"])
             assert result.exit_code == 0
+
+    def test_editor_define_write_requests_service_routing(self, runner):
+        response = {
+            "success": True,
+            "message": "ok",
+            "data": {"defines": ["FEATURE"], "changed": True},
+        }
+        with patch("cli.commands.editor.run_command", return_value=response) as run:
+            result = runner.invoke(cli, ["editor", "defines", "FEATURE"])
+
+        assert result.exit_code == 0
+        assert run.call_args.kwargs["invoke_service"] is True
+
+    def test_editor_define_read_uses_direct_route(self, runner, mock_unity_response):
+        with patch(
+            "cli.commands.editor.run_command", return_value=mock_unity_response
+        ) as run:
+            result = runner.invoke(cli, ["editor", "defines"])
+
+        assert result.exit_code == 0
+        assert run.call_args.kwargs["invoke_service"] is False
 
     def test_editor_console(self, runner, mock_unity_response):
         """Test editor console command."""

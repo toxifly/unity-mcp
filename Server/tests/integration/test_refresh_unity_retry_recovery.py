@@ -277,3 +277,69 @@ async def test_resumed_refresh_stays_bound_to_originating_unity_instance(monkeyp
     assert resumed.model_dump()["data"]["status"] == "succeeded"
     assert observed_instances == ["ProjectA@111", "ProjectA@111"]
     assert job_id not in refresh_mod._REFRESH_JOBS
+
+
+@pytest.mark.asyncio
+async def test_failed_compile_returns_errors_inline(monkeypatch):
+    """A red compile must name what broke; a second read_console call should not be needed."""
+    import services.tools.refresh_unity as refresh_mod
+
+    details = [
+        {"file": "Assets/Scripts/Player.cs", "line": 42, "column": 9,
+         "message": "error CS1002: ; expected"},
+        {"file": "Assets/Scripts/Enemy.cs", "line": 7, "column": 1,
+         "message": "error CS0246: The type or namespace name 'Foo' could not be found"},
+    ]
+    compilation = {
+        "last_compile_started_unix_ms": 550,
+        "last_compile_errors": 2,
+        "last_compile_warnings": 0,
+        "last_compile_duration_seconds": 0.5,
+        "last_compile_error_details": details,
+        "last_domain_reload_after_unix_ms": 500,
+    }
+    states = [
+        {"data": {"update_tick": 10,
+                  "compilation": {"last_compile_started_unix_ms": 100,
+                                  "last_domain_reload_after_unix_ms": 500},
+                  "advice": {"blocking_reasons": []}}},
+        {"data": {"update_tick": 11,
+                  "compilation": {**compilation, "is_compiling": True},
+                  "advice": {"blocking_reasons": ["compiling"]}}},
+        # A compile that ends in errors never domain-reloads, so readiness resolves here.
+        {"data": {"update_tick": 12, "compilation": compilation, "advice": {"blocking_reasons": []}}},
+        {"data": {"update_tick": 13, "compilation": compilation, "advice": {"blocking_reasons": []}}},
+    ]
+    poll_index = 0
+
+    async def fake_state(ctx):
+        nonlocal poll_index
+        state = states[min(poll_index, len(states) - 1)]
+        poll_index += 1
+        return state
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        return {"success": True, "message": "Refresh requested.", "data": {"resulting_state": "compiling"}}
+
+    monkeypatch.setattr(refresh_mod.editor_state, "get_editor_state", fake_state)
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send)
+
+    payload = (await refresh_mod.refresh_unity(
+        DummyContext(), compile="request", wait_for_ready=True)).model_dump()
+
+    assert payload["success"] is False
+    assert payload["error"] == "COMPILE_FAILED"
+    assert payload["data"]["summary"]["error_details"] == details
+    assert "Assets/Scripts/Player.cs(42,9): error CS1002: ; expected" in payload["message"]
+    assert "Assets/Scripts/Enemy.cs(7,1)" in payload["message"]
+
+
+def test_compile_error_digest_caps_at_three_and_counts_the_rest():
+    from services.tools.refresh_unity import format_compile_errors
+
+    details = [{"file": f"A{i}.cs", "line": i, "column": 1, "message": "boom"} for i in range(1, 6)]
+    digest = format_compile_errors(details, total=9)
+
+    assert digest.startswith("A1.cs(1,1): boom; A2.cs(2,1): boom; A3.cs(3,1): boom")
+    assert digest.endswith("(+6 more)")
+    assert "A4.cs" not in digest

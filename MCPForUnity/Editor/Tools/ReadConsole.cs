@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using MCPForUnity.Editor.Helpers; // For Response class
+using MCPForUnity.Editor.Services;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEditorInternal;
@@ -30,6 +32,9 @@ namespace MCPForUnity.Editor.Tools
         private static FieldInfo _messageField;
         private static FieldInfo _fileField;
         private static FieldInfo _lineField;
+        private static FieldInfo _identifierField;
+        private static FieldInfo _globalLineIndexField;
+        private static PropertyInfo _consoleFlagsProperty;
     
         // Static constructor for reflection setup
         static ReadConsole()
@@ -99,6 +104,13 @@ namespace MCPForUnity.Editor.Tools
                 if (_lineField == null)
                     throw new Exception("Failed to reflect LogEntry.line");
 
+                // Optional identity fields are present across modern Unity versions. Keeping
+                // them optional preserves console reading on older editors; automatic-clear
+                // events and decreasing counts remain as fallbacks there.
+                _identifierField = logEntryType.GetField("identifier", instanceFlags);
+                _globalLineIndexField = logEntryType.GetField("globalLineIndex", instanceFlags);
+                _consoleFlagsProperty = logEntriesType.GetProperty("consoleFlags", staticFlags);
+
                 // (Calibration removed)
 
             }
@@ -115,6 +127,83 @@ namespace MCPForUnity.Editor.Tools
                     _getEntryMethod =
                         null;
                 _modeField = _messageField = _fileField = _lineField = null;
+            }
+        }
+
+        /// <summary>
+        /// Current console entry count, or false when the reflection setup failed. Used to bound
+        /// the console windows a test run occupies.
+        /// </summary>
+        internal static bool TryGetEntryCount(out int count)
+        {
+            return TryGetConsoleSnapshot(out count, out _);
+        }
+
+        /// <summary>
+        /// Reads both console size and a stable identity for its first entry. The identity lets
+        /// test-run windows detect a clear even when new messages restore or exceed the old count.
+        /// </summary>
+        internal static bool TryGetConsoleSnapshot(out int count, out string firstEntryIdentity)
+        {
+            count = 0;
+            firstEntryIdentity = null;
+            if (_startGettingEntriesMethod == null
+                || _endGettingEntriesMethod == null
+                || _getCountMethod == null
+                || _getEntryMethod == null)
+            {
+                return false;
+            }
+
+            bool started = false;
+            try
+            {
+                object startResult = _startGettingEntriesMethod.Invoke(null, null);
+                started = true;
+                count = startResult is int startCount
+                    ? startCount
+                    : (int)_getCountMethod.Invoke(null, null);
+                if (count > 0)
+                {
+                    Type logEntryType = typeof(EditorApplication).Assembly.GetType(
+                        "UnityEditor.LogEntry");
+                    object entry = Activator.CreateInstance(logEntryType);
+                    _getEntryMethod.Invoke(null, new object[] { 0, entry });
+                    firstEntryIdentity = GetEntryIdentity(entry);
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                McpLog.Error($"[ReadConsole] Failed to read console snapshot: {e.Message}");
+                return false;
+            }
+            finally
+            {
+                if (started)
+                {
+                    try
+                    {
+                        _endGettingEntriesMethod.Invoke(null, null);
+                    }
+                    catch (Exception e)
+                    {
+                        McpLog.Error($"[ReadConsole] Failed to finish console snapshot: {e.Message}");
+                    }
+                }
+            }
+        }
+
+        internal static bool IsConsoleFlagEnabled(int flag)
+        {
+            try
+            {
+                return _consoleFlagsProperty != null
+                       && ((int)_consoleFlagsProperty.GetValue(null) & flag) != 0;
+            }
+            catch (Exception)
+            {
+                return false;
             }
         }
 
@@ -170,6 +259,7 @@ namespace MCPForUnity.Editor.Tools
                     string filterText = p.Get("filterText");
                     string format = p.Get("format", "json").ToLower();
                     bool includeStacktrace = p.GetBool("includeStacktrace", false);
+                    bool excludeTestRuns = p.GetBool("excludeTestRuns", false);
 
                     if (types.Contains("all"))
                     {
@@ -183,7 +273,8 @@ namespace MCPForUnity.Editor.Tools
                         cursor,
                         filterText,
                         format,
-                        includeStacktrace
+                        includeStacktrace,
+                        excludeTestRuns
                     );
                 }
                 else
@@ -207,6 +298,8 @@ namespace MCPForUnity.Editor.Tools
             try
             {
                 _clearMethod.Invoke(null, null); // Static method, no instance, no parameters
+                // Every recorded test-run index now points at nothing; drop them.
+                TestRunConsoleWindows.NoteConsoleCleared();
                 return new SuccessResponse("Console cleared successfully.");
             }
             catch (Exception e)
@@ -226,6 +319,7 @@ namespace MCPForUnity.Editor.Tools
         /// <param name="filterText">Optional text filter (case-insensitive substring match).</param>
         /// <param name="format">Output format: "plain", "detailed", or "json".</param>
         /// <param name="includeStacktrace">Whether to include stack traces in the output.</param>
+        /// <param name="excludeTestRuns">Drop entries logged while a test run was in flight.</param>
         /// <returns>A success response with entries, or an error response.</returns>
         private static object GetConsoleEntries(
             List<string> types,
@@ -234,12 +328,14 @@ namespace MCPForUnity.Editor.Tools
             int? cursor,
             string filterText,
             string format,
-            bool includeStacktrace
+            bool includeStacktrace,
+            bool excludeTestRuns
         )
         {
             List<object> formattedEntries = new List<object>();
             int retrievedCount = 0;
             int totalMatches = 0;
+            int testRunEntries = 0;
             bool usePaging = pageSize.HasValue || cursor.HasValue;
             // pageSize defaults to 50 when omitted; count is the overall non-paging limit only
             int resolvedPageSize = Mathf.Clamp(pageSize ?? 50, 1, 500);
@@ -264,9 +360,29 @@ namespace MCPForUnity.Editor.Tools
                         "Could not find internal type UnityEditor.LogEntry during GetConsoleEntries."
                     );
                 object logEntryInstance = Activator.CreateInstance(logEntryType);
+                string firstEntryIdentity = null;
+                if (totalEntries > 0)
+                {
+                    _getEntryMethod.Invoke(null, new object[] { 0, logEntryInstance });
+                    firstEntryIdentity = GetEntryIdentity(logEntryInstance);
+                }
+                // Fold the whole snapshot in on every read. The first-entry identity detects
+                // clear-and-repopulate cycles that a count-only observation cannot see.
+                TestRunConsoleWindows.NoteConsoleSnapshot(totalEntries, firstEntryIdentity);
+                var testRunWindows = excludeTestRuns
+                    ? TestRunConsoleWindows.GetWindows(totalEntries, firstEntryIdentity)
+                    : null;
 
                 for (int i = 0; i < totalEntries; i++)
                 {
+                    // A test run's own errors are declared by its LogAssert.Expect calls, so a
+                    // green run leaves phantom breakage behind. Drop them before any other work.
+                    if (testRunWindows != null && TestRunConsoleWindows.Covers(testRunWindows, i))
+                    {
+                        testRunEntries++;
+                        continue;
+                    }
+
                     // Get the entry data into our instance using reflection
                     _getEntryMethod.Invoke(null, new object[] { i, logEntryInstance });
 
@@ -407,19 +523,55 @@ namespace MCPForUnity.Editor.Tools
                 };
 
                 return new SuccessResponse(
-                    $"Retrieved {formattedEntries.Count} log entries.",
+                    DescribeResult(formattedEntries.Count, testRunEntries),
                     payload
                 );
             }
 
             // Return the filtered and formatted list (might be empty)
             return new SuccessResponse(
-                $"Retrieved {formattedEntries.Count} log entries.",
+                DescribeResult(formattedEntries.Count, testRunEntries),
                 formattedEntries
             );
         }
 
+        private static string GetEntryIdentity(object entry)
+        {
+            if (entry == null) return null;
+
+            // FNV-1a over stable entry fields keeps SessionState small and remains deterministic
+            // across domain reloads. globalLineIndex distinguishes identical messages when Unity
+            // preserves its monotonic index; the payload fields cover versions that reset it.
+            var value = new StringBuilder();
+            value.Append(_globalLineIndexField?.GetValue(entry)).Append('\0')
+                .Append(_identifierField?.GetValue(entry)).Append('\0')
+                .Append(_modeField?.GetValue(entry)).Append('\0')
+                .Append(_fileField?.GetValue(entry)).Append('\0')
+                .Append(_lineField?.GetValue(entry)).Append('\0')
+                .Append(_messageField?.GetValue(entry));
+
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offset;
+            unchecked
+            {
+                for (int i = 0; i < value.Length; i++)
+                {
+                    hash ^= value[i];
+                    hash *= prime;
+                }
+            }
+            return hash.ToString("X16");
+        }
+
         // --- Internal Helpers ---
+
+        private static string DescribeResult(int returned, int testRunEntries)
+        {
+            return testRunEntries > 0
+                ? $"Retrieved {returned} log entries ({testRunEntries} from test runs excluded)."
+                : $"Retrieved {returned} log entries.";
+        }
 
         // UnityEditor.ConsoleWindow.Mode flags. These values have remained stable across the
         // supported Unity versions (2021.3+). Keep context flags separate from LogType: for
