@@ -1,0 +1,8 @@
+{
+  "inputs": [
+    "Assets",
+    "Packages",
+    "ProjectSettings",
+    "../../MCPForUnity"
+  ]
+}
