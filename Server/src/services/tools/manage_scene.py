@@ -90,8 +90,10 @@ async def manage_scene(
                      "'count' times or nothing is written. Omit for a pure discard-and-reload of a file "
                      "already changed on disk."] | None = None,
     discard_unsaved: Annotated[bool | str,
-                               "For apply_external_edit: true to drop the open scene's unsaved in-memory "
-                               "changes, which the rewrite would otherwise refuse to discard."] | None = None,
+                               "For load (single mode) and apply_external_edit: true to drop unsaved "
+                               "in-memory changes, which both otherwise refuse to discard. A single load "
+                               "checks every loaded scene, not only the active one. Rejected by other "
+                               "actions and by additive loads."] | None = None,
     dry_run: Annotated[bool | str,
                        "For apply_external_edit: true to report which anchors matched without writing."] | None = None,
 ) -> dict[str, Any]:

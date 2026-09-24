@@ -38,7 +38,7 @@ Performs CRUD operations on Unity scenes. Read-only actions: get_hierarchy, get_
 | `template` | `str \| None` | — | For create: scene template ('empty', 'default', '3d_basic', '2d_basic'). Omit for empty scene. |
 | `auto_repair` | `bool \| str \| None` | — | For validate: true to auto-fix missing scripts (undoable). |
 | `edits` | `list[dict[str, Any]] \| None` | — | For apply_external_edit: literal replacements applied to the scene file, each {'old_text': ..., 'new_text': ..., 'count': 1}. Every anchor must match exactly 'count' times or nothing is written. Omit for a pure discard-and-reload of a file already changed on disk. |
-| `discard_unsaved` | `bool \| str \| None` | — | For apply_external_edit: true to drop the open scene's unsaved in-memory changes, which the rewrite would otherwise refuse to discard. |
+| `discard_unsaved` | `bool \| str \| None` | — | For load (single mode) and apply_external_edit: true to drop unsaved in-memory changes, which both otherwise refuse to discard. A single load checks every loaded scene, not only the active one. Rejected by other actions and by additive loads. |
 | `dry_run` | `bool \| str \| None` | — | For apply_external_edit: true to report which anchors matched without writing. |
 
 ## Returns

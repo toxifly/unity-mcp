@@ -98,8 +98,13 @@ def active():
     is_flag=True,
     help="Load by build index instead of path/name."
 )
+@click.option(
+    "--discard-unsaved",
+    is_flag=True,
+    help="Drop unsaved changes in every loaded scene; without it a dirty scene blocks the load."
+)
 @handle_unity_errors
-def load(scene: str, by_index: bool):
+def load(scene: str, by_index: bool, discard_unsaved: bool):
     """Load a scene.
 
     \b
@@ -107,6 +112,7 @@ def load(scene: str, by_index: bool):
         unity-mcp scene load "Assets/Scenes/Main.unity"
         unity-mcp scene load "MainScene"
         unity-mcp scene load 0 --by-index
+        unity-mcp scene load "Assets/Scenes/Main.unity" --discard-unsaved
     """
     config = get_config()
 
@@ -123,6 +129,8 @@ def load(scene: str, by_index: bool):
             params["path"] = scene
         else:
             params["name"] = scene
+    if discard_unsaved:
+        params["discard_unsaved"] = True
 
     result = run_command("manage_scene", params, config)
     click.echo(format_output(result, config.format))

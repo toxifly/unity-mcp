@@ -464,6 +464,18 @@ class TestSceneCommands:
                 cli, ["scene", "load", "Assets/Scenes/Main.unity"])
             assert result.exit_code == 0
 
+    def test_scene_load_discard_unsaved(self, runner, mock_unity_response):
+        """--discard-unsaved is forwarded only when given."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, ["scene", "load", "Assets/Scenes/Main.unity"])
+            assert result.exit_code == 0
+            assert "discard_unsaved" not in mock_run.call_args[0][1]
+
+            result = runner.invoke(
+                cli, ["scene", "load", "Assets/Scenes/Main.unity", "--discard-unsaved"])
+            assert result.exit_code == 0
+            assert mock_run.call_args[0][1]["discard_unsaved"] is True
+
     def test_scene_save(self, runner, mock_unity_response):
         """Test scene save command."""
         with patch("cli.commands.scene.run_command", return_value=mock_unity_response):

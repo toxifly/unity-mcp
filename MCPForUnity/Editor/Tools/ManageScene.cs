@@ -64,6 +64,7 @@ namespace MCPForUnity.Editor.Tools
             public bool? additive { get; set; }          // for load additive mode
             public string template { get; set; }         // for create with template
             public bool? autoRepair { get; set; }        // for validate with auto-repair
+            public bool? discardUnsaved { get; set; }    // for load / apply_external_edit
         }
 
         private static float[] ParseFloatArray(JToken token)
@@ -142,6 +143,7 @@ namespace MCPForUnity.Editor.Tools
                 additive = ParamCoercion.CoerceBoolNullable(p["additive"]),
                 template = (p["template"])?.ToString()?.ToLowerInvariant(),
                 autoRepair = ParamCoercion.CoerceBoolNullable(p["autoRepair"] ?? p["auto_repair"]),
+                discardUnsaved = ParamCoercion.CoerceBoolNullable(p["discardUnsaved"] ?? p["discard_unsaved"]),
             };
         }
 
@@ -201,6 +203,14 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse("Action parameter is required.");
             }
 
+            // Reject rather than ignore: a caller passing discard_unsaved believes changes will be
+            // dropped, so an action that cannot honour it must say so.
+            if (cmd.discardUnsaved == true && action != "load" && action != "apply_external_edit")
+            {
+                return new ErrorResponse(
+                    $"'discard_unsaved' only applies to 'load' and 'apply_external_edit', not '{action}'.");
+            }
+
             string sceneFileName = string.IsNullOrEmpty(name) ? null : $"{name}.unity";
             // Construct full system path correctly: ProjectRoot/Assets/relativeDir/sceneFileName
             string fullPathDir = Path.Combine(Application.dataPath, relativeDir); // Combine with Assets path (Application.dataPath ends in Assets)
@@ -247,14 +257,18 @@ namespace MCPForUnity.Editor.Tools
                         loadPath = AssetPathUtility.NormalizeSeparators(
                             path.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase)
                                 ? path : "Assets/" + path);
+                    bool discardUnsaved = cmd.discardUnsaved == true;
+                    if (cmd.additive == true && discardUnsaved)
+                        return new ErrorResponse(
+                            "An additive load keeps every open scene, so it discards nothing; drop 'discard_unsaved'.");
                     if (!string.IsNullOrEmpty(loadPath))
                     {
                         if (cmd.additive == true)
                             return LoadSceneAdditive(loadPath);
-                        return LoadScene(loadPath);
+                        return LoadScene(loadPath, discardUnsaved);
                     }
                     else if (buildIndex.HasValue)
-                        return LoadScene(buildIndex.Value);
+                        return LoadScene(buildIndex.Value, discardUnsaved);
                     else
                         return new ErrorResponse(
                             "Either 'name'/'path' or 'buildIndex' must be provided for 'load' action."
@@ -377,7 +391,26 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static object LoadScene(string relativePath)
+        /// <summary>
+        /// A Single-mode OpenScene silently drops unsaved changes in EVERY loaded scene, not only
+        /// the active one, so each dirty scene must be either refused or explicitly discarded.
+        /// </summary>
+        private static ErrorResponse RefuseDirtyScenesUnlessDiscarding(bool discardUnsaved, out List<string> dirtyScenes)
+        {
+            dirtyScenes = new List<string>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
+            {
+                Scene scene = SceneManager.GetSceneAt(i);
+                if (scene.isLoaded && scene.isDirty)
+                    dirtyScenes.Add(string.IsNullOrEmpty(scene.path) ? $"{scene.name} (untitled)" : scene.path);
+            }
+            if (discardUnsaved || dirtyScenes.Count == 0) return null;
+            return new ErrorResponse(
+                $"Loading would discard unsaved changes in: {string.Join(", ", dirtyScenes)}. "
+                + "Save them first (manage_scene action=save), or pass discard_unsaved=true to drop them.");
+        }
+
+        private static object LoadScene(string relativePath, bool discardUnsaved)
         {
             if (
                 !File.Exists(
@@ -394,16 +427,8 @@ namespace MCPForUnity.Editor.Tools
                 return new ErrorResponse($"Scene file not found at '{relativePath}'.");
             }
 
-            // Check for unsaved changes in the current scene
-            if (EditorSceneManager.GetActiveScene().isDirty)
-            {
-                // Optionally prompt the user or save automatically before loading
-                return new ErrorResponse(
-                    "Current scene has unsaved changes. Please save or discard changes before loading a new scene."
-                );
-                // Example: bool saveOK = EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo();
-                // if (!saveOK) return new ErrorResponse("Load cancelled by user.");
-            }
+            ErrorResponse refusal = RefuseDirtyScenesUnlessDiscarding(discardUnsaved, out List<string> discarded);
+            if (refusal != null) return refusal;
 
             try
             {
@@ -414,6 +439,7 @@ namespace MCPForUnity.Editor.Tools
                     {
                         path = relativePath,
                         name = Path.GetFileNameWithoutExtension(relativePath),
+                        discardedUnsaved = discarded,
                     }
                 );
             }
@@ -423,7 +449,7 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
-        private static object LoadScene(int buildIndex)
+        private static object LoadScene(int buildIndex, bool discardUnsaved)
         {
             if (buildIndex < 0 || buildIndex >= SceneManager.sceneCountInBuildSettings)
             {
@@ -432,13 +458,8 @@ namespace MCPForUnity.Editor.Tools
                 );
             }
 
-            // Check for unsaved changes
-            if (EditorSceneManager.GetActiveScene().isDirty)
-            {
-                return new ErrorResponse(
-                    "Current scene has unsaved changes. Please save or discard changes before loading a new scene."
-                );
-            }
+            ErrorResponse refusal = RefuseDirtyScenesUnlessDiscarding(discardUnsaved, out List<string> discarded);
+            if (refusal != null) return refusal;
 
             try
             {
@@ -451,6 +472,7 @@ namespace MCPForUnity.Editor.Tools
                         path = scenePath,
                         name = Path.GetFileNameWithoutExtension(scenePath),
                         buildIndex = buildIndex,
+                        discardedUnsaved = discarded,
                     }
                 );
             }
