@@ -438,6 +438,29 @@ namespace MCPForUnity.Tests.EditMode.Tools
         }
 
         [Test]
+        public void ASourceThatIsUnityYamlButNotASceneIsRejected()
+        {
+            byte[] before = File.ReadAllBytes(FullPath);
+            string snapshotPath = Path.Combine(Path.GetTempPath(), $"mcp-scene-{Guid.NewGuid():N}.prefab");
+            File.WriteAllText(snapshotPath,
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: NotAScene\n");
+            try
+            {
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                var result = Invoke(p);
+
+                Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+                StringAssert.Contains("is not a Unity scene", result.Value<string>("error"));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
         public void ASourceTogetherWithEditsIsRejected()
         {
             byte[] before = File.ReadAllBytes(FullPath);

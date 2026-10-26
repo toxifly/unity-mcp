@@ -143,7 +143,7 @@ namespace MCPForUnity.Editor.Services
     /// Concrete implementation of <see cref="ITestRunnerService"/>.
     /// Coordinates Unity Test Runner operations and produces structured results.
     /// </summary>
-    internal sealed class TestRunnerService : ITestRunnerService, ICallbacks, IDisposable
+    internal sealed class TestRunnerService : ITestRunnerService, IErrorCallbacks, IDisposable
     {
         private static readonly TestMode[] AllModes = { TestMode.EditMode, TestMode.PlayMode };
 
@@ -185,16 +185,19 @@ namespace MCPForUnity.Editor.Services
             }
         }
 
-        public async Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null)
+        public bool HasPendingRun => _runCompletionSource != null && !_runCompletionSource.Task.IsCompleted;
+
+        public async Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null, string jobId = null)
         {
             await _operationLock.WaitAsync().ConfigureAwait(true);
             Task<TestRunResult> runTask;
+            TaskCompletionSource<TestRunResult> createdSource = null;
             bool adjustedPlayModeOptions = false;
             bool originalEnterPlayModeOptionsEnabled = false;
             EnterPlayModeOptions originalEnterPlayModeOptions = EnterPlayModeOptions.None;
             try
             {
-                if (_runCompletionSource != null && !_runCompletionSource.Task.IsCompleted)
+                if (HasPendingRun)
                 {
                     throw new InvalidOperationException("A Unity test run is already in progress.");
                 }
@@ -217,6 +220,18 @@ namespace MCPForUnity.Editor.Services
                     testNames = ExplicitTestExclusion.TestNamesExcludingExplicit(filterOptions, root);
                 }
 
+                // run_tests refuses unsaved scenes up front; this re-check covers anything dirtied
+                // while the run was being prepared (the [Explicit] lookup above spans editor frames).
+                // Saving here instead would write state nobody chose to keep, and leaving it would
+                // let the Test Framework's save prompt block the main thread the bridge pumps on.
+                IReadOnlyList<string> unsaved = UnsavedScenes();
+                if (unsaved.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"unsaved_scenes: {string.Join(", ", unsaved)} changed while the run was being prepared. "
+                        + "Save or discard the changes, then rerun.");
+                }
+
                 if (mode == TestMode.PlayMode)
                 {
                     // PlayMode runs transition the editor into play across multiple update ticks. Unity's
@@ -232,7 +247,8 @@ namespace MCPForUnity.Editor.Services
                 }
 
                 _leafResults.Clear();
-                _runCompletionSource = new TaskCompletionSource<TestRunResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                createdSource = new TaskCompletionSource<TestRunResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _runCompletionSource = createdSource;
                 // Mark running immediately so readiness snapshots reflect the busy state even before callbacks fire.
                 TestRunStatus.MarkStarted(mode);
 
@@ -246,18 +262,6 @@ namespace MCPForUnity.Editor.Services
                 };
                 var settings = new ExecutionSettings(filter);
 
-                // run_tests refuses unsaved scenes up front; this re-check covers anything dirtied
-                // while the run was being prepared (the [Explicit] lookup above spans editor frames).
-                // Saving here instead would write state nobody chose to keep, and leaving it would
-                // let the Test Framework's save prompt block the main thread the bridge pumps on.
-                IReadOnlyList<string> unsaved = UnsavedScenes();
-                if (unsaved.Count > 0)
-                {
-                    throw new InvalidOperationException(
-                        $"unsaved_scenes: {string.Join(", ", unsaved)} changed while the run was being prepared. "
-                        + "Save or discard the changes, then rerun.");
-                }
-
                 // Apply no-throttling preemptively for PlayMode tests. This ensures Unity
                 // isn't throttled during the Play mode transition (which requires multiple
                 // editor frames). Without this, unfocused Unity may never reach RunStarted
@@ -265,17 +269,41 @@ namespace MCPForUnity.Editor.Services
                 if (mode == TestMode.PlayMode)
                 {
                     TestRunnerNoThrottle.ApplyNoThrottlingPreemptive();
-                    PlayModeTestAssemblyCache.Reset();
+                    if (!PlayModeTestAssemblyCache.Reset())
+                    {
+                        McpLog.Warn($"[TestRunnerService] {PlayModeTestAssemblyCache.CacheFieldName} not found on "
+                            + $"{PlayModeTestAssemblyCache.ProviderTypeName}; with domain reload disabled, PlayMode "
+                            + "runs after the first may load no test assemblies.");
+                    }
+                }
+
+                // The job's init window opens here, not while this run waited on the lock or read the
+                // test tree; a job cleared meanwhile must not get a run nobody tracks.
+                if (jobId != null && !TestJobManager.OnRunDispatching(jobId))
+                {
+                    throw new InvalidOperationException($"Test job {jobId} ended before its run was dispatched.");
                 }
 
                 _testRunnerApi.Execute(settings);
 
-                runTask = _runCompletionSource.Task;
+                runTask = createdSource.Task;
             }
             catch
             {
-                // Ensure the status is cleared if we failed to start the run.
-                TestRunStatus.MarkFinished();
+                // A run that never dispatched must not leave a pending completion source behind:
+                // HasPendingRun would refuse every later run and clear_stuck could not tell it apart
+                // from a live one. A source and busy status set by an earlier call are not this call's
+                // to end.
+                if (createdSource != null)
+                {
+                    if (_runCompletionSource == createdSource)
+                    {
+                        _runCompletionSource = null;
+                    }
+                    createdSource.TrySetCanceled();
+                    TestRunStatus.MarkFinished();
+                }
+
                 if (adjustedPlayModeOptions)
                 {
                     RestoreEnterPlayModeOptions(originalEnterPlayModeOptionsEnabled, originalEnterPlayModeOptions);
@@ -393,6 +421,28 @@ namespace MCPForUnity.Editor.Services
             if (_runCompletionSource != null)
             {
                 _runCompletionSource.TrySetResult(payload);
+                _runCompletionSource = null;
+            }
+        }
+
+        /// <summary>
+        /// The Test Framework reports a run that died in one of its own tasks (a pre-run step, a
+        /// build, a prebuild setup) here instead of through RunFinished, which then never arrives.
+        /// </summary>
+        public void OnError(string message)
+        {
+            McpLog.Warn($"[TestRunnerService] Test run failed: {message}");
+            TestRunStatus.MarkFinished();
+            TestJobManager.OnRunFailed(message);
+
+            if (_runCompletionSource == null && PlayModeOptionsGuard.IsPending)
+            {
+                PlayModeOptionsGuard.Restore();
+            }
+
+            if (_runCompletionSource != null)
+            {
+                _runCompletionSource.TrySetException(new InvalidOperationException(message));
                 _runCompletionSource = null;
             }
         }

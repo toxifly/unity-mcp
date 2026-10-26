@@ -346,7 +346,7 @@ def move_to(target: str, scene_name: str):
     "source_path",
     default=None,
     help=(
-        "Unity YAML file whose bytes replace the scene verbatim, e.g. a snapshot to restore. "
+        "Unity scene file whose bytes replace the scene verbatim, e.g. a snapshot to restore. "
         "Absolute, or relative to the project root. Exclusive with --edits."
     ),
 )

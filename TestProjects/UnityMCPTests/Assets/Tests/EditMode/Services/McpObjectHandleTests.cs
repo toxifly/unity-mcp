@@ -56,6 +56,31 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void HandlesSurviveLosingTheInMemoryTableAsOnADomainReload()
+        {
+            var tables = new[] { "Handles", "Entities" }
+                .Select(name => _get.DeclaringType.GetField(name, BindingFlags.NonPublic | BindingFlags.Static))
+                .ToArray();
+            if (tables.Any(field => field == null))
+                Assert.Ignore("Only Unity 6000.6+ keeps a handle table.");
+
+            var go = new GameObject("MCP reloaded handle");
+            try
+            {
+                int handle = Handle(go);
+                foreach (var table in tables)
+                    ((System.Collections.IDictionary)table.GetValue(null)).Clear();
+
+                Assert.AreSame(go, Resolve(handle));
+                Assert.AreEqual(handle, Handle(go));
+                foreach (var table in tables)
+                    ((System.Collections.IDictionary)table.GetValue(null)).Clear();
+                Assert.AreEqual(handle, Handle(go));
+            }
+            finally { Object.DestroyImmediate(go); }
+        }
+
+        [Test]
         public void NullAndUnknownHandlesResolveToNull()
         {
             Assert.AreEqual(0, Handle(null));

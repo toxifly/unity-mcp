@@ -102,9 +102,9 @@ namespace MCPForUnity.Editor.Tools
         /// where only new blocks and blocks the <see cref="SceneMutationLedger"/> marks as
         /// intentionally mutated come from that serialization; everything else keeps its on-disk
         /// bytes. This is what makes the save "scoped": ambient drift from [ExecuteAlways]
-        /// previews or layout-driven RectTransforms is reported, not baked in. A save that writes
-        /// leaves the scene clean and matching its file: with nothing held back Unity saves it
-        /// itself, otherwise the scene is reopened from the merged file.
+        /// previews or layout-driven RectTransforms is reported, not baked in. The scene always ends
+        /// clean and matching its file: with nothing held back Unity saves it itself, otherwise it
+        /// is reopened from the (merged) file.
         /// </summary>
         private static object MergeSave(Scene scene, bool rejectDrift, object[] dirtyObjects)
         {
@@ -151,30 +151,50 @@ namespace MCPForUnity.Editor.Tools
             bool changed = !string.Equals(merge.MergedText, NormalizeNewlines(diskText), StringComparison.Ordinal);
             bool written = false;
             bool reloaded = false;
-            if (!driftKeptOut)
+            if (changed && !driftKeptOut)
             {
-                // Nothing is held back, so memory is exactly what the merge would write. Unity's own
-                // save writes it and leaves the scene clean, with no external change to notice.
-                if (changed || scene.isDirty)
+                // Nothing is held back, so memory holds exactly the merge's content. Unity's own save
+                // writes it and leaves the scene clean with every handle valid, at the cost of
+                // Unity's canonical block order where the file had another.
+                if (!EditorSceneManager.SaveScene(scene))
+                    return Error("SAVE_FAILED", $"Unity did not save scene '{scenePath}'.");
+                written = true;
+            }
+            else if (changed || scene.isDirty)
+            {
+                // A dirty scene whose serialization is the file byte for byte only needs its flag
+                // cleared, and Unity's save rewrites identical bytes. Anything else -- drift held
+                // back, or the same content in another block order -- is reopened from the file.
+                if (!changed && !driftKeptOut
+                    && string.Equals(NormalizeNewlines(tempText), NormalizeNewlines(diskText), StringComparison.Ordinal))
                 {
                     if (!EditorSceneManager.SaveScene(scene))
                         return Error("SAVE_FAILED", $"Unity did not save scene '{scenePath}'.");
-                    written = true;
                 }
-            }
-            else if (changed)
-            {
-                if (!TryWriteClosedAndReopen(scene, scenePath, merge.MergedText, out scene, out string reopenError))
-                    return Error("SAVE_FAILED", reopenError);
-                written = true;
-                reloaded = true;
+                else
+                {
+                    bool reopenedScene = TryWriteClosedAndReopen(scene, scenePath, changed ? merge.MergedText : null,
+                        out scene, out written, out string reopenError);
+                    if (!reopenedScene)
+                    {
+                        // The file already holds the ledgered edits; keeping their entries would
+                        // re-merge them into whatever the scene holds next.
+                        if (written)
+                            SceneMutationLedger.Clear(scenePath);
+                        return Error("SAVE_FAILED", reopenError, new { scene_written = written });
+                    }
+                    reloaded = true;
+                }
             }
             SceneMutationLedger.Clear(scenePath);
 
-            string driftHint = !driftKeptOut ? string.Empty
+            string driftHint = driftKeptOut
+                ? reloaded
+                    ? " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits) and the scene was reopened from its file, which discarded them from memory; object handles from before the save are stale. If some were intentional, redo them and retry with unscoped_changes=include."
+                    : " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits); if some were intentional, save via the editor or retry with unscoped_changes=include."
                 : reloaded
-                    ? " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits) and the scene was reopened from the merged file, which discarded them from memory; object handles from before the save are stale. If some were intentional, redo them and retry with unscoped_changes=include."
-                    : " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits); if some were intentional, save via the editor or retry with unscoped_changes=include.";
+                    ? " The scene was reopened from its file to clear its unsaved flag; object handles from before the save are stale."
+                    : string.Empty;
             return new SuccessResponse(
                 (changed
                     ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; {merge.BlocksDriftSuppressed} drifted block(s) left untouched."
@@ -201,14 +221,17 @@ namespace MCPForUnity.Editor.Tools
         }
 
         /// <summary>
-        /// Writes the merged file while the scene is closed, then reopens it. Writing the file of an
-        /// open scene that still holds other in-memory changes raises Unity's modal "modified
-        /// externally" prompt, which blocks the main thread the bridge runs on (see
-        /// <see cref="SceneExternalEdit"/>). Afterwards memory matches disk.
+        /// Writes the merged file while the scene is closed, then reopens it; a null
+        /// <paramref name="text"/> only reopens. Writing the file of an open scene that still holds
+        /// other in-memory changes raises Unity's modal "modified externally" prompt, which blocks
+        /// the main thread the bridge runs on (see <see cref="SceneExternalEdit"/>). Afterwards
+        /// memory matches disk.
         /// </summary>
-        private static bool TryWriteClosedAndReopen(Scene scene, string scenePath, string text, out Scene reopened, out string error)
+        private static bool TryWriteClosedAndReopen(Scene scene, string scenePath, string text,
+            out Scene reopened, out bool written, out string error)
         {
             reopened = default;
+            written = false;
             error = null;
             SceneSetup[] setup = EditorSceneManager.GetSceneManagerSetup();
             bool wasActive = SceneManager.GetActiveScene() == scene;
@@ -227,12 +250,14 @@ namespace MCPForUnity.Editor.Tools
                 EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             }
 
-            bool written = false;
             try
             {
-                File.WriteAllText(scenePath, text);
-                written = true;
-                AssetDatabase.ImportAsset(scenePath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                if (text != null)
+                {
+                    File.WriteAllText(scenePath, text);
+                    written = true;
+                    AssetDatabase.ImportAsset(scenePath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                }
             }
             catch (Exception exception)
             {
@@ -243,21 +268,29 @@ namespace MCPForUnity.Editor.Tools
             finally
             {
                 // Reopen whatever is on disk, so the editor never stays on the stand-in scene.
-                if (othersLoaded)
+                try
                 {
-                    reopened = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
-                    if (wasActive)
-                        SceneManager.SetActiveScene(reopened);
+                    if (othersLoaded)
+                    {
+                        reopened = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
+                        if (wasActive)
+                            SceneManager.SetActiveScene(reopened);
+                    }
+                    else
+                    {
+                        EditorSceneManager.RestoreSceneManagerSetup(setup);
+                        reopened = SceneManager.GetSceneByPath(scenePath);
+                    }
                 }
-                else
+                catch (Exception exception)
                 {
-                    EditorSceneManager.RestoreSceneManagerSetup(setup);
-                    reopened = SceneManager.GetSceneByPath(scenePath);
+                    error = (error == null ? string.Empty : error + " ")
+                        + $"'{scenePath}' could not be reopened: {exception.Message}";
                 }
             }
 
             if (error == null && !(reopened.IsValid() && reopened.isLoaded))
-                error = $"The merged scene was written but '{scenePath}' could not be reopened.";
+                error = $"'{scenePath}' could not be reopened.";
             return error == null;
         }
 

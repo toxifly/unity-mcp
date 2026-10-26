@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Services;
 using MCPForUnity.Editor.Services.Server;
@@ -214,6 +215,11 @@ namespace MCPForUnity.Editor.Helpers
         /// <exception cref="InvalidOperationException">Server Source is unset or not a local Server/ directory.</exception>
         public static string GetServerProjectDirectory()
         {
+            return ResolveServerProjectDirectory(persistCorrection: true);
+        }
+
+        private static string ResolveServerProjectDirectory(bool persistCorrection)
+        {
             string sourceOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "").Trim();
             if (string.IsNullOrEmpty(sourceOverride))
             {
@@ -225,13 +231,15 @@ namespace MCPForUnity.Editor.Helpers
             string resolved = ResolveLocalServerPath(sourceOverride);
             ValidateLocalServerSourceOverride(sourceOverride, resolved);
             // Persist the corrected path so future reads are consistent
-            if (resolved != sourceOverride)
+            if (persistCorrection && resolved != sourceOverride)
             {
                 EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, resolved);
                 McpLog.Info($"Auto-corrected server source override from '{sourceOverride}' to '{resolved}'");
             }
 
-            return Path.GetFullPath(GetLocalServerCheckPath(resolved));
+            // Validation guarantees a directory named Server, so trimming never empties a root.
+            return Path.GetFullPath(GetLocalServerCheckPath(resolved))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         /// <summary>
@@ -268,13 +276,14 @@ namespace MCPForUnity.Editor.Helpers
 
         /// <summary>
         /// <see cref="GetServerProjectDirectory"/>, or null when Server Source is unset or invalid.
+        /// Never rewrites the setting, so status reads stay side-effect free.
         /// MUST be called from the main thread (reads EditorPrefs).
         /// </summary>
         public static string TryGetServerProjectDirectory()
         {
             try
             {
-                return GetServerProjectDirectory();
+                return ResolveServerProjectDirectory(persistCorrection: false);
             }
             catch (InvalidOperationException)
             {
@@ -282,10 +291,47 @@ namespace MCPForUnity.Editor.Helpers
             }
         }
 
-        /// <summary>Joins command-line parts, quoting each part that contains whitespace.</summary>
+        /// <summary>
+        /// Joins command-line parts so CommandLineToArgvW (and .NET's argument parser) reads each
+        /// back unchanged: parts that are empty or contain whitespace or quotes are quoted, embedded
+        /// quotes are escaped, and backslashes are doubled where they precede a quote.
+        /// </summary>
         public static string JoinCommandLine(IEnumerable<string> parts)
         {
-            return string.Join(" ", parts.Select(part => part.Any(char.IsWhiteSpace) ? $"\"{part}\"" : part));
+            var line = new StringBuilder();
+            foreach (string part in parts)
+            {
+                if (line.Length > 0)
+                    line.Append(' ');
+
+                if (part.Length > 0 && !part.Any(c => char.IsWhiteSpace(c) || c == '"'))
+                {
+                    line.Append(part);
+                    continue;
+                }
+
+                line.Append('"');
+                int backslashes = 0;
+                foreach (char c in part)
+                {
+                    if (c == '\\')
+                    {
+                        backslashes++;
+                        continue;
+                    }
+
+                    // Backslashes are literal unless they precede a quote.
+                    line.Append('\\', c == '"' ? backslashes * 2 + 1 : backslashes);
+                    line.Append(c);
+                    backslashes = 0;
+                }
+
+                // Doubled so trailing backslashes do not escape the closing quote.
+                line.Append('\\', backslashes * 2);
+                line.Append('"');
+            }
+
+            return line.ToString();
         }
 
         /// <summary>

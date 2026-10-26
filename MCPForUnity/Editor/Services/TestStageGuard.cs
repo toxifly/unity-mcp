@@ -21,19 +21,31 @@ namespace MCPForUnity.Editor.Services
             string project = Path.GetDirectoryName(Application.dataPath);
             string configPath = Path.Combine(project, "ProjectSettings", "McpTestStages.json");
             if (!File.Exists(configPath)) return;
-            var config = JsonConvert.DeserializeObject<Configuration>(File.ReadAllText(configPath));
-            if (config?.Inputs == null || config.Inputs.Length == 0)
-                throw new InvalidOperationException("McpTestStages.json must list non-empty inputs.");
+            Configuration config;
+            try { config = JsonConvert.DeserializeObject<Configuration>(File.ReadAllText(configPath)); }
+            catch (JsonException ex)
+            {
+                throw new InvalidOperationException(
+                    "test_stage_config_invalid: ProjectSettings/McpTestStages.json is not valid JSON: " + ex.Message);
+            }
+            if (config?.Inputs == null || config.Inputs.Length == 0 || config.Inputs.Any(string.IsNullOrWhiteSpace))
+                throw new InvalidOperationException(
+                    "test_stage_config_invalid: ProjectSettings/McpTestStages.json must list non-empty inputs.");
 
             string statePath = Path.Combine(project, "Library", "McpTestStages.json");
-            var state = File.Exists(statePath)
-                ? JsonConvert.DeserializeObject<TestStageState>(File.ReadAllText(statePath))
-                : new TestStageState();
-            if (state == null) throw new InvalidOperationException("Invalid test-stage state: " + statePath);
+            TestStageState state;
+            try
+            {
+                state = File.Exists(statePath)
+                    ? JsonConvert.DeserializeObject<TestStageState>(File.ReadAllText(statePath))
+                    : new TestStageState();
+            }
+            catch (JsonException) { state = null; }
+            if (state == null)
+                throw new InvalidOperationException("test_stage_state_invalid: " + statePath
+                    + " is unreadable. Deleting it resets the recorded focused pass and failed suite.");
             var previous = state.PendingJob == null ? null : TestJobManager.GetJob(state.PendingJob);
-            bool passed = previous?.Status == TestJobStatus.Succeeded
-                && previous.Summary?.Passed > 0 && previous.Summary.Failed == 0;
-            state.Reconcile(Fingerprint(project, config.Inputs), passed);
+            state.Reconcile(Fingerprint(project, config.Inputs), Outcome(previous));
             bool focused = HasSelection(filters?.TestNames) || HasSelection(filters?.GroupNames)
                 || HasSelection(filters?.CategoryNames);
             string refusal = state.Refusal(focused, mode);
@@ -45,6 +57,18 @@ namespace MCPForUnity.Editor.Services
             state.PendingFocused = focused;
             state.PendingMode = mode;
             Save(statePath, state);
+        }
+
+        // A job that is gone cannot vouch for anything, so it counts against the stage; one that
+        // ended without executing a test (refused, never dispatched, failed to start) counts for neither.
+        internal static TestStageOutcome Outcome(TestJob job)
+        {
+            if (job == null) return TestStageOutcome.Failed;
+            if (job.Status == TestJobStatus.Succeeded && job.Summary?.Passed > 0 && job.Summary.Failed == 0)
+                return TestStageOutcome.Passed;
+            bool executedNothing = job.Status != TestJobStatus.Running && job.CompletedTests == 0
+                && (job.Summary == null || job.Summary.Passed + job.Summary.Failed == 0);
+            return executedNothing ? TestStageOutcome.NotRun : TestStageOutcome.Failed;
         }
 
         private static bool HasSelection(string[] values) => values != null
@@ -70,7 +94,8 @@ namespace MCPForUnity.Editor.Services
                     string path = Path.GetFullPath(Path.Combine(project, input));
                     var files = File.Exists(path) ? new[] { path }
                         : Directory.Exists(path) ? EnumerateInputs(path).ToArray()
-                        : throw new FileNotFoundException("Missing test-stage input", path);
+                        : throw new InvalidOperationException("test_stage_input_missing: '" + input
+                            + "' listed in ProjectSettings/McpTestStages.json does not exist (" + path + ").");
                     foreach (string file in files.OrderBy(p => p, StringComparer.Ordinal))
                     {
                         byte[] name = Encoding.UTF8.GetBytes(file);

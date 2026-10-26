@@ -90,7 +90,7 @@ async def manage_scene(
                      "'count' times or nothing is written. Omit for a pure discard-and-reload of a file "
                      "already changed on disk."] | None = None,
     source_path: Annotated[str,
-                           "For apply_external_edit: a Unity YAML file (absolute, or relative to the project "
+                           "For apply_external_edit: a Unity scene file (absolute, or relative to the project "
                            "root) whose bytes replace the scene verbatim, e.g. a snapshot to restore. "
                            "Exclusive with 'edits'. Never write an open scene's file directly; pass the "
                            "snapshot here instead."] | None = None,

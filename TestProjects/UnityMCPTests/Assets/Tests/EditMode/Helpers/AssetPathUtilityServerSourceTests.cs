@@ -81,6 +81,25 @@ namespace MCPForUnityTests.Editor.Helpers
         }
 
         [Test]
+        public void TryGetServerProjectDirectory_ResolvesARepositoryRootWithoutRewritingTheSetting()
+        {
+            using var source = new TempServerSource();
+            EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, source.Root);
+
+            Assert.AreEqual(source.ServerDirectory, AssetPathUtility.TryGetServerProjectDirectory());
+            Assert.AreEqual(source.Root, EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride));
+        }
+
+        [Test]
+        public void GetServerProjectDirectory_DropsATrailingSeparator()
+        {
+            using var source = new TempServerSource();
+            EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, source.ServerDirectory + Path.DirectorySeparatorChar);
+
+            Assert.AreEqual(source.ServerDirectory, AssetPathUtility.GetServerProjectDirectory());
+        }
+
+        [Test]
         public void GetServerProjectDirectory_ResolvesEscapedFileUriAndPreservesSource()
         {
             using var source = new TempServerSource($"unity mcp source {Guid.NewGuid():N}");
@@ -127,6 +146,17 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.AreEqual(
                 $"\"{Path.Combine(uvxDirectory, "uv")}\" run --frozen --project \"{source.ServerDirectory}\" mcp-for-unity --transport stdio",
                 AssetPathUtility.GetStdioServerCommandLine());
+        }
+
+        [TestCase("plain", "plain")]
+        [TestCase(@"C:\no-space\Server\", @"C:\no-space\Server\")]
+        [TestCase(@"C:\My Projects\unity-mcp\Server\", @"""C:\My Projects\unity-mcp\Server\\""")]
+        [TestCase(@"say ""hi""", @"""say \""hi\""""")]
+        [TestCase(@"a\""b", @"""a\\\""b""")]
+        [TestCase("", @"""""")]
+        public void JoinCommandLine_QuotesEachPartSoArgvParsingReadsItBack(string part, string expected)
+        {
+            Assert.AreEqual($"run {expected} end", AssetPathUtility.JoinCommandLine(new[] { "run", part, "end" }));
         }
 
         [Test]

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using MCPForUnity.Editor.Services;
 using NUnit.Framework;
 
 namespace MCPForUnityTests.Editor.Services
@@ -17,7 +18,7 @@ namespace MCPForUnityTests.Editor.Services
         {
             _type = McpType("TestStageState");
             _state = Activator.CreateInstance(_type, true);
-            Reconcile("a", null);
+            Reconcile("a", "NotRun");
         }
 
         [Test]
@@ -30,48 +31,109 @@ namespace MCPForUnityTests.Editor.Services
         [Test]
         public void PassingFocusUnlocksBothModesForSameInputs()
         {
-            Complete(true, "EditMode", true, "a");
+            Complete(true, "EditMode", "Passed", "a");
             Assert.IsNull(Refusal(false, "EditMode"));
             Assert.IsNull(Refusal(false, "PlayMode"));
         }
 
-        [TestCase(false)]
-        [TestCase(null)]
-        public void FailedOrMissingFocusDoesNotUnlockSuites(bool? passed)
+        [Test]
+        public void FailedFocusDoesNotUnlockSuites()
         {
-            Complete(true, "EditMode", true, "a");
-            Complete(true, "EditMode", passed, "a");
+            Complete(true, "EditMode", "Passed", "a");
+            Complete(true, "EditMode", "Failed", "a");
             StringAssert.Contains("test_stage_required", Refusal(false, "PlayMode"));
+        }
+
+        [Test]
+        public void RunsThatExecutedNoTestLeaveTheStageAsItWas()
+        {
+            // A run refused or failed before dispatch (unsaved scenes, play mode, init timeout) says
+            // nothing about the code under test, so it neither revokes a focused pass nor fails a suite.
+            Complete(true, "EditMode", "Passed", "a");
+            Complete(true, "EditMode", "NotRun", "a");
+            Assert.IsNull(Refusal(false, "EditMode"));
+            Complete(false, "PlayMode", "NotRun", "a");
+            Assert.IsNull(Refusal(false, "EditMode"), "A suite that never ran must not block other suites");
+        }
+
+        [Test]
+        public void ARunThatExecutedNoTestDoesNotRepairAFailedSuite()
+        {
+            Complete(true, "EditMode", "Passed", "a");
+            Complete(false, "PlayMode", "Failed", "a");
+            Complete(false, "PlayMode", "NotRun", "a");
+            StringAssert.Contains("test_stage_failed", Refusal(false, "EditMode"));
         }
 
         [Test]
         public void ChangingInputsInvalidatesEvenAPassingInFlightRun()
         {
-            Complete(true, "EditMode", true, "b");
+            Complete(true, "EditMode", "Passed", "b");
             StringAssert.Contains("test_stage_required", Refusal(false, "EditMode"));
         }
 
         [Test]
         public void FailedSuiteMustBeRepairedBeforeAnotherSuite()
         {
-            Complete(true, "EditMode", true, "a");
-            Complete(false, "EditMode", false, "a");
+            Complete(true, "EditMode", "Passed", "a");
+            Complete(false, "EditMode", "Failed", "a");
             Assert.IsNull(Refusal(true, "PlayMode"));
-            Complete(true, "PlayMode", true, "a");
+            Complete(true, "PlayMode", "Passed", "a");
             StringAssert.Contains("test_stage_failed", Refusal(false, "PlayMode"));
             Assert.IsNull(Refusal(false, "EditMode"));
-            Complete(false, "EditMode", true, "a");
+            Complete(false, "EditMode", "Passed", "a");
             Assert.IsNull(Refusal(false, "PlayMode"));
         }
 
         [Test]
         public void InputChangesDoNotEraseAFailedSuite()
         {
-            Complete(true, "EditMode", true, "a");
-            Complete(false, "EditMode", false, "a");
-            Reconcile("b", null);
-            Complete(true, "PlayMode", true, "b");
+            Complete(true, "EditMode", "Passed", "a");
+            Complete(false, "EditMode", "Failed", "a");
+            Reconcile("b", "NotRun");
+            Complete(true, "PlayMode", "Passed", "b");
             StringAssert.Contains("test_stage_failed", Refusal(false, "PlayMode"));
+        }
+
+        [Test]
+        public void OutcomeIsFailClosedForAMissingJobButNotRunForOneThatExecutedNothing()
+        {
+            Assert.AreEqual(TestStageOutcome.Failed, TestStageGuard.Outcome(null));
+            Assert.AreEqual(TestStageOutcome.NotRun, TestStageGuard.Outcome(new TestJob
+            {
+                Status = TestJobStatus.Failed,
+                Error = "Test job failed to initialize (tests did not start within timeout)",
+                Summary = new TestJobSummary()
+            }));
+            Assert.AreEqual(TestStageOutcome.NotRun, TestStageGuard.Outcome(new TestJob { Status = TestJobStatus.Cancelled }));
+            Assert.AreEqual(TestStageOutcome.Failed, TestStageGuard.Outcome(new TestJob
+            {
+                Status = TestJobStatus.Failed,
+                CompletedTests = 3,
+                Summary = new TestJobSummary { Total = 3, Passed = 2, Failed = 1 }
+            }));
+            Assert.AreEqual(TestStageOutcome.Failed, TestStageGuard.Outcome(new TestJob { Status = TestJobStatus.Running }),
+                "A job that has not ended cannot be read as evidence either way");
+            Assert.AreEqual(TestStageOutcome.Passed, TestStageGuard.Outcome(new TestJob
+            {
+                Status = TestJobStatus.Succeeded,
+                CompletedTests = 2,
+                Summary = new TestJobSummary { Total = 2, Passed = 2 }
+            }));
+        }
+
+        [Test]
+        public void AMissingInputIsReportedByName()
+        {
+            string directory = Path.Combine(Path.GetTempPath(), "cf-stage-test-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var ex = Assert.Throws<InvalidOperationException>(
+                    () => TestStageGuard.Fingerprint(directory, new[] { "Assets/Gone" }));
+                StringAssert.StartsWith("test_stage_input_missing: 'Assets/Gone'", ex.Message);
+            }
+            finally { Directory.Delete(directory, true); }
         }
 
         [Test]
@@ -99,16 +161,19 @@ namespace MCPForUnityTests.Editor.Services
             finally { Directory.Delete(directory, true); }
         }
 
-        private void Complete(bool focused, string mode, bool? passed, string fingerprint)
+        private void Complete(bool focused, string mode, string outcome, string fingerprint)
         {
             _type.GetField("PendingJob").SetValue(_state, "job");
             _type.GetField("PendingFocused").SetValue(_state, focused);
             _type.GetField("PendingMode").SetValue(_state, mode);
-            Reconcile(fingerprint, passed);
+            Reconcile(fingerprint, outcome);
         }
 
-        private void Reconcile(string fingerprint, bool? passed) =>
-            _type.GetMethod("Reconcile").Invoke(_state, new object[] { fingerprint, passed });
+        private void Reconcile(string fingerprint, string outcome) =>
+            _type.GetMethod("Reconcile").Invoke(_state, new object[]
+            {
+                fingerprint, Enum.Parse(McpType("TestStageOutcome"), outcome)
+            });
 
         private string Refusal(bool focused, string mode) =>
             (string)_type.GetMethod("Refusal").Invoke(_state, new object[] { focused, mode });

@@ -105,6 +105,11 @@ namespace MCPForUnityTests.Editor.Services
             jobs?.Remove("test-midrun-editmode");
             jobs?.Remove("test-reap-dead");
             jobs?.Remove("test-reap-fresh");
+            jobs?.Remove("test-reap-pending");
+            jobs?.Remove("test-preparing");
+            jobs?.Remove("test-dispatch");
+            jobs?.Remove("test-dispatch-ended");
+            jobs?.Remove("test-run-failed");
             // Flush cleaned state to SessionState so synthetic jobs don't survive domain reloads.
             // The persist test writes to SessionState; without this, the stub job would be
             // restored on the next [InitializeOnLoadMethod] and pollute later test runs.
@@ -228,7 +233,103 @@ namespace MCPForUnityTests.Editor.Services
             Assert.AreEqual(TestJobStatus.Failed, status, "The reaper must fail a dead current job");
             Assert.IsNull(_currentJobIdField.GetValue(null) as string,
                 "The reaper must clear _currentJobId so the next run_tests can start");
-            Assert.AreEqual(1, _runner.AbortCount, "The reaper must release the dead run's runner lock");
+            Assert.AreEqual(0, _runner.AbortCount,
+                "RunStarted never arrived, so the Test Framework may still be preparing this run; "
+                + "aborting would free the runner for a second run beside it");
+        }
+
+        [Test]
+        public void StartJob_WhileAnEndedJobsRunIsStillPending_RefusesWithoutRegisteringAJob()
+        {
+            // Follow-on to the case above: the job is gone but its run still holds the runner. A new
+            // run started beside it would collect the old run's callbacks as its own.
+            _currentJobIdField.SetValue(null, null);
+            _runner.PendingRun = true;
+
+            var ex = Assert.Throws<InvalidOperationException>(() => TestJobManager.StartJob(TestMode.EditMode));
+
+            StringAssert.Contains("already in progress", ex.Message, "RunTests maps this to tests_running");
+            StringAssert.Contains("clear_stuck", ex.Message);
+            Assert.IsNull(_currentJobIdField.GetValue(null) as string, "A refused start must not register a job");
+            Assert.AreEqual(0, _runner.RunCount, "A refused start must not reach the runner");
+        }
+
+        [Test]
+        public void ClearStuck_WithNoCurrentJob_StillAbortsThePendingRun()
+        {
+            _currentJobIdField.SetValue(null, null);
+
+            Assert.IsTrue(TestJobManager.ClearStuckJob(), "Aborting a pending run counts as clearing it");
+            Assert.AreEqual(1, _runner.AbortCount);
+        }
+
+        [Test]
+        public void GetJob_WhileTheRunIsBeingPrepared_DoesNotAutoFail()
+        {
+            // The runner may wait on its lock and read the test tree (up to 30s) before it dispatches;
+            // none of that is the Test Framework failing to start the run.
+            var jobs = _jobsField.GetValue(null) as System.Collections.IDictionary;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var job = NeverStartedJob("test-preparing", lastUpdateUnixMs: now - 60_000);
+            _testJobType.GetProperty("Preparing").SetValue(job, true);
+            jobs["test-preparing"] = job;
+            _currentJobIdField.SetValue(null, "test-preparing");
+
+            _getJobMethod.Invoke(null, new object[] { "test-preparing" });
+
+            Assert.AreEqual(TestJobStatus.Running, (TestJobStatus)_testJobType.GetProperty("Status").GetValue(job));
+            Assert.AreEqual("test-preparing", _currentJobIdField.GetValue(null) as string);
+        }
+
+        [Test]
+        public void OnRunDispatching_StartsTheInitWindowForTheCurrentJob()
+        {
+            var jobs = _jobsField.GetValue(null) as System.Collections.IDictionary;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var job = NeverStartedJob("test-dispatch", lastUpdateUnixMs: now - 60_000);
+            _testJobType.GetProperty("Preparing").SetValue(job, true);
+            jobs["test-dispatch"] = job;
+            _currentJobIdField.SetValue(null, "test-dispatch");
+
+            Assert.IsTrue(TestJobManager.OnRunDispatching("test-dispatch"));
+
+            Assert.IsFalse((bool)_testJobType.GetProperty("Preparing").GetValue(job));
+            Assert.GreaterOrEqual((long)_testJobType.GetProperty("LastUpdateUnixMs").GetValue(job), now,
+                "The init timeout must be measured from dispatch, not from when the job was created");
+        }
+
+        [Test]
+        public void OnRunDispatching_RefusesAJobThatEndedWhileItsRunWasPrepared()
+        {
+            // clear_stuck (or a stage refusal) can end the job while the runner reads the test tree;
+            // dispatching anyway would start a run whose results land on nobody's job.
+            var jobs = _jobsField.GetValue(null) as System.Collections.IDictionary;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var job = NeverStartedJob("test-dispatch-ended", lastUpdateUnixMs: now);
+            _testJobType.GetProperty("Status").SetValue(job, TestJobStatus.Failed);
+            jobs["test-dispatch-ended"] = job;
+            _currentJobIdField.SetValue(null, null);
+
+            Assert.IsFalse(TestJobManager.OnRunDispatching("test-dispatch-ended"));
+            Assert.IsFalse(TestJobManager.OnRunDispatching("no-such-job"));
+        }
+
+        [Test]
+        public void OnRunFailed_FailsTheCurrentJobWithTheFrameworksMessage()
+        {
+            var jobs = _jobsField.GetValue(null) as System.Collections.IDictionary;
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var job = NeverStartedJob("test-run-failed", lastUpdateUnixMs: now);
+            jobs["test-run-failed"] = job;
+            _currentJobIdField.SetValue(null, "test-run-failed");
+
+            TestJobManager.OnRunFailed("An unexpected error happened while running tests.");
+
+            Assert.AreEqual(TestJobStatus.Failed, (TestJobStatus)_testJobType.GetProperty("Status").GetValue(job));
+            StringAssert.Contains("An unexpected error happened while running tests.",
+                (string)_testJobType.GetProperty("Error").GetValue(job));
+            Assert.IsNull(_currentJobIdField.GetValue(null) as string,
+                "A failed run must free the job slot without waiting for the init watchdog");
         }
 
         [Test]
@@ -265,12 +366,20 @@ namespace MCPForUnityTests.Editor.Services
         private sealed class RecordingRunnerService : ITestRunnerService
         {
             public int AbortCount { get; private set; }
+            public int RunCount { get; private set; }
+            public bool PendingRun { get; set; }
+
+            public bool HasPendingRun => PendingRun;
 
             public Task<IReadOnlyList<Dictionary<string, string>>> GetTestsAsync(TestMode? mode) =>
                 throw new NotSupportedException();
 
-            public Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null) =>
+            public Task<TestRunResult> RunTestsAsync(
+                TestMode mode, TestFilterOptions filterOptions = null, string jobId = null)
+            {
+                RunCount++;
                 throw new NotSupportedException();
+            }
 
             public bool TryAbortWedgedRun(string reason)
             {

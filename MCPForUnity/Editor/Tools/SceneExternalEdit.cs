@@ -147,7 +147,7 @@ namespace MCPForUnity.Editor.Tools
         /// Reads the bytes that replace the scene verbatim: the way to restore a snapshot, where a
         /// diff expressed as anchored edits would run to thousands of entries. The source may live
         /// anywhere (a temp snapshot, another checkout), so it is only checked for being a Unity
-        /// YAML file; a relative path resolves against the project root.
+        /// scene file; a relative path resolves against the project root.
         /// </summary>
         private static bool TryReadReplacement(
             string sourcePath, out string resolvedPath, out byte[] bytes, out string error)
@@ -182,6 +182,14 @@ namespace MCPForUnity.Editor.Tools
             if (!StartsWithYamlHeader(bytes))
             {
                 error = $"'source_path' '{resolvedPath}' is not a Unity YAML file (it must start with '%YAML').";
+                return false;
+            }
+
+            // Every scene serializes a RenderSettings object; prefabs, materials and other assets do not.
+            if (Encoding.UTF8.GetString(bytes).IndexOf("\n--- !u!104 &", StringComparison.Ordinal) < 0)
+            {
+                error = $"'source_path' '{resolvedPath}' is not a Unity scene (it has no RenderSettings "
+                        + "'--- !u!104' object); a prefab or other asset cannot replace a scene.";
                 return false;
             }
 

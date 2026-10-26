@@ -27,7 +27,7 @@ namespace MCPForUnity.Editor.Tools
                 {
                     bool wasCleared = TestJobManager.ClearStuckJob();
                     return Task.FromResult<object>(new SuccessResponse(
-                        wasCleared ? "Stuck job cleared." : "No running job to clear.",
+                        wasCleared ? "Stuck job or pending run cleared." : "No running job or pending run to clear.",
                         new { cleared = wasCleared }
                     ));
                 }

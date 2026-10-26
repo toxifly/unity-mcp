@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Helpers;
@@ -797,6 +798,7 @@ namespace MCPForUnity.Editor.Clients
             }
 
             McpLog.Info($"Successfully registered with Claude Code using {(useHttpTransport ? "HTTP" : "stdio")} transport.");
+            WarnAboutSharedRegistrations(projectDir, unregistered: false);
             client.SetStatus(McpStatus.Configured);
             client.configuredTransport = serverTransport;
         }
@@ -815,6 +817,7 @@ namespace MCPForUnity.Editor.Clients
             RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             McpLog.Info("MCP server successfully unregistered from Claude Code.");
+            WarnAboutSharedRegistrations(projectDir, unregistered: true);
             client.SetStatus(McpStatus.NotConfigured);
             client.configuredTransport = Models.ConfiguredTransport.Unknown;
         }
@@ -894,6 +897,7 @@ namespace MCPForUnity.Editor.Clients
             }
 
             McpLog.Info($"Successfully registered with Claude Code using {(useHttpTransport ? "HTTP" : "stdio")} transport.");
+            WarnAboutSharedRegistrations(projectDir, unregistered: false);
 
             // Set status to Configured immediately after successful registration
             // The UI will trigger an async verification check separately to avoid blocking
@@ -926,6 +930,7 @@ namespace MCPForUnity.Editor.Clients
             RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             McpLog.Info("MCP server successfully unregistered from Claude Code.");
+            WarnAboutSharedRegistrations(projectDir, unregistered: true);
             client.SetStatus(McpStatus.NotConfigured);
             client.configuredTransport = Models.ConfiguredTransport.Unknown;
         }
@@ -948,6 +953,7 @@ namespace MCPForUnity.Editor.Clients
                        $"claude mcp add --scope local --transport http UnityMCP {httpUrl}{headerArg}\n\n" +
                        "# Unregister the MCP server:\n" +
                        "claude mcp remove --scope local UnityMCP\n\n" +
+                       SharedScopeCleanupSnippet +
                        "# List registered servers:\n" +
                        "claude mcp list";
             }
@@ -966,6 +972,7 @@ namespace MCPForUnity.Editor.Clients
                    $"claude mcp add --scope local --transport stdio UnityMCP -- {serverCommandLine}\n\n" +
                    "# Unregister the MCP server:\n" +
                    "claude mcp remove --scope local UnityMCP\n\n" +
+                   SharedScopeCleanupSnippet +
                    "# List registered servers:\n" +
                    "claude mcp list";
         }
@@ -976,6 +983,74 @@ namespace MCPForUnity.Editor.Clients
             "Use Configure to add UnityMCP (or run claude mcp add UnityMCP)",
             "Restart Claude Code"
         };
+
+        private const string SharedScopeCleanupSnippet =
+            "# Optional: remove a stale UnityMCP registration from the shared scopes. User scope applies\n" +
+            "# to every project; project scope is the repository's checked-in .mcp.json.\n" +
+            "# claude mcp remove --scope user UnityMCP\n" +
+            "# claude mcp remove --scope project UnityMCP\n\n";
+
+        private static void WarnAboutSharedRegistrations(string projectDir, bool unregistered)
+        {
+            string warning = SharedRegistrationWarning(
+                projectDir, Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), unregistered);
+            if (warning != null)
+            {
+                McpLog.Warn(warning);
+            }
+        }
+
+        /// <summary>
+        /// Describes the UnityMCP registrations Configure and Unregister leave alone: user scope
+        /// (top-level mcpServers in ~/.claude.json) and project scope (the project's .mcp.json),
+        /// with the commands that remove them. Null when there are none.
+        /// </summary>
+        internal static string SharedRegistrationWarning(string projectDir, string homeDir, bool unregistered)
+        {
+            var scopes = new List<(string scope, string file)>
+            {
+                ("user", Path.Combine(homeDir, ".claude.json"))
+            };
+            if (!string.IsNullOrEmpty(projectDir))
+            {
+                scopes.Add(("project", Path.Combine(projectDir, ".mcp.json")));
+            }
+
+            var found = new List<(string scope, string name)>();
+            foreach (var (scope, file) in scopes)
+            {
+                JObject servers;
+                try
+                {
+                    servers = File.Exists(file) ? JObject.Parse(File.ReadAllText(file))["mcpServers"] as JObject : null;
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                if (servers == null)
+                    continue;
+
+                foreach (var server in servers.Properties())
+                {
+                    if (string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
+                    {
+                        found.Add((scope, server.Name));
+                    }
+                }
+            }
+
+            if (found.Count == 0)
+                return null;
+
+            string where = string.Join(" and ", found.Select(f => $"{f.scope} scope ('{f.name}')"));
+            string effect = unregistered
+                ? "Claude Code still launches it from there"
+                : "The local registration takes precedence in this project, but that one can still prompt or conflict";
+            string commands = string.Join("; ", found.Select(f => $"claude mcp remove --scope {f.scope} {f.name}"));
+            return $"Claude Code also has a UnityMCP registration at {where}. {effect}. If it is stale, remove it: {commands}";
+        }
 
         /// <summary>
         /// Removes the local-scope UnityMCP registration, the one Configure writes, including the
