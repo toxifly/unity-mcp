@@ -102,6 +102,12 @@ namespace MCPForUnity.Editor.Services
         private static long _lastLoopTickUnixMs;
         private static long _lastStallEndedUnixMs;
 
+        // The auto-fail checks in GetJob used to run only when a client polled the job id. A run_tests
+        // call whose reply was lost never hands out that id, so a dead current job wedged every later
+        // run behind "tests_running". The editor loop re-evaluates the current job at this cadence.
+        private const long ReapIntervalMs = 1_000;
+        private static long _lastReapUnixMs;
+
         static TestJobManager()
         {
             // Restore after domain reloads (e.g., compilation while a job is running).
@@ -131,6 +137,34 @@ namespace MCPForUnity.Editor.Services
             if (previous > 0 && now - previous > LoopStallThresholdMs)
             {
                 _lastStallEndedUnixMs = now;
+            }
+
+            if (now - _lastReapUnixMs >= ReapIntervalMs)
+            {
+                _lastReapUnixMs = now;
+                ReapCurrentJobIfDead();
+            }
+        }
+
+        /// <summary>
+        /// Applies GetJob's auto-fail checks to the current job without waiting for a poll, so a run
+        /// that died before anyone learned its id still releases the runner.
+        /// </summary>
+        internal static void ReapCurrentJobIfDead()
+        {
+            string jobId = CurrentJobId;
+            if (string.IsNullOrEmpty(jobId))
+            {
+                return;
+            }
+
+            try
+            {
+                GetJob(jobId);
+            }
+            catch (Exception ex)
+            {
+                McpLog.Warn($"[TestJobManager] Reaping job {jobId} failed: {ex.Message}");
             }
         }
 
@@ -459,6 +493,7 @@ namespace MCPForUnity.Editor.Services
                 {
                     throw new InvalidOperationException("A Unity test run is already in progress.");
                 }
+                TestStageGuard.Begin(jobId, modeStr, filterOptions);
                 Jobs[jobId] = job;
                 _currentJobId = jobId;
             }
@@ -499,11 +534,7 @@ namespace MCPForUnity.Editor.Services
 
                 job.LastUpdateUnixMs = now;
                 job.FinishedUnixMs = now;
-                job.Status = resultPayload != null && resultPayload.Failed > 0
-                    ? TestJobStatus.Failed
-                    : TestJobStatus.Succeeded;
-                job.Error = null;
-                job.Result = resultPayload;
+                ApplyRunResult(job, resultPayload);
                 job.Summary = BuildSummary(job, resultPayload, now);
                 job.CurrentTestFullName = null;
                 _currentJobId = null;
@@ -677,6 +708,9 @@ namespace MCPForUnity.Editor.Services
                             TestRunStatus.MarkFinished();
                         }
                         shouldPersist = true;
+                        // A run that died during setup still holds the runner's completion source and
+                        // operation lock; release them or the next run queues behind the dead one.
+                        shouldAbortRunner = true;
                     }
                 }
 
@@ -728,7 +762,7 @@ namespace MCPForUnity.Editor.Services
             }
             if (shouldAbortRunner)
             {
-                AbortWedgedRunnerSafely($"job {jobId} wedged mid-run");
+                AbortWedgedRunnerSafely($"job {jobId} wedged");
             }
             return jobToReturn;
         }
@@ -942,11 +976,7 @@ namespace MCPForUnity.Editor.Services
                 else
                 {
                     var result = task.Result;
-                    existing.Status = result != null && result.Failed > 0
-                        ? TestJobStatus.Failed
-                        : TestJobStatus.Succeeded;
-                    existing.Error = null;
-                    existing.Result = result;
+                    ApplyRunResult(existing, result);
                     existing.Summary = BuildSummary(existing, result, existing.FinishedUnixMs.Value);
                 }
 
@@ -956,6 +986,38 @@ namespace MCPForUnity.Editor.Services
                 }
             }
             PersistToSessionState(force: true);
+        }
+
+        /// <summary>
+        /// A finished run passes only if it executed a test and none failed. A run that executed
+        /// nothing -- a filter matching no test, a selection of skipped tests only, a runner that
+        /// loaded no test assemblies -- proves nothing and must never read as green.
+        /// </summary>
+        internal static void ApplyRunResult(TestJob job, TestRunResult result)
+        {
+            job.Result = result;
+            if (result == null)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = "The test run finished without a result.";
+            }
+            else if (result.Failed > 0)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = null;
+            }
+            else if (result.Passed == 0)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = $"no_tests_executed: The run executed no tests ({result.Total} reported, "
+                    + $"{result.Skipped} skipped). A selection that matches nothing or only skipped "
+                    + "tests is not a pass.";
+            }
+            else
+            {
+                job.Status = TestJobStatus.Succeeded;
+                job.Error = null;
+            }
         }
     }
 }

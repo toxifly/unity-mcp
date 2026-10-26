@@ -4,8 +4,6 @@
 [![python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=flat&logo=python&logoColor=white)](https://www.python.org)
 [![License](https://img.shields.io/badge/License-MIT-red.svg 'MIT License')](https://opensource.org/licenses/MIT)
 [![Discord](https://img.shields.io/badge/discord-join-red.svg?logo=discord&logoColor=white)](https://discord.gg/y4p8KfzrN4)
-[![PyPI version](https://img.shields.io/pypi/v/mcpforunityserver?label=PyPI)](https://pypi.org/project/mcpforunityserver/)
-[![Downloads](https://static.pepy.tech/badge/mcpforunityserver)](https://pepy.tech/project/mcpforunityserver)
 
 Model Context Protocol server for Unity Editor integration. Control Unity through natural language using AI assistants like Claude, Cursor, and more.
 
@@ -13,20 +11,22 @@ Model Context Protocol server for Unity Editor integration. Control Unity throug
 
 💬 **Join our community:** [Discord Server](https://discord.gg/y4p8KfzrN4)
 
-**Required:** Install the [Unity MCP Plugin](https://github.com/CoplayDev/unity-mcp?tab=readme-ov-file#-step-1-install-the-unity-package) to connect Unity Editor with this MCP server. You also need `uvx` (requires [uv](https://docs.astral.sh/uv/)) to run the server.
+**Required:** Install the Unity package from this checkout's `MCPForUnity/` folder to connect Unity Editor with this MCP server. You also need [uv](https://docs.astral.sh/uv/) to run the server.
 
 ---
 
 ## Installation
 
-### Option 1: PyPI
+This fork runs only a local checkout of this `Server/` directory, in the environment `uv.lock` pins. It never installs or runs the published `mcpforunityserver` package.
 
-Install and run directly from PyPI using `uvx`.
+### Option 1: Local checkout
+
+In Unity, set **Server Source** (Advanced Settings) to this `Server/` directory. **Configure** registers clients with the command below, and the window's local HTTP server runs the same command.
 
 **Run Server (HTTP):**
 
 ```bash
-uvx --from mcpforunityserver mcp-for-unity --transport http --http-url http://localhost:8080
+uv run --frozen --project /path/to/unity-mcp/Server mcp-for-unity --transport http --http-url http://localhost:8080
 ```
 
 **MCP Client Configuration (HTTP):**
@@ -47,10 +47,12 @@ uvx --from mcpforunityserver mcp-for-unity --transport http --http-url http://lo
 {
   "mcpServers": {
     "UnityMCP": {
-      "command": "uvx",
+      "command": "uv",
       "args": [
-        "--from",
-        "mcpforunityserver",
+        "run",
+        "--frozen",
+        "--project",
+        "/path/to/unity-mcp/Server",
         "mcp-for-unity",
         "--transport",
         "stdio"
@@ -60,56 +62,16 @@ uvx --from mcpforunityserver mcp-for-unity --transport http --http-url http://lo
 }
 ```
 
-### Option 2: From GitHub Source
+### Option 2: Docker
 
-Use this to run the latest released version from the repository. Change the version to `main` to run the latest unreleased changes from the repository.
-
-```json
-{
-  "mcpServers": {
-    "UnityMCP": {
-      "command": "uvx",
-      "args": [
-        "--from",
-        "git+https://github.com/CoplayDev/unity-mcp@v10.1.1-beta.1#subdirectory=Server",
-        "mcp-for-unity",
-        "--transport",
-        "stdio"
-      ]
-    }
-  }
-}
-```
-
-### Option 3: Docker
-
-**Use Pre-built Image:**
+Build the image from the repository root; the Dockerfile copies the whole checkout:
 
 ```bash
-docker run -p 8080:8080 msanatan/mcp-for-unity-server:latest --transport http --http-url http://0.0.0.0:8080
-```
-
-**Build Locally:**
-
-```bash
-docker build -t unity-mcp-server .
+docker build -f Server/Dockerfile -t unity-mcp-server .
 docker run -p 8080:8080 unity-mcp-server --transport http --http-url http://0.0.0.0:8080
 ```
 
 Configure your MCP client with `"url": "http://localhost:8080/mcp"`.
-
-### Option 4: Local Development
-
-For contributing or modifying the server code:
-
-```bash
-# Clone the repository
-git clone https://github.com/CoplayDev/unity-mcp.git
-cd unity-mcp/Server
-
-# Run with uv
-uv run src/main.py --transport stdio
-```
 
 ---
 
@@ -119,7 +81,7 @@ The server connects to Unity Editor automatically when both are running. Most us
 
 ### CLI options
 
-These options apply to the `mcp-for-unity` command (whether run via `uvx`, Docker, or `python src/main.py`).
+These options apply to the `mcp-for-unity` command (whether run via `uv run`, Docker, or `python src/main.py`).
 
 - `--transport {stdio,http}` - Transport protocol (default: `stdio`)
 - `--http-url URL` - Base URL used to derive host/port defaults (default: `http://localhost:8080`)
@@ -159,9 +121,9 @@ API key authentication (remote-hosted mode):
 - `UNITY_MCP_API_KEY_SERVICE_TOKEN_HEADER` - Header name for server-to-auth-service authentication
 - `UNITY_MCP_API_KEY_SERVICE_TOKEN` - Token value sent to the auth service for server authentication
 
-Telemetry:
+Telemetry is off in this fork: the server sends nothing unless `telemetry_enabled` in `src/core/config.py` is set to `True`.
 
-- `DISABLE_TELEMETRY=1` - Disable anonymous telemetry (opt-out)
+- `DISABLE_TELEMETRY=1` - Keep telemetry off even when the config enables it
 - `UNITY_MCP_DISABLE_TELEMETRY=1` - Same as `DISABLE_TELEMETRY`
 - `MCP_DISABLE_TELEMETRY=1` - Same as `DISABLE_TELEMETRY`
 - `UNITY_MCP_TELEMETRY_ENDPOINT` - Override telemetry endpoint URL
@@ -169,34 +131,30 @@ Telemetry:
 
 ### Examples
 
+Run these from this `Server/` directory.
+
 **Stdio (default):**
 
 ```bash
-uvx --from mcpforunityserver mcp-for-unity --transport stdio
+uv run --frozen mcp-for-unity --transport stdio
 ```
 
 **HTTP (local):**
 
 ```bash
-uvx --from mcpforunityserver mcp-for-unity --transport http --http-host 127.0.0.1 --http-port 8080
+uv run --frozen mcp-for-unity --transport http --http-host 127.0.0.1 --http-port 8080
 ```
 
 **HTTP (remote-hosted with API key auth):**
 
 ```bash
-uvx --from mcpforunityserver mcp-for-unity \
+uv run --frozen mcp-for-unity \
   --transport http \
   --http-host 0.0.0.0 \
   --http-port 8080 \
   --http-remote-hosted \
   --api-key-validation-url https://auth.example.com/api/validate-key \
   --api-key-login-url https://app.example.com/api-keys
-```
-
-**Disable telemetry:**
-
-```bash
-DISABLE_TELEMETRY=1 uvx --from mcpforunityserver mcp-for-unity --transport stdio
 ```
 
 ---
@@ -273,7 +231,7 @@ Once connected, try these commands in your AI assistant:
 
 For complete documentation, troubleshooting, and advanced usage:
 
-📖 **[Full Documentation](https://coplaydev.github.io/unity-mcp/)**
+📖 **[Full Documentation](../website/docs/)**
 
 ---
 

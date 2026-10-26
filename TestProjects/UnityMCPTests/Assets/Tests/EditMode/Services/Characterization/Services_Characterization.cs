@@ -108,11 +108,11 @@ namespace MCPForUnityTests.Editor.Services.Characterization
         }
 
         /// <summary>
-        /// Current behavior: TryGetLocalHttpServerCommand builds uvx command
-        /// with platform-specific arguments.
+        /// Current behavior: TryGetLocalHttpServerCommand builds the uv command that
+        /// runs the Server Source checkout.
         /// </summary>
         [Test]
-        public void ServerManagementService_TryGetLocalHttpServerCommand_BuildsUvxCommand()
+        public void ServerManagementService_TryGetLocalHttpServerCommand_BuildsServerCommand()
         {
             var service = new ServerManagementService();
 
@@ -355,7 +355,6 @@ namespace MCPForUnityTests.Editor.Services.Characterization
             // Document the configuration pattern
             var pattern = new[]
             {
-                "Clean build artifacts once",
                 "Iterate all registered clients",
                 "Catch exceptions per client",
                 "Return summary with counts"

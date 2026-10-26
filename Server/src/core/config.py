@@ -59,8 +59,8 @@ class ServerConfig:
     # Port discovery cache
     port_registry_ttl: float = 5.0
 
-    # Telemetry settings
-    telemetry_enabled: bool = True
+    # Telemetry settings. Off by default: this fork sends no usage data to the upstream endpoint.
+    telemetry_enabled: bool = False
     # Align with telemetry.py default Cloud Run endpoint
     telemetry_endpoint: str = "https://api-prod.coplay.dev/telemetry/events"
 

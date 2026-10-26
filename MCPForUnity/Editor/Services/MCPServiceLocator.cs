@@ -14,7 +14,6 @@ namespace MCPForUnity.Editor.Services
         private static IClientConfigurationService _clientService;
         private static IPathResolverService _pathService;
         private static ITestRunnerService _testRunnerService;
-        private static IPackageUpdateService _packageUpdateService;
         private static IPlatformService _platformService;
         private static IToolDiscoveryService _toolDiscoveryService;
         private static IResourceDiscoveryService _resourceDiscoveryService;
@@ -26,7 +25,6 @@ namespace MCPForUnity.Editor.Services
         public static IClientConfigurationService Client => _clientService ??= new ClientConfigurationService();
         public static IPathResolverService Paths => _pathService ??= new PathResolverService();
         public static ITestRunnerService Tests => _testRunnerService ??= new TestRunnerService();
-        public static IPackageUpdateService Updates => _packageUpdateService ??= new PackageUpdateService();
         public static IPlatformService Platform => _platformService ??= new PlatformService();
         public static IToolDiscoveryService ToolDiscovery => _toolDiscoveryService ??= new ToolDiscoveryService();
         public static IResourceDiscoveryService ResourceDiscovery => _resourceDiscoveryService ??= new ResourceDiscoveryService();
@@ -49,8 +47,6 @@ namespace MCPForUnity.Editor.Services
                 _pathService = p;
             else if (implementation is ITestRunnerService t)
                 _testRunnerService = t;
-            else if (implementation is IPackageUpdateService pu)
-                _packageUpdateService = pu;
             else if (implementation is IPlatformService ps)
                 _platformService = ps;
             else if (implementation is IToolDiscoveryService td)
@@ -74,7 +70,6 @@ namespace MCPForUnity.Editor.Services
             (_clientService as IDisposable)?.Dispose();
             (_pathService as IDisposable)?.Dispose();
             (_testRunnerService as IDisposable)?.Dispose();
-            (_packageUpdateService as IDisposable)?.Dispose();
             (_platformService as IDisposable)?.Dispose();
             (_toolDiscoveryService as IDisposable)?.Dispose();
             (_resourceDiscoveryService as IDisposable)?.Dispose();
@@ -86,7 +81,6 @@ namespace MCPForUnity.Editor.Services
             _clientService = null;
             _pathService = null;
             _testRunnerService = null;
-            _packageUpdateService = null;
             _platformService = null;
             _toolDiscoveryService = null;
             _resourceDiscoveryService = null;

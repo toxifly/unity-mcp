@@ -5,18 +5,18 @@ Thanks for wanting to help! MCP for Unity is community-maintained and PRs of any
 ## Quick Start
 
 1. **Fork** this repo and **clone** your fork.
-2. Branch off `beta` (not `main`):
+2. Branch off `develop`:
    ```bash
-   git checkout -b feat/your-idea upstream/beta
+   git checkout -b feat/your-idea origin/develop
    ```
-3. Install the dev environment (see [Dev Setup](https://coplaydev.github.io/unity-mcp/contributing/dev-setup)).
+3. Install the dev environment (see [Dev Setup](website/docs/contributing/dev-setup.md)).
 4. Make your change with tests.
-5. Open a PR against `beta`. PRs against `main` will be redirected.
+5. Open a PR against `develop`.
 
 ## What We Look For
 
 - **Tests for new behavior.** Python tests live in `Server/tests/`; Unity EditMode tests live in `TestProjects/UnityMCPTests/Assets/Tests/`.
-- **Domain symmetry.** New tools live in *both* `Server/src/services/tools/manage_<domain>.py` (Python MCP tool) and `MCPForUnity/Editor/Tools/Manage<Domain>.cs` (C# implementation). See [Adding a New Tool](https://coplaydev.github.io/unity-mcp/contributing/dev-setup).
+- **Domain symmetry.** New tools live in *both* `Server/src/services/tools/manage_<domain>.py` (Python MCP tool) and `MCPForUnity/Editor/Tools/Manage<Domain>.cs` (C# implementation). See [Adding or Changing Tools and Resources](website/docs/contributing/dev-setup.md#adding-or-changing-tools-and-resources).
 - **Minimal abstraction.** Three similar lines of code is better than a helper that's only used once.
 - **Documentation as code.** Tool reference pages under `website/docs/reference/` are auto-generated — never hand-edit them outside the `<!-- examples:start --><!-- examples:end -->` blocks.
 
@@ -26,18 +26,18 @@ Thanks for wanting to help! MCP for Unity is community-maintained and PRs of any
 # Python tests
 cd Server && uv run pytest tests/ -v
 
-# Unity multi-version compile check (matches CI)
+# Unity multi-version compile check (versions in tools/unity-versions.json)
 tools/check-unity-versions.sh
 
 # Pre-commit hook for docs reference (one-time setup)
 tools/install-hooks.sh
 ```
 
-The pre-commit hook regenerates `website/docs/reference/` whenever you touch a tool/resource module — saves you a CI round trip.
+The pre-commit hook regenerates `website/docs/reference/` whenever you touch a tool/resource module, so the committed reference never goes stale.
 
 ## Pull Request Checklist
 
-- [ ] Branched off `beta`
+- [ ] Branched off `develop`
 - [ ] New or updated tests
 - [ ] Docs updated (the auto-gen handles the tool reference; narrative docs under `website/docs/` are hand-written)
 - [ ] No commented-out code, no `// removed for X` markers, no `_unused` renames

@@ -12,7 +12,7 @@ description: "Save exactly one loaded Unity scene."
 
 ## Description
 
-Save exactly one loaded Unity scene. By default (unscoped_changes=include) the whole scene is saved. With unscoped_changes=exclude the scene is instead merged into the on-disk file at object-block granularity: new objects and objects mutated through ledger-instrumented MCP tools (component add/remove/set-property and the GameObject tools) are written; everything else — ambient drift (ExecuteAlways previews, layout-driven RectTransforms, TMP re-baking) but also Inspector, execute_code, and not-yet-instrumented MCP tool edits — is reported but NOT baked into the file.
+Save exactly one loaded Unity scene. By default (unscoped_changes=include) the whole scene is saved. With unscoped_changes=exclude the scene is instead merged into the on-disk file at object-block granularity: new objects and objects mutated through ledger-instrumented MCP tools (component add/remove/set-property and the GameObject tools) are written; everything else — ambient drift (ExecuteAlways previews, layout-driven RectTransforms, TMP re-baking) but also Inspector, execute_code, and not-yet-instrumented MCP tool edits — is reported but NOT baked into the file. Either way the scene ends clean and matching its file: when exclude held drift back, the scene is reopened from the merged file, which discards that drift from memory (scene_reloaded=true; object handles from before the save are stale).
 
 ## Parameters
 

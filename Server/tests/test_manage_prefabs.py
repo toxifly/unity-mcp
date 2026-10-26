@@ -270,3 +270,40 @@ class TestManagePrefabsAtomicCreateAndReplace:
             "target": "Root",
             "searchMethod": "by_name",
         }
+
+
+class TestManagePrefabsDryRun:
+    """dry_run used to be forwarded for create_and_replace only, so modify_contents saved."""
+
+    def test_modify_contents_forwards_dry_run(self, mock_unity):
+        asyncio.run(
+            manage_prefabs(
+                SimpleNamespace(),
+                action="modify_contents",
+                prefab_path="Assets/Prefabs/Test.prefab",
+                name="Renamed",
+                dry_run="true",
+            )
+        )
+        assert mock_unity["params"]["dryRun"] is True
+
+    def test_actions_without_a_preview_still_forward_dry_run_for_unity_to_reject(self, mock_unity):
+        asyncio.run(
+            manage_prefabs(
+                SimpleNamespace(),
+                action="open_prefab_stage",
+                prefab_path="Assets/Prefabs/Test.prefab",
+                dry_run=True,
+            )
+        )
+        assert mock_unity["params"]["dryRun"] is True
+
+    def test_dry_run_omitted_when_unspecified(self, mock_unity):
+        asyncio.run(
+            manage_prefabs(
+                SimpleNamespace(),
+                action="modify_contents",
+                prefab_path="Assets/Prefabs/Test.prefab",
+            )
+        )
+        assert "dryRun" not in mock_unity["params"]

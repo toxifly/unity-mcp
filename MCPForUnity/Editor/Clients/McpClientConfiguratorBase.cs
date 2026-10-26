@@ -53,16 +53,6 @@ namespace MCPForUnity.Editor.Clients
         public abstract string GetManualSnippet();
         public abstract IList<string> GetInstallationSteps();
 
-        protected string GetUvxPathOrError()
-        {
-            string uvx = MCPServiceLocator.Paths.GetUvxPath();
-            if (string.IsNullOrEmpty(uvx))
-            {
-                throw new InvalidOperationException("uvx not found. Install uv/uvx or set the override in Advanced Settings.");
-            }
-            return uvx;
-        }
-
         protected string CurrentOsPath()
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -105,41 +95,17 @@ namespace MCPForUnity.Editor.Clients
             return string.Equals(Normalize(a), Normalize(b), StringComparison.OrdinalIgnoreCase);
         }
 
+        protected const string ServerSourceMismatchReason =
+            "Not configured to run the Server checkout set in Server Source. Re-configure to update.";
+
         /// <summary>
-        /// Gets the expected package source for validation based on the installed package version.
-        /// This should match what Configure() would actually use for the --from argument.
+        /// Whether a stdio registration's arguments run the Server/ checkout set in Server Source.
         /// MUST be called from the main thread due to EditorPrefs access.
         /// </summary>
-        protected static string GetExpectedPackageSourceForValidation()
+        protected static bool RunsConfiguredServer(IReadOnlyList<string> args)
         {
-            // Includes an explicit override or the exact installed-package version pin.
-            return AssetPathUtility.GetMcpServerPackageSource();
-        }
-
-        /// <summary>
-        /// Checks if a package source string represents a beta/prerelease version.
-        /// Beta versions include:
-        /// - PyPI beta: "mcpforunityserver==9.4.0b20250203..." (contains 'b' before timestamp)
-        /// - Git beta branch: contains "@beta" or "-beta"
-        /// </summary>
-        protected static bool IsBetaPackageSource(string packageSource)
-        {
-            if (string.IsNullOrEmpty(packageSource))
-                return false;
-
-            // PyPI beta format: mcpforunityserver==X.Y.Zb<timestamp>
-            // The 'b' suffix before numbers indicates a PEP 440 beta version
-            if (System.Text.RegularExpressions.Regex.IsMatch(packageSource, @"==\d+\.\d+\.\d+b\d+"))
-                return true;
-
-            // Git-based beta references
-            if (packageSource.Contains("@beta", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            if (packageSource.Contains("-beta", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            return false;
+            string configured = AssetPathUtility.ExtractServerProjectDirectory(args);
+            return McpConfigurationHelper.PathsEqual(configured, AssetPathUtility.GetServerProjectDirectory());
         }
     }
 
@@ -240,39 +206,9 @@ namespace MCPForUnity.Editor.Clients
 
                 if (args != null && args.Length > 0)
                 {
-                    // Use beta-aware expected package source for comparison
-                    string expectedUvxUrl = GetExpectedPackageSourceForValidation();
-                    string configuredUvxUrl = McpConfigurationHelper.ExtractUvxUrl(args);
-
-                    if (!string.IsNullOrEmpty(configuredUvxUrl) && !string.IsNullOrEmpty(expectedUvxUrl))
-                    {
-                        if (McpConfigurationHelper.PathsEqual(configuredUvxUrl, expectedUvxUrl))
-                        {
-                            matches = true;
-                        }
-                        else
-                        {
-                            // Check for beta/stable mismatch
-                            bool configuredIsBeta = IsBetaPackageSource(configuredUvxUrl);
-                            bool expectedIsBeta = IsBetaPackageSource(expectedUvxUrl);
-
-                            if (configuredIsBeta && !expectedIsBeta)
-                            {
-                                hasVersionMismatch = true;
-                                mismatchReason = "Configured for prerelease server, but this package is stable. Re-configure to switch to stable.";
-                            }
-                            else if (!configuredIsBeta && expectedIsBeta)
-                            {
-                                hasVersionMismatch = true;
-                                mismatchReason = "Configured for stable server, but this package is prerelease. Re-configure to switch to prerelease.";
-                            }
-                            else
-                            {
-                                hasVersionMismatch = true;
-                                mismatchReason = "Server version doesn't match the plugin. Re-configure to update.";
-                            }
-                        }
-                    }
+                    matches = RunsConfiguredServer(args);
+                    hasVersionMismatch = !matches;
+                    mismatchReason = matches ? null : ServerSourceMismatchReason;
                 }
                 else if (!string.IsNullOrEmpty(configuredUrl))
                 {
@@ -413,8 +349,7 @@ namespace MCPForUnity.Editor.Clients
         {
             try
             {
-                string uvx = GetUvxPathOrError();
-                return ConfigJsonBuilder.BuildManualConfigJson(uvx, client);
+                return ConfigJsonBuilder.BuildManualConfigJson(client);
             }
             catch (Exception ex)
             {
@@ -484,39 +419,9 @@ namespace MCPForUnity.Editor.Clients
                     }
                     else if (args != null && args.Length > 0)
                     {
-                        // Use beta-aware expected package source for comparison
-                        string expected = GetExpectedPackageSourceForValidation();
-                        string configured = McpConfigurationHelper.ExtractUvxUrl(args);
-
-                        if (!string.IsNullOrEmpty(configured) && !string.IsNullOrEmpty(expected))
-                        {
-                            if (McpConfigurationHelper.PathsEqual(configured, expected))
-                            {
-                                matches = true;
-                            }
-                            else
-                            {
-                                // Check for beta/stable mismatch
-                                bool configuredIsBeta = IsBetaPackageSource(configured);
-                                bool expectedIsBeta = IsBetaPackageSource(expected);
-
-                                if (configuredIsBeta && !expectedIsBeta)
-                                {
-                                    hasVersionMismatch = true;
-                                    mismatchReason = "Configured for prerelease server, but this package is stable. Re-configure to switch to stable.";
-                                }
-                                else if (!configuredIsBeta && expectedIsBeta)
-                                {
-                                    hasVersionMismatch = true;
-                                    mismatchReason = "Configured for stable server, but this package is prerelease. Re-configure to switch to prerelease.";
-                                }
-                                else
-                                {
-                                    hasVersionMismatch = true;
-                                    mismatchReason = "Server version doesn't match the plugin. Re-configure to update.";
-                                }
-                            }
-                        }
+                        matches = RunsConfiguredServer(args);
+                        hasVersionMismatch = !matches;
+                        mismatchReason = matches ? null : ServerSourceMismatchReason;
                     }
 
                     if (matches)
@@ -593,8 +498,7 @@ namespace MCPForUnity.Editor.Clients
         {
             try
             {
-                string uvx = GetUvxPathOrError();
-                return CodexConfigHelper.BuildCodexServerBlock(uvx);
+                return CodexConfigHelper.BuildCodexServerBlock();
             }
             catch (Exception ex)
             {
@@ -661,23 +565,24 @@ namespace MCPForUnity.Editor.Clients
             string claudePath = MCPServiceLocator.Paths.GetClaudeCliPath();
             RuntimePlatform platform = Application.platform;
             bool isRemoteScope = HttpEndpointUtility.IsRemoteScope();
-            // Get expected package source for the installed package version (matches what Register() would use)
-            string expectedPackageSource = GetExpectedPackageSourceForValidation();
-            return CheckStatusWithProjectDir(projectDir, useHttpTransport, claudePath, platform, isRemoteScope, expectedPackageSource, attemptAutoRewrite, HasClientProjectDirOverride);
+            // The Server/ checkout Register() would run; null when Server Source is unset or invalid
+            string expectedServerProject = AssetPathUtility.TryGetServerProjectDirectory();
+            return CheckStatusWithProjectDir(projectDir, useHttpTransport, claudePath, platform, isRemoteScope, expectedServerProject, attemptAutoRewrite, HasClientProjectDirOverride);
         }
 
         /// <summary>
         /// Internal thread-safe version of CheckStatus.
         /// Can be called from background threads because all main-thread-only values are passed as parameters.
-        /// projectDir, useHttpTransport, claudePath, platform, isRemoteScope, and expectedPackageSource are REQUIRED
-        /// (non-nullable where applicable) to enforce thread safety at compile time.
+        /// projectDir, useHttpTransport, claudePath, platform, and isRemoteScope are REQUIRED
+        /// (non-nullable where applicable) to enforce thread safety at compile time. A null
+        /// expectedServerProject (Server Source unset) makes every stdio registration a mismatch.
         /// NOTE: attemptAutoRewrite is NOT fully thread-safe because Configure() requires the main thread.
         /// When called from a background thread, pass attemptAutoRewrite=false and handle re-registration
         /// on the main thread based on the returned status.
         /// </summary>
         internal McpStatus CheckStatusWithProjectDir(
             string projectDir, bool useHttpTransport, string claudePath, RuntimePlatform platform,
-            bool isRemoteScope, string expectedPackageSource,
+            bool isRemoteScope, string expectedServerProject,
             bool attemptAutoRewrite = false, bool hasProjectDirOverride = false)
         {
             try
@@ -697,7 +602,7 @@ namespace MCPForUnity.Editor.Clients
 
                 // Read Claude Code config directly from ~/.claude.json instead of using slow CLI
                 // This is instant vs 15+ seconds for `claude mcp list` which does health checks
-                var configResult = ReadClaudeCodeConfig(projectDir);
+                var configResult = ReadLocalScopeConfig(projectDir);
                 if (configResult.error != null)
                 {
                     client.SetStatus(McpStatus.NotConfigured, configResult.error);
@@ -745,38 +650,15 @@ namespace MCPForUnity.Editor.Clients
                 bool hasTransportMismatch = !hasProjectDirOverride
                     && ((currentUseHttp && registeredWithStdio) || (!currentUseHttp && registeredWithHttp));
 
-                // For stdio transport, also check package version
+                // For stdio transport, also check which Server/ checkout it runs
                 bool hasVersionMismatch = false;
-                string configuredPackageSource = null;
                 string mismatchReason = null;
                 if (registeredWithStdio)
                 {
-                    configuredPackageSource = ExtractPackageSourceFromConfig(serverConfig);
-                    if (!string.IsNullOrEmpty(configuredPackageSource) && !string.IsNullOrEmpty(expectedPackageSource))
-                    {
-                        // Check for exact match first
-                        if (!string.Equals(configuredPackageSource, expectedPackageSource, StringComparison.OrdinalIgnoreCase))
-                        {
-                            hasVersionMismatch = true;
-
-                            // Provide more specific mismatch reason for beta/stable differences
-                            bool configuredIsBeta = IsBetaPackageSource(configuredPackageSource);
-                            bool expectedIsBeta = IsBetaPackageSource(expectedPackageSource);
-
-                            if (configuredIsBeta && !expectedIsBeta)
-                            {
-                                mismatchReason = "Configured for prerelease server, but this package is stable. Re-configure to switch to stable.";
-                            }
-                            else if (!configuredIsBeta && expectedIsBeta)
-                            {
-                                mismatchReason = "Configured for stable server, but this package is prerelease. Re-configure to switch to prerelease.";
-                            }
-                            else
-                            {
-                                mismatchReason = "Server version doesn't match the plugin. Re-configure to update.";
-                            }
-                        }
-                    }
+                    string configuredServerProject = AssetPathUtility.ExtractServerProjectDirectory(
+                        (serverConfig["args"] as JArray)?.ToObject<string[]>());
+                    hasVersionMismatch = !McpConfigurationHelper.PathsEqual(configuredServerProject, expectedServerProject);
+                    mismatchReason = hasVersionMismatch ? ServerSourceMismatchReason : null;
                 }
 
                 // If there's any mismatch and auto-rewrite is enabled, re-register
@@ -853,7 +735,7 @@ namespace MCPForUnity.Editor.Clients
         public void ConfigureWithCapturedValues(
             string projectDir, string claudePath, string pathPrepend,
             bool useHttpTransport, string httpUrl,
-            string uvxPath, string fromArgs, string packageName, string uvxDevFlags,
+            string stdioServerCommandLine,
             string apiKey,
             Models.ConfiguredTransport serverTransport)
         {
@@ -864,7 +746,7 @@ namespace MCPForUnity.Editor.Clients
             else
             {
                 RegisterWithCapturedValues(projectDir, claudePath, pathPrepend,
-                    useHttpTransport, httpUrl, uvxPath, fromArgs, packageName, uvxDevFlags,
+                    useHttpTransport, httpUrl, stdioServerCommandLine,
                     apiKey, serverTransport);
             }
         }
@@ -875,7 +757,7 @@ namespace MCPForUnity.Editor.Clients
         private void RegisterWithCapturedValues(
             string projectDir, string claudePath, string pathPrepend,
             bool useHttpTransport, string httpUrl,
-            string uvxPath, string fromArgs, string packageName, string uvxDevFlags,
+            string stdioServerCommandLine,
             string apiKey,
             Models.ConfiguredTransport serverTransport)
         {
@@ -902,12 +784,11 @@ namespace MCPForUnity.Editor.Clients
             else
             {
                 // Use --scope local to register in the project-local config, avoiding conflicts with user-level config (#664)
-                args = $"mcp add --scope local --transport stdio UnityMCP -- \"{uvxPath}\" {uvxDevFlags}{fromArgs} {packageName}";
+                args = $"mcp add --scope local --transport stdio UnityMCP -- {stdioServerCommandLine}";
             }
 
-            // Remove any existing registrations from ALL scopes to prevent stale config conflicts (#664)
-            McpLog.Info("Removing any existing UnityMCP registrations from all scopes before adding...");
-            RemoveFromAllScopes(claudePath, projectDir, pathPrepend);
+            McpLog.Info("Removing any existing local UnityMCP registration before adding...");
+            RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             // Now add the registration
             if (!ExecPath.TryRun(claudePath, args, projectDir, out var stdout, out var stderr, 15000, pathPrepend))
@@ -930,9 +811,8 @@ namespace MCPForUnity.Editor.Clients
                 throw new InvalidOperationException("Claude CLI not found. Please install Claude Code first.");
             }
 
-            // Remove from ALL scopes to ensure complete cleanup (#664)
-            McpLog.Info("Removing all UnityMCP registrations from all scopes...");
-            RemoveFromAllScopes(claudePath, projectDir, pathPrepend);
+            McpLog.Info("Removing the local UnityMCP registration...");
+            RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             McpLog.Info("MCP server successfully unregistered from Claude Code.");
             client.SetStatus(McpStatus.NotConfigured);
@@ -976,11 +856,8 @@ namespace MCPForUnity.Editor.Clients
             }
             else
             {
-                var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
-                string devFlags = AssetPathUtility.GetUvxDevFlags();
-                string fromArgs = AssetPathUtility.GetBetaServerFromArgs(quoteFromPath: true);
                 // Use --scope local to register in the project-local config, avoiding conflicts with user-level config (#664)
-                args = $"mcp add --scope local --transport stdio UnityMCP -- \"{uvxPath}\" {devFlags}{fromArgs} {packageName}";
+                args = $"mcp add --scope local --transport stdio UnityMCP -- {AssetPathUtility.GetStdioServerCommandLine()}";
             }
 
             string projectDir = GetClientProjectDir();
@@ -1007,9 +884,8 @@ namespace MCPForUnity.Editor.Clients
             }
             catch { }
 
-            // Remove any existing registrations from ALL scopes to prevent stale config conflicts (#664)
-            McpLog.Info("Removing any existing UnityMCP registrations from all scopes before adding...");
-            RemoveFromAllScopes(claudePath, projectDir, pathPrepend);
+            McpLog.Info("Removing any existing local UnityMCP registration before adding...");
+            RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             // Now add the registration with the current transport mode
             if (!ExecPath.TryRun(claudePath, args, projectDir, out var stdout, out var stderr, 15000, pathPrepend))
@@ -1046,9 +922,8 @@ namespace MCPForUnity.Editor.Clients
                 pathPrepend = "/usr/local/bin:/usr/bin:/bin";
             }
 
-            // Remove from ALL scopes to ensure complete cleanup (#664)
-            McpLog.Info("Removing all UnityMCP registrations from all scopes...");
-            RemoveFromAllScopes(claudePath, projectDir, pathPrepend);
+            McpLog.Info("Removing the local UnityMCP registration...");
+            RemoveLocalRegistrations(claudePath, projectDir, pathPrepend);
 
             McpLog.Info("MCP server successfully unregistered from Claude Code.");
             client.SetStatus(McpStatus.NotConfigured);
@@ -1057,7 +932,6 @@ namespace MCPForUnity.Editor.Clients
 
         public override string GetManualSnippet()
         {
-            string uvxPath = MCPServiceLocator.Paths.GetUvxPath();
             bool useHttpTransport = EditorConfigurationCache.Instance.UseHttpTransport;
 
             if (useHttpTransport)
@@ -1072,28 +946,26 @@ namespace MCPForUnity.Editor.Clients
                 }
                 return "# Register the MCP server with Claude Code:\n" +
                        $"claude mcp add --scope local --transport http UnityMCP {httpUrl}{headerArg}\n\n" +
-                       "# Unregister the MCP server (from all scopes to clean up any stale configs):\n" +
-                       "claude mcp remove --scope local UnityMCP\n" +
-                       "claude mcp remove --scope user UnityMCP\n" +
-                       "claude mcp remove --scope project UnityMCP\n\n" +
+                       "# Unregister the MCP server:\n" +
+                       "claude mcp remove --scope local UnityMCP\n\n" +
                        "# List registered servers:\n" +
                        "claude mcp list";
             }
 
-            if (string.IsNullOrEmpty(uvxPath))
+            string serverCommandLine;
+            try
             {
-                return "# Error: Configuration not available - check paths in Advanced Settings";
+                serverCommandLine = AssetPathUtility.GetStdioServerCommandLine();
+            }
+            catch (InvalidOperationException ex)
+            {
+                return $"# Error: {ex.Message}";
             }
 
-            string devFlags = AssetPathUtility.GetUvxDevFlags();
-            string fromArgs = AssetPathUtility.GetBetaServerFromArgs(quoteFromPath: true);
-
             return "# Register the MCP server with Claude Code:\n" +
-                   $"claude mcp add --scope local --transport stdio UnityMCP -- \"{uvxPath}\" {devFlags}{fromArgs} mcp-for-unity\n\n" +
-                   "# Unregister the MCP server (from all scopes to clean up any stale configs):\n" +
-                   "claude mcp remove --scope local UnityMCP\n" +
-                   "claude mcp remove --scope user UnityMCP\n" +
-                   "claude mcp remove --scope project UnityMCP\n\n" +
+                   $"claude mcp add --scope local --transport stdio UnityMCP -- {serverCommandLine}\n\n" +
+                   "# Unregister the MCP server:\n" +
+                   "claude mcp remove --scope local UnityMCP\n\n" +
                    "# List registered servers:\n" +
                    "claude mcp list";
         }
@@ -1106,25 +978,17 @@ namespace MCPForUnity.Editor.Clients
         };
 
         /// <summary>
-        /// Removes UnityMCP registration from all Claude Code configuration scopes (local, user, project).
-        /// Also removes legacy entries from ~/.claude.json that the CLI scoped removal can't touch.
-        /// This ensures no stale or conflicting configurations remain across different scopes.
-        /// Also handles legacy "unityMCP" naming convention.
+        /// Removes the local-scope UnityMCP registration, the one Configure writes, including the
+        /// legacy "unityMCP" name and legacy entries in ~/.claude.json that the CLI scoped removal
+        /// can't touch. Project scope (the repository's checked-in .mcp.json) and user scope (shared
+        /// by every project) are left alone; the local registration takes precedence over both.
         /// </summary>
-        private static void RemoveFromAllScopes(string claudePath, string projectDir, string pathPrepend)
+        private static void RemoveLocalRegistrations(string claudePath, string projectDir, string pathPrepend)
         {
-            // Remove from all three scopes to prevent stale configs causing connection issues.
-            // See GitHub issue #664 - conflicting configs at different scopes can cause
-            // Claude Code to connect with outdated/incorrect configuration.
-            string[] scopes = { "local", "user", "project" };
             string[] names = { "UnityMCP", "unityMCP" }; // Include legacy naming
-
-            foreach (var scope in scopes)
+            foreach (var name in names)
             {
-                foreach (var name in names)
-                {
-                    ExecPath.TryRun(claudePath, $"mcp remove --scope {scope} {name}", projectDir, out _, out _, 5000, pathPrepend);
-                }
+                ExecPath.TryRun(claudePath, $"mcp remove --scope local {name}", projectDir, out _, out _, 5000, pathPrepend);
             }
 
             // Also remove legacy entries directly from ~/.claude.json.
@@ -1162,7 +1026,7 @@ namespace MCPForUnity.Editor.Clients
                 {
                     string normalizedKey = NormalizePath(project.Name);
 
-                    // Match exact path or parent paths (same logic as ReadUserScopeConfig)
+                    // Match exact path or parent paths (same logic as ReadLocalScopeConfig)
                     if (!string.Equals(normalizedKey, normalizedProjectDir, StringComparison.OrdinalIgnoreCase))
                     {
                         // Also check if projectDir is a child of this config entry
@@ -1235,120 +1099,12 @@ namespace MCPForUnity.Editor.Clients
         }
 
         /// <summary>
-        /// Extracts the package source (--from argument value) from claude mcp get output.
-        /// The output format includes args like: --from "mcpforunityserver==9.0.1"
-        /// </summary>
-        private static string ExtractPackageSourceFromCliOutput(string cliOutput)
-        {
-            if (string.IsNullOrEmpty(cliOutput))
-                return null;
-
-            // Look for --from followed by the package source
-            // The CLI output may have it quoted or unquoted
-            int fromIndex = cliOutput.IndexOf("--from", StringComparison.OrdinalIgnoreCase);
-            if (fromIndex < 0)
-                return null;
-
-            // Move past "--from" and any whitespace
-            int startIndex = fromIndex + 6;
-            while (startIndex < cliOutput.Length && char.IsWhiteSpace(cliOutput[startIndex]))
-                startIndex++;
-
-            if (startIndex >= cliOutput.Length)
-                return null;
-
-            // Check if value is quoted
-            char quoteChar = cliOutput[startIndex];
-            if (quoteChar == '"' || quoteChar == '\'')
-            {
-                startIndex++;
-                int endIndex = cliOutput.IndexOf(quoteChar, startIndex);
-                if (endIndex > startIndex)
-                    return cliOutput.Substring(startIndex, endIndex - startIndex);
-            }
-            else
-            {
-                // Unquoted - read until whitespace or end of line
-                int endIndex = startIndex;
-                while (endIndex < cliOutput.Length && !char.IsWhiteSpace(cliOutput[endIndex]))
-                    endIndex++;
-
-                if (endIndex > startIndex)
-                    return cliOutput.Substring(startIndex, endIndex - startIndex);
-            }
-
-            return null;
-        }
-
-        /// <summary>
-        /// Reads Claude Code configuration from both local-scope (.claude/mcp.json in the project)
-        /// and user-scope (~/.claude.json). Local scope takes precedence, matching Claude Code's
-        /// own config resolution order.
+        /// Reads the local-scope UnityMCP registration, the one Configure writes: ~/.claude.json,
+        /// projects[&lt;path&gt;].mcpServers. User scope (top-level mcpServers) and project scope
+        /// (.mcp.json) are not read.
         /// This is much faster than running `claude mcp list` which does health checks on all servers.
         /// </summary>
-        private static (JObject serverConfig, string error) ReadClaudeCodeConfig(string projectDir)
-        {
-            try
-            {
-                // 1. Check local-scope config first: {projectDir}/.claude/mcp.json
-                //    This is where `claude mcp add --scope local` writes.
-                var localResult = ReadLocalScopeConfig(projectDir);
-                if (localResult.serverConfig != null)
-                    return localResult;
-                if (localResult.error != null)
-                    return localResult;
-
-                // 2. Fall back to user-scope config: ~/.claude.json
-                return ReadUserScopeConfig(projectDir);
-            }
-            catch (Exception ex)
-            {
-                return (null, $"Error reading Claude config: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Reads UnityMCP config from the local-scope file: {projectDir}/.claude/mcp.json.
-        /// This is where `claude mcp add --scope local` stores registrations.
-        /// </summary>
         private static (JObject serverConfig, string error) ReadLocalScopeConfig(string projectDir)
-        {
-            try
-            {
-                if (string.IsNullOrEmpty(projectDir))
-                    return (null, null);
-
-                string localConfigPath = Path.Combine(projectDir, ".claude", "mcp.json");
-                if (!File.Exists(localConfigPath))
-                    return (null, null);
-
-                string json = File.ReadAllText(localConfigPath);
-                var config = JObject.Parse(json);
-                var mcpServers = config["mcpServers"] as JObject;
-                if (mcpServers == null)
-                    return (null, null);
-
-                foreach (var server in mcpServers.Properties())
-                {
-                    if (string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return (server.Value as JObject, null);
-                    }
-                }
-
-                return (null, null);
-            }
-            catch (Exception ex)
-            {
-                return (null, $"Error reading local Claude config: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Reads UnityMCP config from the user-scope file: ~/.claude.json (projects section).
-        /// This handles legacy configurations and direct user-level entries.
-        /// </summary>
-        private static (JObject serverConfig, string error) ReadUserScopeConfig(string projectDir)
         {
             try
             {
@@ -1408,7 +1164,7 @@ namespace MCPForUnity.Editor.Clients
             }
             catch (Exception ex)
             {
-                return (null, $"Error reading user Claude config: {ex.Message}");
+                return (null, $"Error reading Claude config: {ex.Message}");
             }
         }
 
@@ -1422,47 +1178,6 @@ namespace MCPForUnity.Editor.Clients
 
             // Replace backslashes with forward slashes and remove trailing slashes
             return path.Replace('\\', '/').TrimEnd('/');
-        }
-
-        /// <summary>
-        /// Extracts the package source from Claude Code JSON config.
-        /// For stdio servers, this is in the args array after "--from".
-        /// </summary>
-        private static string ExtractPackageSourceFromConfig(JObject serverConfig)
-        {
-            if (serverConfig == null)
-                return null;
-
-            var args = serverConfig["args"] as JArray;
-            if (args == null)
-                return null;
-
-            // Look for --from argument (either "--from VALUE" or "--from=VALUE" format)
-            bool foundFrom = false;
-            foreach (var arg in args)
-            {
-                string argStr = arg?.ToString();
-                if (argStr == null)
-                    continue;
-
-                if (foundFrom)
-                {
-                    // This is the package source following --from
-                    return argStr;
-                }
-
-                if (argStr == "--from")
-                {
-                    foundFrom = true;
-                }
-                else if (argStr.StartsWith("--from=", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Handle --from=VALUE format
-                    return argStr.Substring(7).Trim('"', '\'');
-                }
-            }
-
-            return null;
         }
     }
 }

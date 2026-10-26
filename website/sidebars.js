@@ -59,7 +59,6 @@ const sidebars = {
           label: 'Resources',
         },
         'reference/cli',
-        'reference/manifest',
       ],
     },
     {
@@ -75,7 +74,6 @@ const sidebars = {
         'architecture/manage-physics',
         'architecture/project-roadmap',
         'architecture/roadmap',
-        'architecture/external-analytics',
       ],
     },
     {
@@ -85,7 +83,6 @@ const sidebars = {
       items: [
         'contributing/dev-setup',
         'contributing/testing',
-        'contributing/releases',
         'contributing/docs',
       ],
     },

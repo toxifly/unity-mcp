@@ -10,22 +10,24 @@ Model Context Protocol server for Unity Editor integration. Control Unity throug
 
 💬 **Join our community:** [Discord Server](https://discord.gg/y4p8KfzrN4)
 
-**Required:** Install the [Unity MCP Plugin](https://github.com/CoplayDev/unity-mcp?tab=readme-ov-file#-step-1-install-the-unity-package) to connect Unity Editor with this MCP server.
+**Required:** Install the Unity package from the same checkout's `MCPForUnity/` folder to connect Unity Editor with this MCP server.
 
 ---
 
 ## Quick Start
 
-### 1. Pull the image
+### 1. Build the image
+
+This fork publishes no image. Build it from the repository root:
 
 ```bash
-docker pull msanatan/mcp-for-unity-server:latest
+docker build -f Server/Dockerfile -t unity-mcp-server .
 ```
 
 ### 2. Run the server
 
 ```bash
-docker run -p 8080:8080 msanatan/mcp-for-unity-server:latest
+docker run -p 8080:8080 unity-mcp-server
 ```
 
 This starts the MCP server on port 8080.
@@ -52,13 +54,13 @@ The server connects to the Unity Editor automatically when both are running. No 
 
 **Environment Variables:**
 
-- `DISABLE_TELEMETRY=true` - Opt out of anonymous usage analytics
+- `DISABLE_TELEMETRY=true` - Keep telemetry off even if the server config enables it (this fork's server sends none by default)
 - `LOG_LEVEL=DEBUG` - Enable detailed logging (default: INFO)
 
 Example running with environment variables:
 
 ```bash
-docker run -p 8080:8080 -e LOG_LEVEL=DEBUG msanatan/mcp-for-unity-server:latest
+docker run -p 8080:8080 -e LOG_LEVEL=DEBUG unity-mcp-server
 ```
 
 ---
@@ -72,7 +74,7 @@ docker run -p 8080:8080 \
   -e UNITY_MCP_HTTP_REMOTE_HOSTED=true \
   -e UNITY_MCP_API_KEY_VALIDATION_URL=https://auth.example.com/api/validate-key \
   -e UNITY_MCP_API_KEY_LOGIN_URL=https://app.example.com/api-keys \
-  msanatan/mcp-for-unity-server:latest
+  unity-mcp-server
 ```
 
 In this mode:
@@ -107,7 +109,7 @@ In this mode:
 }
 ```
 
-For full details, see the [Remote Server Auth Guide](https://github.com/CoplayDev/unity-mcp/blob/main/docs/guides/REMOTE_SERVER_AUTH.md).
+For full details, see the [Remote Server Auth Guide](../website/docs/guides/remote-server-auth.md).
 
 ---
 

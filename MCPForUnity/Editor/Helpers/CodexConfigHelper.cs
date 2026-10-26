@@ -17,65 +17,17 @@ namespace MCPForUnity.Editor.Helpers
     /// </summary>
     public static class CodexConfigHelper
     {
-        private static void AddUvxModeFlags(TomlArray args)
-        {
-            if (args == null) return;
-            foreach (var flag in AssetPathUtility.GetUvxDevFlagsList())
-                args.Add(new TomlString { Value = flag });
-        }
-
-        public static string BuildCodexServerBlock(string uvPath)
+        public static string BuildCodexServerBlock()
         {
             var table = new TomlTable();
-            var mcpServers = new TomlTable();
-            var unityMCP = new TomlTable();
-
-            // Check transport preference
-            bool useHttpTransport = EditorPrefs.GetBool(MCPForUnity.Editor.Constants.EditorPrefKeys.UseHttpTransport, true);
-
-            if (useHttpTransport)
+            if (EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true))
             {
-                // HTTP mode: Use url field
-                string httpUrl = HttpEndpointUtility.GetMcpRpcUrl();
-                unityMCP["url"] = new TomlString { Value = httpUrl };
-
                 // Enable Codex's Rust MCP client for HTTP/SSE transport
                 EnsureRmcpClientFeature(table);
             }
-            else
-            {
-                // Stdio mode: Use command and args
-                var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
 
-                unityMCP["command"] = uvxPath;
-
-                var args = new TomlArray();
-                AddUvxModeFlags(args);
-                // Use centralized helper for beta server / prerelease args
-                foreach (var arg in AssetPathUtility.GetBetaServerFromArgsList())
-                {
-                    args.Add(new TomlString { Value = arg });
-                }
-                args.Add(new TomlString { Value = packageName });
-                args.Add(new TomlString { Value = "--transport" });
-                args.Add(new TomlString { Value = "stdio" });
-
-                unityMCP["args"] = args;
-
-                // Add Windows-specific environment configuration for stdio mode
-                var platformService = MCPServiceLocator.Platform;
-                if (platformService.IsWindows())
-                {
-                    var envTable = new TomlTable { IsInline = true };
-                    envTable["SystemRoot"] = new TomlString { Value = platformService.GetSystemRoot() };
-                    unityMCP["env"] = envTable;
-                }
-
-                // Allow extra time for uvx to download packages on first run
-                unityMCP["startup_timeout_sec"] = new TomlInteger { Value = 60 };
-            }
-
-            mcpServers["unityMCP"] = unityMCP;
+            var mcpServers = new TomlTable();
+            mcpServers["unityMCP"] = CreateUnityMcpTable();
             table["mcp_servers"] = mcpServers;
 
             using var writer = new StringWriter();
@@ -83,7 +35,7 @@ namespace MCPForUnity.Editor.Helpers
             return writer.ToString();
         }
 
-        public static string UpsertCodexServerBlock(string existingToml, string uvPath)
+        public static string UpsertCodexServerBlock(string existingToml)
         {
             // Parse existing TOML or create new root table
             var root = TryParseToml(existingToml) ?? new TomlTable();
@@ -98,7 +50,7 @@ namespace MCPForUnity.Editor.Helpers
             var mcpServers = root["mcp_servers"] as TomlTable;
 
             // Create or update unityMCP table
-            mcpServers["unityMCP"] = CreateUnityMcpTable(uvPath);
+            mcpServers["unityMCP"] = CreateUnityMcpTable();
 
             if (useHttpTransport)
             {
@@ -180,8 +132,7 @@ namespace MCPForUnity.Editor.Helpers
         /// <summary>
         /// Creates a TomlTable for the unityMCP server configuration
         /// </summary>
-        /// <param name="uvPath">Path to uv executable (used as fallback if uvx is not available)</param>
-        private static TomlTable CreateUnityMcpTable(string uvPath)
+        private static TomlTable CreateUnityMcpTable()
         {
             var unityMCP = new TomlTable();
 
@@ -196,21 +147,16 @@ namespace MCPForUnity.Editor.Helpers
             }
             else
             {
-                // Stdio mode: Use command and args
-                var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
+                // Stdio mode: run the local Server/ checkout
+                var (command, serverArgs) = AssetPathUtility.GetStdioServerCommand();
 
-                unityMCP["command"] = new TomlString { Value = uvxPath };
+                unityMCP["command"] = new TomlString { Value = command };
 
                 var argsArray = new TomlArray();
-                AddUvxModeFlags(argsArray);
-                // Use centralized helper for beta server / prerelease args
-                foreach (var arg in AssetPathUtility.GetBetaServerFromArgsList())
+                foreach (string arg in serverArgs)
                 {
                     argsArray.Add(new TomlString { Value = arg });
                 }
-                argsArray.Add(new TomlString { Value = packageName });
-                argsArray.Add(new TomlString { Value = "--transport" });
-                argsArray.Add(new TomlString { Value = "stdio" });
                 unityMCP["args"] = argsArray;
 
                 // Add Windows-specific environment configuration for stdio mode
@@ -222,7 +168,7 @@ namespace MCPForUnity.Editor.Helpers
                     unityMCP["env"] = envTable;
                 }
 
-                // Allow extra time for uvx to download packages on first run
+                // Allow extra time for uv to sync the locked environment on first run
                 unityMCP["startup_timeout_sec"] = new TomlInteger { Value = 60 };
             }
 

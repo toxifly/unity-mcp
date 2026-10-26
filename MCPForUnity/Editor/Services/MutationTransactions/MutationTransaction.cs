@@ -157,6 +157,25 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             return new MutationTransaction(Array.Empty<Object>(), options);
         }
 
+        /// <summary>
+        /// Runs <paramref name="mutate"/> on an in-memory hierarchy, such as prefab contents from
+        /// LoadPrefabContents, and returns the serialized changes it made. Nothing is saved, so a
+        /// dry run can report what a save would write without touching disk.
+        /// </summary>
+        public static IReadOnlyList<SerializedChange> DiffHierarchy(GameObject root, Action mutate)
+        {
+            Dictionary<string, Fingerprint> before = CaptureFingerprints(HierarchyObjects(root), Array.Empty<Scene>(), Array.Empty<string>());
+            mutate();
+            return Diff(before, CaptureFingerprints(HierarchyObjects(root), Array.Empty<Scene>(), Array.Empty<string>()));
+        }
+
+        private static IEnumerable<Object> HierarchyObjects(GameObject root)
+        {
+            var found = new HashSet<Object>();
+            AddGameObjectHierarchy(found, root);
+            return found;
+        }
+
         public IReadOnlyList<string> TargetGlobalObjectIds =>
             targets.Select(ObjectIdentity).ToArray();
 

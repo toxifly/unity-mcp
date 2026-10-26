@@ -179,6 +179,17 @@ def test_apply_external_edit_forwards_edits_and_flags(mock_unity):
     assert mock_unity["params"]["dry_run"] is False
 
 
+def test_apply_external_edit_forwards_source_path(mock_unity):
+    result = asyncio.run(manage_scene(
+        SimpleNamespace(), action="apply_external_edit",
+        path="Assets/Scenes/Level2.unity", source_path="/tmp/Level2.snapshot.unity",
+        discard_unsaved=True,
+    ))
+    assert result["success"] is True
+    assert mock_unity["params"]["source_path"] == "/tmp/Level2.snapshot.unity"
+    assert "edits" not in mock_unity["params"]
+
+
 def test_apply_external_edit_skips_the_refresh_that_raises_the_prompt(mock_unity, monkeypatch):
     # A refresh is what makes Unity notice the on-disk change and raise the modal reload prompt
     # this action exists to avoid, so it must not be the thing that runs just before it.

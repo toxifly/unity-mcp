@@ -13,14 +13,8 @@ The `mcp-for-unity` CLI is a developer-facing terminal for the same Unity automa
 ## Invocation
 
 ```bash
-# Run via uvx (no install)
-uvx --from mcpforunityserver mcp-for-unity <command> [args]
-
-# Run from a Server checkout
-cd Server && uv run mcp-for-unity <command> [args]
-
-# Run via the dedicated CLI entry point (alias)
-uvx --from mcpforunityserver unity-mcp <command> [args]
+# Run from the Server checkout, in the environment uv.lock pins
+cd Server && uv run --frozen unity-mcp <command> [args]
 ```
 
 ## How it talks to Unity
@@ -93,4 +87,4 @@ See [CLI Examples](/guides/cli-examples) for end-to-end walkthroughs and the [CL
 
 ## Source
 
-CLI command definitions: [`Server/src/cli/commands/`](https://github.com/CoplayDev/unity-mcp/tree/beta/Server/src/cli/commands). Entry point: [`Server/src/cli/main.py`](https://github.com/CoplayDev/unity-mcp/blob/beta/Server/src/cli/main.py).
+CLI command definitions: [`Server/src/cli/commands/`](https://github.com/toxifly/unity-mcp/tree/develop/Server/src/cli/commands). Entry point: [`Server/src/cli/main.py`](https://github.com/toxifly/unity-mcp/blob/develop/Server/src/cli/main.py).

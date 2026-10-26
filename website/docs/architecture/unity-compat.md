@@ -48,7 +48,7 @@ In both cases, **fail-soft**: callers should treat a missing API as a no-op, nev
 
 ## Compile-checking across versions locally
 
-`tools/check-unity-versions.sh` runs a compile-only check across the same Unity versions CI runs. The matrix is in `tools/unity-versions.json`.
+`tools/check-unity-versions.sh` runs a compile-only check across the Unity versions listed in `tools/unity-versions.json`.
 
 ```bash
 tools/check-unity-versions.sh           # compile-only across installed Unity Hub editors

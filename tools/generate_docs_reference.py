@@ -17,13 +17,13 @@ Outputs:
 Modes:
   --write (default)  regenerate files in place
   --check            re-emit to a temp dir and diff against committed files;
-                     exits non-zero on drift (used by CI / pre-commit hook)
+                     exits non-zero on drift
 
 Hand-authored example blocks between <!-- examples:start --> and
 <!-- examples:end --> are preserved across regeneration.
 
 Run requirements: the Server/ Python dependencies must be importable, since
-we load every tool module to trigger decorator registration. In CI:
+we load every tool module to trigger decorator registration. Drift check:
   cd Server && uv sync && cd .. && uv --project Server run python tools/generate_docs_reference.py --check
 """
 

@@ -342,6 +342,15 @@ def move_to(target: str, scene_name: str):
     ),
 )
 @click.option(
+    "--source",
+    "source_path",
+    default=None,
+    help=(
+        "Unity YAML file whose bytes replace the scene verbatim, e.g. a snapshot to restore. "
+        "Absolute, or relative to the project root. Exclusive with --edits."
+    ),
+)
+@click.option(
     "--discard-unsaved",
     is_flag=True,
     help="Drop the open scene's unsaved in-memory changes, which the rewrite would otherwise refuse to discard."
@@ -355,6 +364,7 @@ def move_to(target: str, scene_name: str):
 def apply_external_edit(
     scene_path: str,
     edits: Optional[str],
+    source_path: Optional[str],
     discard_unsaved: bool,
     dry_run: bool,
 ):
@@ -363,12 +373,15 @@ def apply_external_edit(
     This is the only safe way to hand-patch scene YAML: editing the file outside
     Unity raises a modal reload prompt that blocks the Editor's main thread.
 
-    Every anchor must match exactly 'count' times or nothing is written.
+    Every anchor must match exactly 'count' times or nothing is written. To
+    restore a whole file, pass it with --source instead of writing the open
+    scene's file directly.
 
     \b
     Examples:
         unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity" --edits '[{"old_text": "m_Name: Old", "new_text": "m_Name: New"}]'
         unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity" --edits '[...]' --dry-run
+        unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity" --source /tmp/Main.snapshot.unity --discard-unsaved
         unity-mcp scene apply-external-edit "Assets/Scenes/Main.unity"
     """
     config = get_config()
@@ -377,8 +390,13 @@ def apply_external_edit(
         "action": "apply_external_edit",
         "path": scene_path,
     }
+    if edits is not None and source_path is not None:
+        print_error("Pass either --edits or --source, not both.")
+        sys.exit(1)
     if edits is not None:
         params["edits"] = parse_json_list_or_exit(edits, "--edits")
+    if source_path is not None:
+        params["source_path"] = source_path
     if discard_unsaved:
         params["discard_unsaved"] = True
     if dry_run:

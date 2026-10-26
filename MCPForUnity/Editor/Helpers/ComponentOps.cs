@@ -218,9 +218,11 @@ namespace MCPForUnity.Editor.Helpers
         {
             error = null;
 
-            // Skip reflection for UnityEngine.Object types with JObject values
-            // so SerializedProperty can resolve guid/spriteName/fileID forms.
-            bool isJObjectValue = value != null && value.Type == JTokenType.Object;
+            // Skip reflection for UnityEngine.Object types with JObject or integer values so
+            // SerializedProperty can resolve guid/spriteName/fileID and bare instanceID forms; the
+            // reflection converter only reads strings and objects, and warns on anything else.
+            bool isJObjectValue = value != null
+                && (value.Type == JTokenType.Object || value.Type == JTokenType.Integer);
 
             // Try property first
             PropertyInfo propInfo = type.GetProperty(propertyName, flags)

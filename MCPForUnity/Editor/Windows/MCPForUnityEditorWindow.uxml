@@ -7,9 +7,6 @@
             </ui:VisualElement>
             <ui:Label text="v9.1.0" name="version-label" class="header-version" />
         </ui:VisualElement>
-        <ui:VisualElement name="update-notification" class="update-notification">
-            <ui:Label name="update-notification-text" class="update-notification-text" />
-        </ui:VisualElement>
         <uie:Toolbar name="tab-toolbar" class="tab-toolbar">
             <uie:ToolbarToggle name="clients-tab" text="Connect" value="true" />
             <uie:ToolbarToggle name="tools-tab" text="Tools" />

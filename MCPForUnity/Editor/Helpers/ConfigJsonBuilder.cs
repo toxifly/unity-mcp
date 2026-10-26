@@ -13,7 +13,7 @@ namespace MCPForUnity.Editor.Helpers
 {
     public static class ConfigJsonBuilder
     {
-        public static string BuildManualConfigJson(string uvPath, McpClient client)
+        public static string BuildManualConfigJson(McpClient client)
         {
             var root = new JObject();
             bool isVSCode = client?.IsVsCodeLayout == true;
@@ -21,21 +21,21 @@ namespace MCPForUnity.Editor.Helpers
             JObject container = EnsureObject(root, GetContainerKey(client, isVSCode));
 
             var unity = new JObject();
-            PopulateUnityNode(unity, uvPath, client, isVSCode);
+            PopulateUnityNode(unity, client, isVSCode);
 
             container["unityMCP"] = unity;
 
             return root.ToString(Formatting.Indented);
         }
 
-        public static JObject ApplyUnityServerToExistingConfig(JObject root, string uvPath, McpClient client)
+        public static JObject ApplyUnityServerToExistingConfig(JObject root, McpClient client)
         {
             if (root == null) root = new JObject();
             bool isVSCode = client?.IsVsCodeLayout == true;
             if (!string.IsNullOrEmpty(client?.SchemaUrl) && root["$schema"] == null) root["$schema"] = client.SchemaUrl;
             JObject container = EnsureObject(root, GetContainerKey(client, isVSCode));
             JObject unity = container["unityMCP"] as JObject ?? new JObject();
-            PopulateUnityNode(unity, uvPath, client, isVSCode);
+            PopulateUnityNode(unity, client, isVSCode);
 
             container["unityMCP"] = unity;
             return root;
@@ -43,12 +43,12 @@ namespace MCPForUnity.Editor.Helpers
 
         /// <summary>
         /// Centralized builder that applies all caveats consistently.
-        /// - Sets command/args with uvx and package version
+        /// - Sets command/args that run the local Server/ checkout
         /// - Ensures env exists
         /// - Adds transport configuration (HTTP or stdio)
         /// - Adds disabled:false for Windsurf/Kiro only when missing
         /// </summary>
-        private static void PopulateUnityNode(JObject unity, string uvPath, McpClient client, bool isVSCode)
+        private static void PopulateUnityNode(JObject unity, McpClient client, bool isVSCode)
         {
             // Get transport preference (default to HTTP)
             bool prefValue = EditorConfigurationCache.Instance.UseHttpTransport;
@@ -101,13 +101,11 @@ namespace MCPForUnity.Editor.Helpers
             }
             else
             {
-                // Stdio mode: Use uvx command
-                var (uvxPath, fromUrl, packageName) = AssetPathUtility.GetUvxCommandParts();
+                // Stdio mode: run the local Server/ checkout
+                var (command, serverArgs) = AssetPathUtility.GetStdioServerCommand();
 
-                var toolArgs = BuildUvxArgs(fromUrl, packageName);
-
-                unity["command"] = uvxPath;
-                unity["args"] = JArray.FromObject(toolArgs.ToArray());
+                unity["command"] = command;
+                unity["args"] = JArray.FromObject(serverArgs);
 
                 // Remove url/serverUrl if they exist from previous config
                 if (unity["url"] != null) unity.Remove("url");
@@ -158,30 +156,5 @@ namespace MCPForUnity.Editor.Helpers
             parent[name] = created;
             return created;
         }
-
-        private static IList<string> BuildUvxArgs(string fromUrl, string packageName)
-        {
-            // Dev mode: force a fresh install/resolution (avoids stale cached builds while iterating).
-            // `--no-cache` avoids reading from cache; `--refresh` ensures metadata is revalidated.
-            // Note: --reinstall is not supported by uvx and will cause a warning.
-            // Keep ordering consistent with other uvx builders: dev flags first, then --from <url>, then package name.
-            var args = new List<string>();
-
-            foreach (var flag in AssetPathUtility.GetUvxDevFlagsList())
-                args.Add(flag);
-
-            // Use centralized helper for beta server / prerelease args
-            foreach (var arg in AssetPathUtility.GetBetaServerFromArgsList())
-            {
-                args.Add(arg);
-            }
-            args.Add(packageName);
-
-            args.Add("--transport");
-            args.Add("stdio");
-
-            return args;
-        }
-
     }
 }

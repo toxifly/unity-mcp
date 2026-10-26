@@ -77,7 +77,7 @@ namespace MCPForUnityTests.Editor.Helpers
         {
             var client = new KiloCodeConfigurator().Client;
 
-            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(uvPath: null, client));
+            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(client));
 
             Assert.AreEqual("https://app.kilo.ai/config.json", (string)root["$schema"],
                 "Kilo Code config should include the kilo.jsonc $schema at the root");
@@ -113,7 +113,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 }
             };
 
-            var result = ConfigJsonBuilder.ApplyUnityServerToExistingConfig(root, uvPath: null, client);
+            var result = ConfigJsonBuilder.ApplyUnityServerToExistingConfig(root, client);
 
             Assert.AreEqual("https://app.kilo.ai/config.json", (string)result["$schema"],
                 "Rewrite should add the kilo.jsonc $schema when missing");
@@ -130,7 +130,7 @@ namespace MCPForUnityTests.Editor.Helpers
         {
             var client = new ClineConfigurator().Client;
 
-            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(uvPath: null, client));
+            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(client));
 
             Assert.IsNull(root["$schema"], "Cline must not write a $schema");
             var unity = (JObject)root.SelectToken("mcpServers.unityMCP");
@@ -145,7 +145,7 @@ namespace MCPForUnityTests.Editor.Helpers
             // A client without a type override must continue to receive the generic type:http.
             var client = new McpClient { name = "Cursor" };
 
-            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(uvPath: null, client));
+            var root = JObject.Parse(ConfigJsonBuilder.BuildManualConfigJson(client));
             var unity = (JObject)root.SelectToken("mcpServers.unityMCP");
 
             Assert.NotNull(unity, "Expected mcpServers.unityMCP node");

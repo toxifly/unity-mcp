@@ -204,12 +204,25 @@ namespace MCPForUnity.Editor.Services
                     throw new InvalidOperationException("Cannot start a test run while the Editor is in or entering Play Mode. Stop Play Mode and try again.");
                 }
 
+                string[] testNames = filterOptions?.TestNames;
+                if (ExplicitTestExclusion.NamesNoTest(filterOptions))
+                {
+                    ITestAdaptor root = await RetrieveTestRootAsync(mode).ConfigureAwait(true);
+                    if (root == null)
+                    {
+                        throw new InvalidOperationException(
+                            "Could not read the test tree to keep [Explicit] tests out of a selection that names no test.");
+                    }
+
+                    testNames = ExplicitTestExclusion.TestNamesExcludingExplicit(filterOptions, root);
+                }
+
                 if (mode == TestMode.PlayMode)
                 {
                     // PlayMode runs transition the editor into play across multiple update ticks. Unity's
                     // built-in pipeline schedules SaveModifiedSceneTask early, but that task uses
                     // EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo which throws once play mode is
-                    // active. To minimize that window we pre-save dirty scenes and disable domain reload (so the
+                    // active. To minimize that window we refuse dirty scenes and disable domain reload (so the
                     // MCP bridge stays alive). We do NOT force runSynchronously here because that can freeze the
                     // editor in some projects. If the TestRunner still hits the save task after entering play, the
                     // run can fail; in that case, rerun from a clean Edit Mode state.
@@ -226,16 +239,24 @@ namespace MCPForUnity.Editor.Services
                 var filter = new Filter
                 {
                     testMode = mode,
-                    testNames = filterOptions?.TestNames,
+                    testNames = testNames,
                     groupNames = filterOptions?.GroupNames,
                     categoryNames = filterOptions?.CategoryNames,
                     assemblyNames = filterOptions?.AssemblyNames
                 };
                 var settings = new ExecutionSettings(filter);
 
-                // Save dirty scenes for all test modes to prevent modal dialogs blocking MCP
-                // (Issue #525: EditMode tests were blocked by save dialog)
-                SaveDirtyScenesIfNeeded();
+                // run_tests refuses unsaved scenes up front; this re-check covers anything dirtied
+                // while the run was being prepared (the [Explicit] lookup above spans editor frames).
+                // Saving here instead would write state nobody chose to keep, and leaving it would
+                // let the Test Framework's save prompt block the main thread the bridge pumps on.
+                IReadOnlyList<string> unsaved = UnsavedScenes();
+                if (unsaved.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        $"unsaved_scenes: {string.Join(", ", unsaved)} changed while the run was being prepared. "
+                        + "Save or discard the changes, then rerun.");
+                }
 
                 // Apply no-throttling preemptively for PlayMode tests. This ensures Unity
                 // isn't throttled during the Play mode transition (which requires multiple
@@ -244,6 +265,7 @@ namespace MCPForUnity.Editor.Services
                 if (mode == TestMode.PlayMode)
                 {
                     TestRunnerNoThrottle.ApplyNoThrottlingPreemptive();
+                    PlayModeTestAssemblyCache.Reset();
                 }
 
                 _testRunnerApi.Execute(settings);
@@ -498,29 +520,29 @@ namespace MCPForUnity.Editor.Services
             PlayModeOptionsGuard.Clear();
         }
 
-        private static void SaveDirtyScenesIfNeeded()
+        /// <summary>
+        /// Loaded scenes and the open Prefab Mode stage that have unsaved changes, by asset path.
+        /// Starting a run over any of them makes the Test Framework ask whether to save them.
+        /// </summary>
+        internal static IReadOnlyList<string> UnsavedScenes()
         {
-            int sceneCount = SceneManager.sceneCount;
-            for (int i = 0; i < sceneCount; i++)
+            var unsaved = new List<string>();
+            for (int i = 0; i < SceneManager.sceneCount; i++)
             {
-                var scene = SceneManager.GetSceneAt(i);
+                Scene scene = SceneManager.GetSceneAt(i);
                 if (scene.isDirty)
                 {
-                    if (string.IsNullOrEmpty(scene.path))
-                    {
-                        McpLog.Warn($"[TestRunnerService] Skipping unsaved scene '{scene.name}': save it manually before running tests.");
-                        continue;
-                    }
-                    try
-                    {
-                        EditorSceneManager.SaveScene(scene);
-                    }
-                    catch (Exception ex)
-                    {
-                        McpLog.Warn($"[TestRunnerService] Failed to save dirty scene '{scene.name}': {ex.Message}");
-                    }
+                    unsaved.Add(string.IsNullOrEmpty(scene.path) ? "(untitled scene)" : scene.path);
                 }
             }
+
+            PrefabStage stage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (stage != null && stage.scene.isDirty)
+            {
+                unsaved.Add(stage.assetPath);
+            }
+
+            return unsaved;
         }
 
         #region Test list helpers

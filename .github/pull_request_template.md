@@ -13,11 +13,10 @@
 ## Changes Made
 <!-- List the specific changes in this PR -->
 
-## Compatibility / Package Source
-<!-- Especially important for Unity API compatibility, package-source, or transport changes -->
+## Compatibility
+<!-- Especially important for Unity API compatibility or transport changes -->
 - Unity version(s) tested:
-- Package source used (`#beta`, `#main`, tag, branch, or `file:`):
-- Resolved commit hash from `Packages/packages-lock.json` (if using a Git package URL):
+- unity-mcp commit tested:
 
 ## Testing/Screenshots/Recordings
 <!-- If applicable, add screenshots or recordings to demonstrate the changes -->
@@ -31,9 +30,7 @@
 ## Documentation Updates
 <!-- Check if you updated documentation for changes to tools/resources -->
 - [ ] I have added/removed/modified tools or resources
-- [ ] If yes, I have updated all documentation files using:
-  - [ ] The LLM prompt at `tools/UPDATE_DOCS_PROMPT.md` (recommended)
-  - [ ] Manual review of the generated changes
+- [ ] If yes, I have regenerated `website/docs/reference/` (`tools/generate_docs_reference.py`) and updated `unity-mcp-skill/` where needed
 
 
 ## Related Issues

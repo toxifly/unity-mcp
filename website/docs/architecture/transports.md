@@ -43,7 +43,7 @@ MCP for Unity supports two transports between the MCP client and the Python serv
 
 **What you give up:**
 - Port-number shorthand for `set_active_instance` (HTTP enforces `Name@hash`)
-- A small amount of setup complexity if you bind to LAN — see [Security](https://github.com/CoplayDev/unity-mcp/blob/beta/SECURITY.md)
+- A small amount of setup complexity if you bind to LAN — see [Security](https://github.com/toxifly/unity-mcp/blob/develop/SECURITY.md)
 
 ## Stdio
 
@@ -55,8 +55,8 @@ MCP for Unity supports two transports between the MCP client and the Python serv
 {
   "mcpServers": {
     "unityMCP": {
-      "command": "uvx",
-      "args": ["--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"]
+      "command": "uv",
+      "args": ["run", "--frozen", "--project", "/path/to/unity-mcp/Server", "mcp-for-unity", "--transport", "stdio"]
     }
   }
 }

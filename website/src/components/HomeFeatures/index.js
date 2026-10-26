@@ -41,7 +41,7 @@ function getFeatures(toolCount, toolGroupCount) {
       n: '05',
       kicker: 'DOCS',
       title: 'Generated, never stale.',
-      body: 'Every tool and resource page is generated from the Python @mcp_for_unity_tool registry. CI fails if the docs drift. Examples you write are preserved across regenerations.',
+      body: 'Every tool and resource page is generated from the Python @mcp_for_unity_tool registry. A pre-commit hook regenerates them when tools change. Examples you write are preserved across regenerations.',
       href: '/contributing/docs',
       cta: 'Docs workflow',
     },

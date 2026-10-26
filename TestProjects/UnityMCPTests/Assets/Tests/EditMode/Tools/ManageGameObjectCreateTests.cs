@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
 using UnityEditorInternal;
 using Newtonsoft.Json.Linq;
 using MCPForUnity.Editor.Tools.GameObjects;
+using TestNamespace;
 
 namespace MCPForUnityTests.Editor.Tools
 {
@@ -355,6 +357,100 @@ namespace MCPForUnityTests.Editor.Tools
             var result = ManageGameObject.HandleCommand(p);
             // Should either fail or create without parent - capture current behavior
             Assert.IsNotNull(result, "Should return a result");
+        }
+
+        [Test]
+        public void Create_FromPrefabWithParent_InstantiatesUnderParent()
+        {
+            // A Canvas prefab instantiated at the scene root is a root canvas until it is
+            // reparented, and the screen-size layout that root canvas drives gets saved as overrides.
+            const string folder = "Assets/Temp/ManageGameObjectCreateTests";
+            string prefabPath = folder + "/NestedCanvas.prefab";
+            var host = new GameObject("CreateTestCanvasHost", typeof(RectTransform), typeof(Canvas));
+            createdObjects.Add(host);
+            host.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
+
+            try
+            {
+                TestUtilities.EnsureFolder(folder);
+                var source = new GameObject("NestedCanvasSource", typeof(RectTransform), typeof(Canvas), typeof(ParentAtEnableProbe));
+                source.transform.SetParent(host.transform, false);
+                var sourceRect = (RectTransform)source.transform;
+                sourceRect.anchorMin = new Vector2(0.25f, 0.5f);
+                sourceRect.anchorMax = new Vector2(0.75f, 0.5f);
+                sourceRect.sizeDelta = new Vector2(40f, 30f);
+                sourceRect.pivot = new Vector2(0f, 1f);
+                PrefabUtility.SaveAsPrefabAsset(source, prefabPath, out bool saved);
+                Object.DestroyImmediate(source);
+                Assert.IsTrue(saved, "Test prefab should save");
+
+                var parent = new GameObject("CreateTestPrefabParent", typeof(RectTransform));
+                parent.transform.SetParent(host.transform, false);
+
+                var result = ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "create",
+                    ["name"] = "NestedCanvasInstance",
+                    ["prefabPath"] = prefabPath,
+                    ["parent"] = parent.name
+                });
+                var resultObj = result as JObject ?? JObject.FromObject(result);
+                Assert.IsTrue(resultObj.Value<bool>("success"), resultObj.ToString());
+
+                var instance = parent.transform.Find("NestedCanvasInstance");
+                Assert.IsNotNull(instance, "Instance should be created under the parent");
+                var probe = instance.GetComponent<ParentAtEnableProbe>();
+                Assert.IsTrue(probe.WasEnabled);
+                Assert.AreSame(parent.transform, probe.ParentAtFirstEnable,
+                    "The prefab must be instantiated under its parent, not at the scene root");
+
+                var rect = (RectTransform)instance;
+                Assert.AreEqual(new Vector2(0.25f, 0.5f), rect.anchorMin);
+                Assert.AreEqual(new Vector2(0.75f, 0.5f), rect.anchorMax);
+                Assert.AreEqual(new Vector2(40f, 30f), rect.sizeDelta);
+                Assert.AreEqual(new Vector2(0f, 1f), rect.pivot);
+                Assert.AreEqual(Vector3.one, rect.localScale);
+            }
+            finally
+            {
+                TestUtilities.SafeDeleteAsset(prefabPath);
+                AssetDatabase.DeleteAsset(folder);
+                TestUtilities.CleanupEmptyParentFolders(folder);
+            }
+        }
+
+        [Test]
+        public void Create_FromPrefabWithMissingParent_CreatesNothing()
+        {
+            const string folder = "Assets/Temp/ManageGameObjectCreateTests";
+            string prefabPath = folder + "/MissingParent.prefab";
+
+            try
+            {
+                TestUtilities.EnsureFolder(folder);
+                var source = new GameObject("MissingParentSource");
+                PrefabUtility.SaveAsPrefabAsset(source, prefabPath, out bool saved);
+                Object.DestroyImmediate(source);
+                Assert.IsTrue(saved, "Test prefab should save");
+
+                var result = ManageGameObject.HandleCommand(new JObject
+                {
+                    ["action"] = "create",
+                    ["name"] = "MissingParentInstance",
+                    ["prefabPath"] = prefabPath,
+                    ["parent"] = "NoSuchParentForPrefab"
+                });
+                var resultObj = result as JObject ?? JObject.FromObject(result);
+
+                Assert.IsFalse(resultObj.Value<bool>("success"));
+                Assert.IsNull(FindAndTrack("MissingParentInstance"));
+            }
+            finally
+            {
+                TestUtilities.SafeDeleteAsset(prefabPath);
+                AssetDatabase.DeleteAsset(folder);
+                TestUtilities.CleanupEmptyParentFolders(folder);
+            }
         }
 
         #endregion

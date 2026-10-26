@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Local parity check for the CI Unity-version matrix.
+# Local check across the Unity-version matrix in tools/unity-versions.json.
 #
 # Usage:
 #   tools/check-unity-versions.sh                 # compile-only, all installed versions from tools/unity-versions.json
-#   tools/check-unity-versions.sh --full          # full EditMode test run (matches CI behavior)
+#   tools/check-unity-versions.sh --full          # full EditMode test run
 #   tools/check-unity-versions.sh --only 6000.0   # check only versions whose id starts with the given prefix
 #   tools/check-unity-versions.sh --docker        # run inside GameCI containers (no local Unity Hub install needed)
 #   tools/check-unity-versions.sh --pre-push      # hint mode used by the pre-push hook (changes failure message)
@@ -16,7 +16,7 @@
 # Exits non-zero if any *checked* version fails. Versions skipped (not installed locally / image not pulled
 # in offline mode) do not cause failure on their own.
 #
-# Linked to CI: both this script and .github/workflows/unity-tests.yml read tools/unity-versions.json.
+# tools/check-unity-versions.ps1 is the Windows companion; both read tools/unity-versions.json.
 
 set -euo pipefail
 

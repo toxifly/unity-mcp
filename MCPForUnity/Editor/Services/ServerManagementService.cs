@@ -234,13 +234,10 @@ namespace MCPForUnity.Editor.Services
         /// <summary>
         /// Start the local HTTP server headless (no terminal window), redirecting its
         /// stdout/stderr to Library/MCPForUnity/Logs/server-launch-{port}.log.
-        /// Stops any existing server on the port and clears stale build artifacts first.
+        /// Stops any existing server on the port first.
         /// </summary>
         public bool StartLocalHttpServer(bool quiet = false)
         {
-            /// Clean stale Python build artifacts when using a local dev server path
-            AssetPathUtility.CleanLocalServerBuildArtifacts();
-
             if (!TryGetLocalHttpServerCommandParts(out _, out _, out var displayCommand, out var error))
             {
                 if (!quiet)
@@ -279,8 +276,6 @@ namespace MCPForUnity.Editor.Services
                 }
             }
             catch { }
-
-            // Note: Dev mode cache-busting is handled by `uvx --no-cache --refresh` in the generated command.
 
             // Create a per-launch token + pidfile path so Stop can be deterministic without relying on port/PID heuristics.
             string baseUrlForPid = HttpEndpointUtility.GetLocalBaseUrl();

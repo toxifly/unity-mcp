@@ -144,9 +144,9 @@ class TelemetryConfig:
             except Exception:
                 continue
 
-        # Determine enabled flag: config -> env DISABLE_* opt-out
-        cfg_enabled = True if server_config is None else bool(
-            getattr(server_config, "telemetry_enabled", True))
+        # Determine enabled flag: config (off unless it opts in) -> env DISABLE_* opt-out
+        cfg_enabled = server_config is not None and bool(
+            getattr(server_config, "telemetry_enabled", False))
         self.enabled = cfg_enabled and not self._is_disabled()
 
         # Telemetry endpoint (Cloud Run default; override via env)

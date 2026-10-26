@@ -52,7 +52,6 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
         private readonly HashSet<IMcpClientConfigurator> statusRefreshInFlight = new();
         private static readonly TimeSpan StatusRefreshInterval = TimeSpan.FromSeconds(45);
         private int selectedClientIndex = 0;
-        private bool isSkillSyncInProgress;
 
         // Events
         /// <summary>
@@ -377,18 +376,30 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
             if (statusRefreshInFlight.Contains(client))
                 return;
 
-            statusRefreshInFlight.Add(client);
             bool isCurrentlyConfigured = client.Status == McpStatus.Configured;
+            bool useHttpTransport = EditorConfigurationCache.Instance.UseHttpTransport;
+            string stdioServerCommandLine = null;
+            if (!isCurrentlyConfigured && !useHttpTransport)
+            {
+                try
+                {
+                    stdioServerCommandLine = AssetPathUtility.GetStdioServerCommandLine();
+                }
+                catch (InvalidOperationException ex)
+                {
+                    McpLog.Error($"Configuration failed: {ex.Message}");
+                    EditorUtility.DisplayDialog("Configuration Failed", ex.Message, "OK");
+                    return;
+                }
+            }
+
+            statusRefreshInFlight.Add(client);
             ApplyStatusToUi(client, showChecking: true, customMessage: isCurrentlyConfigured ? "Unregistering..." : "Configuring...");
 
             // Capture ALL main-thread-only values before async task
             string projectDir = ClaudeCliMcpConfigurator.GetClientProjectDir();
-            bool useHttpTransport = EditorConfigurationCache.Instance.UseHttpTransport;
             string claudePath = MCPServiceLocator.Paths.GetClaudeCliPath();
             string httpUrl = HttpEndpointUtility.GetMcpRpcUrl();
-            var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
-            string fromArgs = AssetPathUtility.GetBetaServerFromArgs(quoteFromPath: true);
-            string uvxDevFlags = AssetPathUtility.GetUvxDevFlags();
             string apiKey = EditorPrefs.GetString(EditorPrefKeys.ApiKey, string.Empty);
 
             // Compute pathPrepend on main thread
@@ -415,7 +426,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                         cliConfigurator.ConfigureWithCapturedValues(
                             projectDir, claudePath, pathPrepend,
                             useHttpTransport, httpUrl,
-                            uvxPath, fromArgs, packageName, uvxDevFlags,
+                            stdioServerCommandLine,
                             apiKey, serverTransport);
                     }
                     return (success: true, error: (string)null);
@@ -476,9 +487,6 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
 
         private void OnInstallSkillsClicked()
         {
-            if (isSkillSyncInProgress)
-                return;
-
             if (selectedClientIndex < 0 || selectedClientIndex >= configurators.Count)
                 return;
 
@@ -490,34 +498,22 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
             if (string.IsNullOrEmpty(installPath))
                 return;
 
-            string branch = AssetPathUtility.IsPreReleaseVersion() ? "beta" : "main";
-
-            isSkillSyncInProgress = true;
-            installSkillsButton.SetEnabled(false);
-            installSkillsButton.text = "Syncing...";
-
-            SkillSyncService.SyncAsync(installPath, branch, null, result =>
-                {
-                    isSkillSyncInProgress = false;
-                    installSkillsButton.SetEnabled(true);
-                    installSkillsButton.text = "Install Skills";
-
-                    if (result.Success)
-                    {
-                        bool noChanges = result.Added == 0 && result.Updated == 0 && result.Deleted == 0;
-                        string summary = noChanges
-                            ? "Skills are already up to date."
-                            : $"Added: {result.Added}, Updated: {result.Updated}, Deleted: {result.Deleted}";
-                        McpLog.Info($"SkillSync complete: {summary} ({installPath})");
-                        EditorUtility.DisplayDialog("Install Skills",
-                            $"{summary}\n\nInstalled at: {installPath}", "OK");
-                    }
-                    else
-                    {
-                        McpLog.Error($"SkillSync failed: {result.Error}");
-                        EditorUtility.DisplayDialog("Install Skills Failed", result.Error, "OK");
-                    }
-                });
+            try
+            {
+                var result = SkillSyncService.Sync(installPath);
+                bool noChanges = result.Added == 0 && result.Updated == 0 && result.Deleted == 0;
+                string summary = noChanges
+                    ? "Skills are already up to date."
+                    : $"Added: {result.Added}, Updated: {result.Updated}, Deleted: {result.Deleted}";
+                McpLog.Info($"SkillSync complete: {summary} ({installPath})");
+                EditorUtility.DisplayDialog("Install Skills",
+                    $"{summary}\n\nInstalled at: {installPath}", "OK");
+            }
+            catch (Exception ex)
+            {
+                McpLog.Error($"SkillSync failed: {ex.Message}");
+                EditorUtility.DisplayDialog("Install Skills Failed", ex.Message, "OK");
+            }
         }
 
         private void OnBrowseClaudeClicked()
@@ -658,8 +654,8 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                 string claudePath = MCPServiceLocator.Paths.GetClaudeCliPath();
                 RuntimePlatform platform = Application.platform;
                 bool isRemoteScope = HttpEndpointUtility.IsRemoteScope();
-                // Get expected package source based on installed package version and overrides.
-                string expectedPackageSource = GetExpectedPackageSourceForCurrentPackage();
+                // The Server/ checkout registration would run; null when Server Source is unset or invalid.
+                string expectedServerProject = AssetPathUtility.TryGetServerProjectDirectory();
                 bool hasProjectDirOverride = ClaudeCliMcpConfigurator.HasClientProjectDirOverride;
 
                 Task.Run(() =>
@@ -669,7 +665,7 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                     if (client is ClaudeCliMcpConfigurator claudeConfigurator)
                     {
                         // Use thread-safe version with captured main-thread values
-                        claudeConfigurator.CheckStatusWithProjectDir(projectDir, useHttpTransport, claudePath, platform, isRemoteScope, expectedPackageSource, attemptAutoRewrite: false, hasProjectDirOverride: hasProjectDirOverride);
+                        claudeConfigurator.CheckStatusWithProjectDir(projectDir, useHttpTransport, claudePath, platform, isRemoteScope, expectedServerProject, attemptAutoRewrite: false, hasProjectDirOverride: hasProjectDirOverride);
                     }
                 }).ContinueWith(t =>
                 {
@@ -790,16 +786,6 @@ namespace MCPForUnity.Editor.Windows.Components.ClientConfig
                 // Clear any previous mismatch warning
                 OnClientConfigMismatch?.Invoke(client.DisplayName, null);
             }
-        }
-
-        /// <summary>
-        /// Gets the expected package source for validation based on installed package version.
-        /// Uses the same logic as registration to ensure validation matches what was registered.
-        /// MUST be called from the main thread due to EditorPrefs access.
-        /// </summary>
-        private static string GetExpectedPackageSourceForCurrentPackage()
-        {
-            return AssetPathUtility.GetMcpServerPackageSource();
         }
 
         private int FindConfiguratorIndex(string persistedClientValue)

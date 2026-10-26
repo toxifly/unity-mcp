@@ -43,7 +43,10 @@ async def _send(
         "ledger-instrumented MCP tools (component add/remove/set-property and the GameObject "
         "tools) are written; everything else — ambient drift (ExecuteAlways previews, "
         "layout-driven RectTransforms, TMP re-baking) but also Inspector, execute_code, and "
-        "not-yet-instrumented MCP tool edits — is reported but NOT baked into the file."
+        "not-yet-instrumented MCP tool edits — is reported but NOT baked into the file. "
+        "Either way the scene ends clean and matching its file: when exclude held drift back, "
+        "the scene is reopened from the merged file, which discards that drift from memory "
+        "(scene_reloaded=true; object handles from before the save are stale)."
     ),
     annotations=ToolAnnotations(title="Save Scene Scoped", destructiveHint=True),
 )
@@ -61,7 +64,8 @@ async def save_scene_scoped(
             description=(
                 "What to do with in-memory changes not tracked as intentional edits: "
                 "'include' (default) performs a whole-scene save (bakes everything); "
-                "'exclude' keeps their on-disk bytes and reports them as suppressed drift — "
+                "'exclude' keeps their on-disk bytes, reports them as suppressed drift and "
+                "reopens the scene so memory matches the file — "
                 "only safe when all edits went through ledger-instrumented tools; "
                 "'reject' fails the save if any unscoped drift exists."
             )

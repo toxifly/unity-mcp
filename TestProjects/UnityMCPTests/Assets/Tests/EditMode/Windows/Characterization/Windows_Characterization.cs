@@ -344,8 +344,8 @@ namespace MCPForUnityTests.Editor.Windows.Characterization
         }
 
         /// <summary>
-        /// Current behavior: Advanced section reads 5+ EditorPrefs
-        /// (GitUrl, DebugLogs, DevModeRefresh, paths).
+        /// Current behavior: Advanced section reads 5 EditorPrefs
+        /// (GitUrl, DebugLogs, paths).
         /// </summary>
         [Test]
         public void McpAdvancedSection_ReadsMultiplePreferences_ForConfiguration()
@@ -354,7 +354,6 @@ namespace MCPForUnityTests.Editor.Windows.Characterization
             {
                 EditorPrefKeys.GitUrlOverride,
                 EditorPrefKeys.DebugLogs,
-                EditorPrefKeys.DevModeForceServerRefresh,
                 EditorPrefKeys.PackageDeploySourcePath,
                 EditorPrefKeys.ClaudeCliPathOverride,
                 EditorPrefKeys.UvxPathOverride

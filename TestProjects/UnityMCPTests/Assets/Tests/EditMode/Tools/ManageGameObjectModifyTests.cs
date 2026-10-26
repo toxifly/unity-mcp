@@ -1,11 +1,13 @@
 using MCPForUnity.Runtime.Helpers;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEditorInternal;
 using Newtonsoft.Json.Linq;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Tools.GameObjects;
+using TestNamespace;
 
 namespace MCPForUnityTests.Editor.Tools
 {
@@ -455,6 +457,32 @@ namespace MCPForUnityTests.Editor.Tools
         #endregion
 
         #region Nested Component Property Tests
+
+        [Test]
+        public void ComponentOps_ObjectReferenceFromInstanceId_SetsWithoutConverterWarning()
+        {
+            var fixture = testObjects[0].AddComponent<SerializedInspectionFixture>();
+            var target = CreateTestObject("InstanceIdReferenceTarget");
+            var logs = new List<string>();
+            Application.LogCallback capture = (message, stackTrace, type) => logs.Add(message);
+
+            Application.logMessageReceived += capture;
+            bool ok;
+            string error;
+            try
+            {
+                ok = ComponentOps.SetProperty(fixture, "reference", new JValue(target.GetInstanceIDCompat()), out error);
+            }
+            finally
+            {
+                Application.logMessageReceived -= capture;
+            }
+
+            Assert.IsTrue(ok, error);
+            Assert.AreSame(target, fixture.Reference);
+            Assert.IsFalse(logs.Any(m => m.Contains("[UnityEngineObjectConverter]")),
+                "A bare instanceID must go straight to the SerializedProperty path: " + string.Join("\n", logs));
+        }
 
         [Test]
         public void ComponentOps_SerializedVector_RejectsNonnumericComponents()

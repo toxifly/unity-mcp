@@ -1,4 +1,6 @@
+using System.IO;
 using NUnit.Framework;
+using MCPForUnity.Editor.Helpers;
 using MCPForUnity.Editor.Services;
 using MCPForUnity.Editor.Services.Server;
 using MCPForUnity.Editor.Constants;
@@ -15,6 +17,7 @@ namespace MCPForUnityTests.Editor.Services.Server
         private ServerCommandBuilder _builder;
         private bool _savedUseHttpTransport;
         private string _savedHttpUrl;
+        private IPathResolverService _savedPaths;
 
         [SetUp]
         public void SetUp()
@@ -23,6 +26,7 @@ namespace MCPForUnityTests.Editor.Services.Server
             // Save current settings
             _savedUseHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
             _savedHttpUrl = EditorPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
+            _savedPaths = MCPServiceLocator.Paths;
         }
 
         [TearDown]
@@ -38,6 +42,7 @@ namespace MCPForUnityTests.Editor.Services.Server
             {
                 EditorPrefs.DeleteKey(EditorPrefKeys.HttpBaseUrl);
             }
+            MCPServiceLocator.Register(_savedPaths);
             // Refresh cache to reflect restored values
             EditorConfigurationCache.Instance.Refresh();
         }
@@ -256,9 +261,12 @@ namespace MCPForUnityTests.Editor.Services.Server
         }
 
         [Test]
-        public void TryBuildCommand_LocalUrl_ReturnsCommandOrError()
+        public void TryBuildCommand_LocalUrl_RunsServerSourceCheckout()
         {
             // Arrange
+            string uvxPath = Path.Combine(Path.GetTempPath(), "uv-bin", "uvx");
+            MCPServiceLocator.Register<IPathResolverService>(new FixedUvxPathResolver(uvxPath));
+            using var source = new TempServerSource();
             EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
             EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, "http://localhost:8080");
             EditorConfigurationCache.Instance.Refresh();
@@ -266,21 +274,32 @@ namespace MCPForUnityTests.Editor.Services.Server
             // Act
             bool result = _builder.TryBuildCommand(out string fileName, out string arguments, out string displayCommand, out string error);
 
-            // Assert - Success depends on uvx availability
-            if (result)
-            {
-                Assert.IsNotNull(fileName, "fileName should be set on success");
-                Assert.IsNotNull(arguments, "arguments should be set on success");
-                Assert.IsNotNull(displayCommand, "displayCommand should be set on success");
-                Assert.IsNull(error, "error should be null on success");
-                Assert.That(displayCommand, Does.Contain("uvx").Or.Contain("uv"));
-            }
-            else
-            {
-                Assert.IsNotNull(error, "error message should be provided on failure");
-            }
+            // Assert
+            Assert.IsTrue(result, error);
+            Assert.AreEqual(Path.Combine(Path.GetTempPath(), "uv-bin", "uv"), fileName);
+            StringAssert.StartsWith(
+                $"run --frozen --project {_builder.QuoteIfNeeded(source.ServerDirectory)} mcp-for-unity --transport http --http-url {HttpEndpointUtility.GetLocalBaseUrl()}",
+                arguments);
+            Assert.AreEqual($"{_builder.QuoteIfNeeded(fileName)} {arguments}", displayCommand);
+        }
 
-            Assert.Pass($"TryBuildCommand: success={result}, error={error ?? "null"}");
+        [Test]
+        public void TryBuildCommand_WithoutServerSource_ReportsIt()
+        {
+            // Arrange
+            using var source = new TempServerSource();
+            EditorPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
+            EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
+            EditorPrefs.SetString(EditorPrefKeys.HttpBaseUrl, "http://localhost:8080");
+            EditorConfigurationCache.Instance.Refresh();
+
+            // Act
+            bool result = _builder.TryBuildCommand(out string fileName, out _, out _, out string error);
+
+            // Assert
+            Assert.IsFalse(result);
+            Assert.IsNull(fileName);
+            StringAssert.Contains("Server Source is not set", error);
         }
 
         [Test]

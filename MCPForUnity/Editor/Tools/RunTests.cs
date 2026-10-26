@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using MCPForUnity.Editor.Helpers;
@@ -57,6 +58,18 @@ namespace MCPForUnity.Editor.Tools
                 bool includeSkipped = p.GetBool("includeSkipped");
 
                 var filterOptions = GetFilterOptions(@params);
+
+                // A run already in progress is answered with tests_running below, and its own tests
+                // may be what dirtied the scenes, so only an idle editor is checked here.
+                if (!TestJobManager.HasRunningJob)
+                {
+                    var unsavedRefusal = UnsavedScenesRefusal(TestRunnerService.UnsavedScenes());
+                    if (unsavedRefusal != null)
+                    {
+                        return Task.FromResult(unsavedRefusal);
+                    }
+                }
+
                 long initTimeoutMs = p.GetInt("initTimeout") ?? 0;
                 string requestToken = @params?["requestToken"]?.ToString()
                     ?? @params?["request_token"]?.ToString();
@@ -114,6 +127,29 @@ namespace MCPForUnity.Editor.Tools
                 message = "Scripts do not compile; tests cannot run. "
                           + DescribeCompileErrors(errors, errorCount)
                           + "Fix the errors, then refresh_unity(compile=\"request\")."
+            });
+        }
+
+        /// <summary>
+        /// A run over unsaved scenes makes the Test Framework ask whether to save them: a modal that
+        /// blocks the main thread this bridge pumps on, and a save that would write editor preview
+        /// state nobody chose to keep. Returns the refusal naming them, or null when all are clean.
+        /// </summary>
+        internal static object UnsavedScenesRefusal(IReadOnlyList<string> unsavedScenes)
+        {
+            if (unsavedScenes == null || unsavedScenes.Count == 0)
+            {
+                return null;
+            }
+
+            return new ErrorResponse("unsaved_scenes", new
+            {
+                reason = "unsaved_scenes",
+                scenes = unsavedScenes,
+                message = $"Unsaved changes in {string.Join(", ", unsavedScenes)}; tests cannot start until "
+                          + "they are saved or discarded. Keep intended edits with save_scene_scoped or "
+                          + "save_prefab_scoped; drop the rest with manage_scene(action=\"load\", "
+                          + "discard_unsaved=true). Then rerun."
             });
         }
 

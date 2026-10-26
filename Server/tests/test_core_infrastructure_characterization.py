@@ -693,7 +693,7 @@ class TestServerConfigDefaults:
         """Verify telemetry configuration defaults."""
         config = ServerConfig()
 
-        assert config.telemetry_enabled is True
+        assert config.telemetry_enabled is False
         assert config.telemetry_endpoint == "https://api-prod.coplay.dev/telemetry/events"
 
     def test_config_is_dataclass(self):

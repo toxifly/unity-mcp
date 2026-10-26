@@ -56,36 +56,156 @@ namespace MCPForUnity.Editor.Tools
             }
 
             byte[] original = File.ReadAllBytes(fullPath);
+            var applied = new List<object>();
+            byte[] rewritten;
+            string sourcePath = p.Get("source_path");
+            JToken editsToken = @params["edits"];
+            if (!string.IsNullOrWhiteSpace(sourcePath))
+            {
+                if (editsToken != null && editsToken.Type != JTokenType.Null)
+                {
+                    return new ErrorResponse(
+                        "Pass either 'source_path' (replace the whole file) or 'edits' (anchored "
+                        + "replacements), not both. Nothing was written.");
+                }
+                if (!TryReadReplacement(sourcePath, out sourcePath, out rewritten, out string sourceError))
+                {
+                    return new ErrorResponse(sourceError + " Nothing was written.");
+                }
+            }
+            else
+            {
+                sourcePath = null;
+                if (!TryRewrite(original, editsToken, applied, out rewritten, out string editError))
+                {
+                    return new ErrorResponse(editError + " Nothing was written.");
+                }
+            }
+
+            var change = new SceneChange(sourcePath, applied, original.Length, rewritten.Length);
+            if (p.GetBool("dry_run"))
+            {
+                return new SuccessResponse(
+                    $"Dry run: '{assetPath}' would be rewritten ({change.Describe()}). Nothing was written.",
+                    change.ToData(assetPath, dryRun: true, reopened: false));
+            }
+
+            return WriteAndReload(assetPath, fullPath, rewritten, change, p);
+        }
+
+        /// <summary>What a call does to the scene file, for its dry-run and success responses.</summary>
+        private sealed class SceneChange
+        {
+            private readonly string _source;
+            private readonly List<object> _edits;
+            private readonly int _bytesBefore;
+            private readonly int _bytesAfter;
+
+            public SceneChange(string source, List<object> edits, int bytesBefore, int bytesAfter)
+            {
+                _source = source;
+                _edits = edits;
+                _bytesBefore = bytesBefore;
+                _bytesAfter = bytesAfter;
+            }
+
+            public string Describe() =>
+                _source != null ? $"replaced by '{_source}'" : $"{_edits.Count} edit(s)";
+
+            public object ToData(string assetPath, bool dryRun, bool reopened) => new
+            {
+                path = assetPath,
+                dryRun,
+                source = _source,
+                edits = _edits,
+                bytesBefore = _bytesBefore,
+                bytesAfter = _bytesAfter,
+                reopened,
+            };
+        }
+
+        private static bool TryRewrite(
+            byte[] original, JToken editsToken, List<object> applied, out byte[] rewritten, out string error)
+        {
+            rewritten = null;
             bool hasBom = original.Length >= 3
                 && original[0] == 0xEF && original[1] == 0xBB && original[2] == 0xBF;
             var encoding = new UTF8Encoding(false);
             int offset = hasBom ? 3 : 0;
             string text = encoding.GetString(original, offset, original.Length - offset);
 
-            var applied = new List<object>();
-            if (!TryApplyEdits(@params["edits"], ref text, applied, out string editError))
+            if (!TryApplyEdits(editsToken, ref text, applied, out error))
             {
-                return new ErrorResponse(editError + " Nothing was written.");
+                return false;
             }
 
-            bool dryRun = p.GetBool("dry_run");
-            byte[] rewritten = Combine(hasBom, encoding.GetBytes(text));
+            rewritten = Combine(hasBom, encoding.GetBytes(text));
+            return true;
+        }
 
-            if (dryRun)
+        /// <summary>
+        /// Reads the bytes that replace the scene verbatim: the way to restore a snapshot, where a
+        /// diff expressed as anchored edits would run to thousands of entries. The source may live
+        /// anywhere (a temp snapshot, another checkout), so it is only checked for being a Unity
+        /// YAML file; a relative path resolves against the project root.
+        /// </summary>
+        private static bool TryReadReplacement(
+            string sourcePath, out string resolvedPath, out byte[] bytes, out string error)
+        {
+            resolvedPath = null;
+            bytes = null;
+            error = null;
+            try
             {
-                return new SuccessResponse(
-                    $"Dry run: {applied.Count} edit(s) matched '{assetPath}'. Nothing was written.",
-                    new
-                    {
-                        path = assetPath,
-                        dryRun = true,
-                        edits = applied,
-                        bytesBefore = original.Length,
-                        bytesAfter = rewritten.Length,
-                    });
+                string trimmed = sourcePath.Trim();
+                resolvedPath = Path.GetFullPath(
+                    Path.IsPathRooted(trimmed) ? trimmed : Path.Combine(ProjectRoot(), trimmed));
+                if (!File.Exists(resolvedPath))
+                {
+                    error = $"'source_path' file not found at '{resolvedPath}'.";
+                    return false;
+                }
+
+                bytes = File.ReadAllBytes(resolvedPath);
+            }
+            catch (Exception e) when (
+                e is ArgumentException
+                || e is IOException
+                || e is NotSupportedException
+                || e is UnauthorizedAccessException
+                || e is System.Security.SecurityException)
+            {
+                error = $"'source_path' could not be read: {e.Message}";
+                return false;
             }
 
-            return WriteAndReload(assetPath, fullPath, original, rewritten, applied, p);
+            if (!StartsWithYamlHeader(bytes))
+            {
+                error = $"'source_path' '{resolvedPath}' is not a Unity YAML file (it must start with '%YAML').";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool StartsWithYamlHeader(byte[] bytes)
+        {
+            byte[] header = Encoding.ASCII.GetBytes("%YAML");
+            int offset = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
+            if (bytes.Length < offset + header.Length)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < header.Length; i++)
+            {
+                if (bytes[offset + i] != header[i])
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -95,9 +215,8 @@ namespace MCPForUnity.Editor.Tools
         private static object WriteAndReload(
             string assetPath,
             string fullPath,
-            byte[] original,
             byte[] rewritten,
-            List<object> applied,
+            SceneChange change,
             ToolParams p)
         {
             Scene target = default;
@@ -238,16 +357,9 @@ namespace MCPForUnity.Editor.Tools
             }
 
             return new SuccessResponse(
-                $"Scene '{assetPath}' rewritten ({applied.Count} edit(s))"
+                $"Scene '{assetPath}' rewritten ({change.Describe()})"
                 + (targetIsOpen ? " and reloaded." : "; it was not open, so nothing was reloaded."),
-                new
-                {
-                    path = assetPath,
-                    edits = applied,
-                    bytesBefore = original.Length,
-                    bytesAfter = rewritten.Length,
-                    reopened = targetIsOpen,
-                });
+                change.ToData(assetPath, dryRun: false, reopened: targetIsOpen));
         }
 
         /// <summary>

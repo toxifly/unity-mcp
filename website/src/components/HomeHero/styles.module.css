@@ -241,15 +241,6 @@
   white-space: nowrap;
 }
 
-/* Beta channel gets a primary-tinted badge so it's distinguishable
- * at a glance from the stable one */
-.installChannelBeta {
-  color: var(--ifm-color-primary);
-}
-[data-theme='dark'] .installChannelBeta {
-  color: var(--ifm-color-primary-light);
-}
-
 .installUrl {
   flex: 1;
   padding: 0.85rem 1rem;

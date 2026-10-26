@@ -62,14 +62,11 @@ const config = {
   tagline: 'AI-driven game development for the Unity Editor',
   favicon: 'img/favicon.png',
 
-  // Hosted on GitHub Pages under the CoplayDev org.
-  // Custom domain (CNAME) deferred — see plan Phase 2.
-  url: 'https://coplaydev.github.io',
+  // This fork does not deploy the site; url only feeds canonical links and the
+  // sitemap of a local build.
+  url: 'http://localhost:3000',
   baseUrl,
 
-  organizationName: 'CoplayDev',
-  projectName: 'unity-mcp',
-  deploymentBranch: 'gh-pages',
   trailingSlash: false,
 
   // Build-time data the homepage components read via siteConfig.customFields.
@@ -147,7 +144,7 @@ const config = {
         docs: {
           routeBasePath: '/',
           sidebarPath: './sidebars.js',
-          editUrl: 'https://github.com/CoplayDev/unity-mcp/edit/beta/website/',
+          editUrl: 'https://github.com/toxifly/unity-mcp/edit/develop/website/',
           showLastUpdateTime: true,
           showLastUpdateAuthor: true,
         },
@@ -180,7 +177,6 @@ const config = {
         ],
       },
     ],
-    ...(process.env.GOATCOUNTER_CODE ? ['docusaurus-plugin-goatcounter'] : []),
   ],
 
   themeConfig:
@@ -213,7 +209,7 @@ const config = {
             position: 'left',
           },
           {
-            href: 'https://github.com/CoplayDev/unity-mcp',
+            href: 'https://github.com/toxifly/unity-mcp',
             position: 'right',
             className: 'header-icon-link header-github-link',
             'aria-label': 'GitHub repository',
@@ -241,14 +237,12 @@ const config = {
             title: 'Community',
             items: [
               { label: 'Discord', href: 'https://discord.gg/y4p8KfzrN4' },
-              { label: 'GitHub Issues', href: 'https://github.com/CoplayDev/unity-mcp/issues' },
             ],
           },
           {
             title: 'More',
             items: [
-              { label: 'GitHub', href: 'https://github.com/CoplayDev/unity-mcp' },
-              { label: 'PyPI', href: 'https://pypi.org/p/mcpforunityserver' },
+              { label: 'GitHub', href: 'https://github.com/toxifly/unity-mcp' },
             ],
           },
         ],
@@ -263,7 +257,6 @@ const config = {
         defaultMode: 'light',
         respectPrefersColorScheme: true,
       },
-      ...(process.env.GOATCOUNTER_CODE ? { goatcounter: { code: process.env.GOATCOUNTER_CODE } } : {}),
     }),
 };
 

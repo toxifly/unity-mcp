@@ -66,21 +66,10 @@ def test_repository_server_and_package_versions_do_not_drift():
     unity_version = json.loads(
         (REPO_ROOT / "MCPForUnity" / "package.json").read_text(encoding="utf-8")
     )["version"]
-    manifest = json.loads(
-        (REPO_ROOT / "manifest.json").read_text(encoding="utf-8")
-    )
-    manifest_version = manifest["version"]
     with (REPO_ROOT / "Server" / "pyproject.toml").open("rb") as stream:
         server_version = tomllib.load(stream)["project"]["version"]
 
-    assert manifest_version == unity_version
     assert handshake.versions_are_compatible(server_version, unity_version)
-
-    manifest_args = manifest["server"]["mcp_config"]["args"]
-    from_index = manifest_args.index("--from")
-    assert manifest_args[from_index + 1] == (
-        f"mcpforunityserver=={handshake.normalize_release_version(unity_version)}"
-    )
 
 
 def test_git_sha_override_is_validated(monkeypatch):

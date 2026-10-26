@@ -115,7 +115,7 @@ All of these follow the same pattern:
 - **HTTP vs stdio**
   - `SupportsHttpTransport` + `EditorPrefs.UseHttpTransport` decide whether to configure
     - `url` / `serverUrl` (HTTP), or
-    - `command` + `args` (stdio with `uvx`).
+    - `command` + `args` (stdio with `uv run --frozen --project <Server Source>`).
 - **URL property name**
   - `HttpUrlProperty` (default `"url"`) selects which JSON property to use for HTTP urls.
   - Example: Windsurf and the two Antigravity clients use `"serverUrl"`.
@@ -169,7 +169,7 @@ Some clients cannot be handled by the generic JSON configurator alone.
 - Config file path is `~/.openclaw/openclaw.json`.
 - Unity MCP is configured through `plugins.entries.openclaw-mcp-bridge.config.servers.unityMCP`.
 - When Unity MCP is set to HTTP, the bridge expects the MCP JSON-RPC endpoint URL (`http://127.0.0.1:<port>/mcp`), not just the HTTP base URL.
-- When Unity MCP is set to stdio, the configurator writes a `uvx ... mcp-for-unity --transport stdio` subprocess entry.
+- When Unity MCP is set to stdio, the configurator writes a `uv run --frozen --project <Server Source> mcp-for-unity --transport stdio` subprocess entry.
 - The bridge exposes a single proxy tool such as `unityMCP__call`, which then forwards to Unity MCP tool names.
 - OpenClaw support follows the currently selected MCP for Unity transport (via `openclaw-mcp-bridge`).
 
