@@ -155,7 +155,7 @@ def test_connection_failure_refreshes_cached_port_before_backoff(monkeypatch) ->
     instance_id = "Repro@deadbeef"
     discovered_port = 6400
 
-    def discover_instances() -> list[UnityInstanceInfo]:
+    def discover_instances(requested_instance: str | None = None) -> list[UnityInstanceInfo]:
         return [
             UnityInstanceInfo(
                 id=instance_id,
