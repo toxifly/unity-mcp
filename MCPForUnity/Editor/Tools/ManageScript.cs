@@ -2528,7 +2528,7 @@ namespace MCPForUnity.Editor.Tools
                 bool hasErrors = false;
                 foreach (var diagnostic in diagnostics)
                 {
-                    string severity = diagnostic.Severity.ToString().ToUpper();
+                    string severity = diagnostic.Severity.ToString().ToUpperInvariant();
                     string message = $"{severity}: {diagnostic.GetMessage()}";
                     
                     if (diagnostic.Severity == DiagnosticSeverity.Error)
