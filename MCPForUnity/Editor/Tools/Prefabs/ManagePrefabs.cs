@@ -50,7 +50,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             // A dry run must never mutate: actions without a preview path reject it instead of
             // silently running for real.
             bool dryRun = @params["dryRun"]?.ToObject<bool?>() ?? false;
-            if (dryRun && IgnoresDryRun(action))
+            if (dryRun && !HonorsDryRun(action))
             {
                 return new ErrorResponse("DRY_RUN_UNSUPPORTED", new
                 {
@@ -101,17 +101,14 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             }
         }
 
-        private static bool IgnoresDryRun(string action)
+        private static bool HonorsDryRun(string action)
         {
             switch (action)
             {
-                case ACTION_CREATE_FROM_GAMEOBJECT:
-                case ACTION_APPLY_INSTANCE_OVERRIDES:
-                case ACTION_REVERT_INSTANCE_OVERRIDES:
-                case ACTION_UNPACK_INSTANCE:
-                case ACTION_OPEN_PREFAB_STAGE:
-                case ACTION_SAVE_PREFAB_STAGE:
-                case ACTION_CLOSE_PREFAB_STAGE:
+                case ACTION_CREATE_AND_REPLACE:
+                case ACTION_MODIFY_CONTENTS:
+                case ACTION_GET_INFO:
+                case ACTION_GET_HIERARCHY:
                     return true;
                 default:
                     return false;
@@ -472,12 +469,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             if (!stable.EndsWith("-0-0", StringComparison.Ordinal))
                 return stable;
 
-            Transform transform = OwnerTransform(value);
-            string assetPath = AssetDatabase.GetAssetPath(value);
-            string objectPath = transform != null
-                ? GetHierarchyPath(transform)
-                : (string.IsNullOrEmpty(assetPath) ? value.name : assetPath);
-            return $"temporary:{objectPath}:{value.GetType().FullName}:{value.GetInstanceIDCompat()}";
+            return $"temporary:{value.GetType().FullName}:{value.GetInstanceIDCompat()}";
         }
 
         private static int[] ChildIndexPath(Transform root, Transform target)

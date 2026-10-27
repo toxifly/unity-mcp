@@ -68,8 +68,16 @@ def test_repository_server_and_package_versions_do_not_drift():
     )["version"]
     with (REPO_ROOT / "Server" / "pyproject.toml").open("rb") as stream:
         server_version = tomllib.load(stream)["project"]["version"]
+    # Servers run `uv run --frozen`, so a lock left at the old version is never re-resolved.
+    with (REPO_ROOT / "Server" / "uv.lock").open("rb") as stream:
+        locked_version = next(
+            package["version"]
+            for package in tomllib.load(stream)["package"]
+            if package["name"] == "mcpforunityserver"
+        )
 
     assert handshake.versions_are_compatible(server_version, unity_version)
+    assert handshake.versions_are_compatible(locked_version, unity_version)
 
 
 def test_git_sha_override_is_validated(monkeypatch):

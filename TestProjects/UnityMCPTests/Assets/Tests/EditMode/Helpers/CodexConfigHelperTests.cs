@@ -131,7 +131,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = [\"mcp-for-unity\"]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should detect server definition");
             Assert.AreEqual("uvx --from git+https://github.com/CoplayDev/unity-mcp@v6.3.0#subdirectory=Server", command);
@@ -150,7 +150,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should handle multi-line arrays with trailing comma");
             Assert.AreEqual("uvx", command);
@@ -169,7 +169,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should tolerate comments within the array block");
             Assert.AreEqual("uvx", command);
@@ -186,7 +186,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = [\"mcp-for-unity\"]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should recognize section headers even with inline comments");
             Assert.AreEqual("uvx", command);
@@ -203,7 +203,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = ['mcp-for-unity']"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should accept single-quoted arrays with escaped apostrophes");
             Assert.AreEqual("uvx", command);

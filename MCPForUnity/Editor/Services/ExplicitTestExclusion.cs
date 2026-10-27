@@ -18,9 +18,15 @@ namespace MCPForUnity.Editor.Services
         internal static bool NamesNoTest(TestFilterOptions filter) =>
             filter != null
             && (Any(filter.AssemblyNames) || Any(filter.TestNames) || Any(filter.GroupNames) || Any(filter.CategoryNames))
-            && !Includes(filter.TestNames)
-            && !Includes(filter.GroupNames)
-            && !Includes(filter.CategoryNames);
+            && !NamesTests(filter);
+
+        /// <summary>
+        /// True when the filter names a test, group or category to run. Exclusions alone run
+        /// everything else, so they name nothing; the test-stage guard counts only this as focused.
+        /// </summary>
+        internal static bool NamesTests(TestFilterOptions filter) =>
+            filter != null
+            && (Includes(filter.TestNames) || Includes(filter.GroupNames) || Includes(filter.CategoryNames));
 
         /// <summary>The selection's test names plus a "!" exclusion for each explicit test.</summary>
         internal static string[] TestNamesExcludingExplicit(TestFilterOptions filter, ITestAdaptor root)

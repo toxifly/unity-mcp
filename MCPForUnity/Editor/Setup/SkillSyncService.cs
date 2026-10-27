@@ -34,9 +34,8 @@ namespace MCPForUnity.Editor.Setup
         /// <summary>The unity-mcp-skill folder beside the Server Source checkout's Server/ folder.</summary>
         internal static string GetSkillSourceDirectory()
         {
-            string serverDirectory = AssetPathUtility.GetServerProjectDirectory()
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            string sourceDir = Path.Combine(Path.GetDirectoryName(serverDirectory) ?? string.Empty, SkillDirectoryName);
+            string serverDirectory = AssetPathUtility.GetServerProjectDirectory();
+            string sourceDir = Path.Combine(Path.GetDirectoryName(serverDirectory), SkillDirectoryName);
             if (!File.Exists(Path.Combine(sourceDir, "SKILL.md")))
             {
                 throw new InvalidOperationException(

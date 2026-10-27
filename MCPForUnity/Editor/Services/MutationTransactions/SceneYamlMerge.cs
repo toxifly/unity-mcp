@@ -154,12 +154,20 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                     result.BlocksDeleted++;
                     break;
                 case BlockSource.TempScoped:
-                    output.Append(ReconcileDeletedReferences(
+                    YamlBlock scopedBlock = tempById[diskBlock.FileId];
+                    string scopedText = ReconcileDeletedReferences(
                         diskBlock,
-                        ReconcileOwnerReferences(
-                            diskBlock, tempById[diskBlock.FileId], source, result, useTempBytes: true),
+                        ReconcileOwnerReferences(diskBlock, scopedBlock, source, result, useTempBytes: true),
                         source,
-                        result));
+                        result);
+                    // A spliced list keeps its unscoped entries where the disk has them, so an
+                    // in-memory reorder, reparent or deletion of those is drift held back here too.
+                    if (!string.Equals(scopedText, scopedBlock.Text, StringComparison.Ordinal))
+                    {
+                        result.BlocksDriftSuppressed++;
+                        result.DriftSuppressedIds.Add(diskBlock.FileId);
+                    }
+                    output.Append(scopedText);
                     result.BlocksScoped++;
                     break;
                 case BlockSource.DiskKeptUnscopedDeletion:

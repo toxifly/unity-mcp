@@ -47,6 +47,19 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void OnlyANamedTestGroupOrCategoryNamesTests()
+        {
+            // The test-stage guard counts exactly these as focused: an exclusion-only filter runs
+            // everything else, so it cannot stand in for a focused pass.
+            Assert.IsFalse(ExplicitTestExclusion.NamesTests(null));
+            Assert.IsFalse(ExplicitTestExclusion.NamesTests(new TestFilterOptions { AssemblyNames = new[] { "A" } }));
+            Assert.IsFalse(ExplicitTestExclusion.NamesTests(new TestFilterOptions { TestNames = new[] { "!N.C.T" }, CategoryNames = new[] { "!Slow", " " } }));
+            Assert.IsTrue(ExplicitTestExclusion.NamesTests(new TestFilterOptions { TestNames = new[] { "!N.C.U", "N.C.T" } }));
+            Assert.IsTrue(ExplicitTestExclusion.NamesTests(new TestFilterOptions { GroupNames = new[] { "^N\\." } }));
+            Assert.IsTrue(ExplicitTestExclusion.NamesTests(new TestFilterOptions { CategoryNames = new[] { "Fast" } }));
+        }
+
+        [Test]
         public void ExplicitNodesAreExcludedOutermostFirstAndExistingExclusionsKept()
         {
             FakeTest root = Node("A.dll", RunState.Runnable,

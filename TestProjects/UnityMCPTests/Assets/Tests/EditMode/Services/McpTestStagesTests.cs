@@ -96,6 +96,18 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void AnOutcomeRecordedAsTheJobEndedOutlivesTheJobRecord()
+        {
+            // An editor restart drops job records, and the next run reads a missing job as failed;
+            // the outcome recorded when the job ended has already settled it.
+            Complete(true, "EditMode", "Passed", "a");
+            Pending(false, "EditMode");
+            _type.GetMethod("Record").Invoke(_state, new object[] { Outcome("Passed") });
+            Reconcile("a", "Failed");
+            Assert.IsNull(Refusal(false, "PlayMode"));
+        }
+
+        [Test]
         public void OutcomeIsFailClosedForAMissingJobButNotRunForOneThatExecutedNothing()
         {
             Assert.AreEqual(TestStageOutcome.Failed, TestStageGuard.Outcome(null));
@@ -163,17 +175,21 @@ namespace MCPForUnityTests.Editor.Services
 
         private void Complete(bool focused, string mode, string outcome, string fingerprint)
         {
-            _type.GetField("PendingJob").SetValue(_state, "job");
-            _type.GetField("PendingFocused").SetValue(_state, focused);
-            _type.GetField("PendingMode").SetValue(_state, mode);
+            Pending(focused, mode);
             Reconcile(fingerprint, outcome);
         }
 
+        private void Pending(bool focused, string mode)
+        {
+            _type.GetField("PendingJob").SetValue(_state, "job");
+            _type.GetField("PendingFocused").SetValue(_state, focused);
+            _type.GetField("PendingMode").SetValue(_state, mode);
+        }
+
         private void Reconcile(string fingerprint, string outcome) =>
-            _type.GetMethod("Reconcile").Invoke(_state, new object[]
-            {
-                fingerprint, Enum.Parse(McpType("TestStageOutcome"), outcome)
-            });
+            _type.GetMethod("Reconcile").Invoke(_state, new object[] { fingerprint, Outcome(outcome) });
+
+        private static object Outcome(string outcome) => Enum.Parse(McpType("TestStageOutcome"), outcome);
 
         private string Refusal(bool focused, string mode) =>
             (string)_type.GetMethod("Refusal").Invoke(_state, new object[] { focused, mode });

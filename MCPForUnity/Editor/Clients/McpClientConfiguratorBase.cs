@@ -201,15 +201,12 @@ namespace MCPForUnity.Editor.Clients
                     client.configuredTransport = Models.ConfiguredTransport.Unknown;
                 }
 
+                bool isStdio = args != null && args.Length > 0;
                 bool matches = false;
-                bool hasVersionMismatch = false;
-                string mismatchReason = null;
 
-                if (args != null && args.Length > 0)
+                if (isStdio)
                 {
                     matches = RunsConfiguredServer(args);
-                    hasVersionMismatch = !matches;
-                    mismatchReason = matches ? null : ServerSourceMismatchReason;
                 }
                 else if (!string.IsNullOrEmpty(configuredUrl))
                 {
@@ -224,7 +221,7 @@ namespace MCPForUnity.Editor.Clients
                     return client.status;
                 }
 
-                if (hasVersionMismatch)
+                if (isStdio)
                 {
                     if (attemptAutoRewrite)
                     {
@@ -236,12 +233,12 @@ namespace MCPForUnity.Editor.Clients
                         }
                         else
                         {
-                            client.SetStatus(McpStatus.VersionMismatch, mismatchReason);
+                            client.SetStatus(McpStatus.VersionMismatch, ServerSourceMismatchReason);
                         }
                     }
                     else
                     {
-                        client.SetStatus(McpStatus.VersionMismatch, mismatchReason);
+                        client.SetStatus(McpStatus.VersionMismatch, ServerSourceMismatchReason);
                     }
                 }
                 else if (attemptAutoRewrite)
@@ -409,20 +406,17 @@ namespace MCPForUnity.Editor.Clients
                         client.configuredTransport = Models.ConfiguredTransport.Unknown;
                     }
 
+                    bool isStdio = string.IsNullOrEmpty(url) && args != null && args.Length > 0;
                     bool matches = false;
-                    bool hasVersionMismatch = false;
-                    string mismatchReason = null;
 
                     if (!string.IsNullOrEmpty(url))
                     {
                         // Match against the active scope's URL
                         matches = UrlsEqual(url, HttpEndpointUtility.GetMcpRpcUrl());
                     }
-                    else if (args != null && args.Length > 0)
+                    else if (isStdio)
                     {
                         matches = RunsConfiguredServer(args);
-                        hasVersionMismatch = !matches;
-                        mismatchReason = matches ? null : ServerSourceMismatchReason;
                     }
 
                     if (matches)
@@ -431,7 +425,7 @@ namespace MCPForUnity.Editor.Clients
                         return client.status;
                     }
 
-                    if (hasVersionMismatch)
+                    if (isStdio)
                     {
                         if (attemptAutoRewrite)
                         {
@@ -443,7 +437,7 @@ namespace MCPForUnity.Editor.Clients
                                 return client.status;
                             }
                         }
-                        client.SetStatus(McpStatus.VersionMismatch, mismatchReason);
+                        client.SetStatus(McpStatus.VersionMismatch, ServerSourceMismatchReason);
                         return client.status;
                     }
                 }
@@ -653,13 +647,11 @@ namespace MCPForUnity.Editor.Clients
 
                 // For stdio transport, also check which Server/ checkout it runs
                 bool hasVersionMismatch = false;
-                string mismatchReason = null;
                 if (registeredWithStdio)
                 {
                     string configuredServerProject = AssetPathUtility.ExtractServerProjectDirectory(
                         (serverConfig["args"] as JArray)?.ToObject<string[]>());
                     hasVersionMismatch = !McpConfigurationHelper.PathsEqual(configuredServerProject, expectedServerProject);
-                    mismatchReason = hasVersionMismatch ? ServerSourceMismatchReason : null;
                 }
 
                 // If there's any mismatch and auto-rewrite is enabled, re-register
@@ -672,7 +664,7 @@ namespace MCPForUnity.Editor.Clients
                     {
                         string reason = hasTransportMismatch
                             ? $"Transport mismatch (registered: {(registeredWithHttp ? "HTTP" : "stdio")}, expected: {(currentUseHttp ? "HTTP" : "stdio")})"
-                            : mismatchReason ?? $"Package version mismatch";
+                            : ServerSourceMismatchReason;
                         McpLog.Info($"{reason}. Re-registering...");
                         try
                         {
@@ -698,7 +690,7 @@ namespace MCPForUnity.Editor.Clients
                         }
                         else
                         {
-                            client.SetStatus(McpStatus.VersionMismatch, mismatchReason);
+                            client.SetStatus(McpStatus.VersionMismatch, ServerSourceMismatchReason);
                         }
                         return client.status;
                     }
@@ -1000,6 +992,11 @@ namespace MCPForUnity.Editor.Clients
             }
         }
 
+        /// <summary>An mcpServers object's UnityMCP entries, in any casing (unityMCP is the legacy name).</summary>
+        private static IEnumerable<JProperty> UnityMcpEntries(JObject servers) =>
+            servers?.Properties().Where(server => string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
+            ?? Enumerable.Empty<JProperty>();
+
         /// <summary>
         /// Describes the UnityMCP registrations Configure and Unregister leave alone: user scope
         /// (top-level mcpServers in ~/.claude.json) and project scope (the project's .mcp.json),
@@ -1029,16 +1026,7 @@ namespace MCPForUnity.Editor.Clients
                     continue;
                 }
 
-                if (servers == null)
-                    continue;
-
-                foreach (var server in servers.Properties())
-                {
-                    if (string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
-                    {
-                        found.Add((scope, server.Name));
-                    }
-                }
+                found.AddRange(UnityMcpEntries(servers).Select(server => (scope, server.Name)));
             }
 
             if (found.Count == 0)
@@ -1110,20 +1098,7 @@ namespace MCPForUnity.Editor.Clients
                     }
 
                     var mcpServers = project.Value?["mcpServers"] as JObject;
-                    if (mcpServers == null)
-                        continue;
-
-                    // Remove UnityMCP/unityMCP entries (case-insensitive)
-                    var toRemove = new List<string>();
-                    foreach (var server in mcpServers.Properties())
-                    {
-                        if (string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
-                        {
-                            toRemove.Add(server.Name);
-                        }
-                    }
-
-                    foreach (var name in toRemove)
+                    foreach (var name in UnityMcpEntries(mcpServers).Select(server => server.Name).ToList())
                     {
                         mcpServers.Remove(name);
                         modified = true;
@@ -1213,19 +1188,9 @@ namespace MCPForUnity.Editor.Clients
                 {
                     if (normalizedProjects.TryGetValue(currentDir, out var projectConfig))
                     {
-                        var mcpServers = projectConfig?["mcpServers"] as JObject;
-                        if (mcpServers != null)
-                        {
-                            foreach (var server in mcpServers.Properties())
-                            {
-                                if (string.Equals(server.Name, "UnityMCP", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    return (server.Value as JObject, null);
-                                }
-                            }
-                        }
-                        // Found the project but no UnityMCP - don't continue walking up
-                        return (null, null);
+                        // Found the project; without a UnityMCP entry, don't continue walking up
+                        var server = UnityMcpEntries(projectConfig?["mcpServers"] as JObject).FirstOrDefault();
+                        return (server?.Value as JObject, null);
                     }
 
                     // Move up one directory

@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using MCPForUnity.Editor.Helpers;
 using Newtonsoft.Json;
 using UnityEngine;
 
@@ -15,6 +16,13 @@ namespace MCPForUnity.Editor.Services
         {
             public string[] Inputs;
         }
+
+        // The job Begin admitted and the state file to settle when it ends. Lost with the domain;
+        // the next Begin then settles the job from its record instead.
+        private static string _pendingJob;
+        private static string _pendingStatePath;
+
+        internal static string PendingJob => _pendingJob;
 
         internal static void Begin(string jobId, string mode, TestFilterOptions filters)
         {
@@ -46,17 +54,40 @@ namespace MCPForUnity.Editor.Services
                     + " is unreadable. Deleting it resets the recorded focused pass and failed suite.");
             var previous = state.PendingJob == null ? null : TestJobManager.GetJob(state.PendingJob);
             state.Reconcile(Fingerprint(project, config.Inputs), Outcome(previous));
-            bool focused = HasSelection(filters?.TestNames) || HasSelection(filters?.GroupNames)
-                || HasSelection(filters?.CategoryNames);
+            bool focused = ExplicitTestExclusion.NamesTests(filters);
             string refusal = state.Refusal(focused, mode);
+            if (refusal == null)
+            {
+                state.PendingJob = jobId;
+                state.PendingFocused = focused;
+                state.PendingMode = mode;
+            }
             // Persist reconciliation even on refusal, so clearing/reloading a failed job cannot
-            // erase the failure. A missing job is fail-closed; a fresh focus run recovers it.
-            Save(statePath, state);
+            // erase the failure. A missing job is fail-closed, so jobs settle themselves as they
+            // end (RecordEnded): only one lost before then, such as to an editor restart, counts.
+            McpConfigurationHelper.WriteAtomicFile(statePath, JsonConvert.SerializeObject(state));
             if (refusal != null) throw new InvalidOperationException(refusal);
-            state.PendingJob = jobId;
-            state.PendingFocused = focused;
-            state.PendingMode = mode;
-            Save(statePath, state);
+            _pendingJob = jobId;
+            _pendingStatePath = statePath;
+        }
+
+        /// <summary>Settles the admitted job's outcome once it has ended.</summary>
+        internal static void RecordEnded(TestJob job)
+        {
+            if (job == null || job.JobId != _pendingJob || job.Status == TestJobStatus.Running) return;
+            _pendingJob = null;
+            try
+            {
+                var state = JsonConvert.DeserializeObject<TestStageState>(File.ReadAllText(_pendingStatePath));
+                if (state?.PendingJob != job.JobId) return;
+                state.Record(Outcome(job));
+                McpConfigurationHelper.WriteAtomicFile(_pendingStatePath, JsonConvert.SerializeObject(state));
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is JsonException)
+            {
+                McpLog.Warn($"[TestStageGuard] Could not record job {job.JobId}'s outcome; the next run "
+                    + $"reads it from the job record instead: {ex.Message}");
+            }
         }
 
         // A job that is gone cannot vouch for anything, so it counts against the stage; one that
@@ -69,17 +100,6 @@ namespace MCPForUnity.Editor.Services
             bool executedNothing = job.Status != TestJobStatus.Running && job.CompletedTests == 0
                 && (job.Summary == null || job.Summary.Passed + job.Summary.Failed == 0);
             return executedNothing ? TestStageOutcome.NotRun : TestStageOutcome.Failed;
-        }
-
-        private static bool HasSelection(string[] values) => values != null
-            && values.Any(v => !string.IsNullOrWhiteSpace(v));
-
-        private static void Save(string path, TestStageState state)
-        {
-            string temporary = path + ".tmp";
-            File.WriteAllText(temporary, JsonConvert.SerializeObject(state));
-            if (File.Exists(path)) File.Replace(temporary, path, null);
-            else File.Move(temporary, path);
         }
 
         // Content, paths, additions and deletions all matter. Generated build directories are not

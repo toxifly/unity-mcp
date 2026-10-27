@@ -23,6 +23,15 @@ namespace MCPForUnity.Editor.Services
 
         public void Reconcile(string fingerprint, TestStageOutcome outcome)
         {
+            Record(outcome);
+            if (!string.Equals(Fingerprint, fingerprint, StringComparison.Ordinal))
+                FocusedPassed = false;
+            Fingerprint = fingerprint;
+        }
+
+        // Settles the pending job with its outcome; a settled state ignores later outcomes.
+        public void Record(TestStageOutcome outcome)
+        {
             if (PendingJob != null && outcome != TestStageOutcome.NotRun)
             {
                 if (PendingFocused)
@@ -33,9 +42,6 @@ namespace MCPForUnity.Editor.Services
                     FailedSuite = PendingMode;
             }
             PendingJob = null;
-            if (!string.Equals(Fingerprint, fingerprint, StringComparison.Ordinal))
-                FocusedPassed = false;
-            Fingerprint = fingerprint;
         }
 
         public string Refusal(bool focused, string mode)
@@ -44,7 +50,7 @@ namespace MCPForUnity.Editor.Services
             if (!FocusedPassed)
                 return "test_stage_required: Run a focused test_names, group_names or category_names "
                     + "selection successfully for the current inputs before a full suite. "
-                    + "Assembly-only selection is a full suite; empty/skipped runs do not qualify.";
+                    + "Assembly-only and exclusion-only selections are full suites; empty/skipped runs do not qualify.";
             if (FailedSuite != null && FailedSuite != mode)
                 return "test_stage_failed: Repair and rerun the failed " + FailedSuite
                     + " suite before starting another full suite. Focused diagnosis remains allowed.";

@@ -1329,6 +1329,46 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void SaveSceneScoped_ExcludeKeepsTheSceneOpenWhenItsFileIsReadOnly()
+        {
+            // Regression: the scene was closed before the write failed, discarding the ledgered
+            // edits the merge was meant to keep.
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            string before = File.ReadAllText(ScenePath);
+            root.name = "ScopedRenamedRoot";
+            SceneMutationLedger.Record(root);
+            drift.name = "DriftRenamedObject";
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            File.SetAttributes(ScenePath, FileAttributes.ReadOnly);
+            try
+            {
+                JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+                {
+                    ["scenePath"] = ScenePath,
+                    ["unscopedChanges"] = "exclude"
+                }));
+
+                Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+                Assert.AreEqual("SAVE_FAILED", response["code"].Value<string>());
+                Assert.IsFalse(response["data"]["data"]["scene_written"].Value<bool>());
+                StringAssert.Contains("not writable", response["data"]["message"].Value<string>());
+            }
+            finally
+            {
+                File.SetAttributes(ScenePath, FileAttributes.Normal);
+            }
+
+            Assert.AreEqual(before, File.ReadAllText(ScenePath));
+            Assert.IsTrue(root != null, "The scene must stay open with its edits");
+            Assert.AreEqual("ScopedRenamedRoot", root.name);
+            Assert.IsTrue(testScene.isDirty);
+            var (touched, _) = SceneMutationLedger.SnapshotForScene(ScenePath);
+            Assert.IsNotEmpty(touched, "The unsaved edit stays ledgered for the next save");
+        }
+
+        [Test]
         public void SaveSceneScoped_ExcludeWithoutDriftSavesInPlace()
         {
             Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));

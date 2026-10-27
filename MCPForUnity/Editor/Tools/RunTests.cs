@@ -60,8 +60,9 @@ namespace MCPForUnity.Editor.Tools
                 var filterOptions = GetFilterOptions(@params);
 
                 // A run already in progress is answered with tests_running below, and its own tests
-                // may be what dirtied the scenes, so only an idle editor is checked here.
-                if (!TestJobManager.HasRunningJob)
+                // may be what dirtied the scenes, so only an idle editor is checked here. That
+                // includes a run whose job already ended but which still holds the Test Runner.
+                if (!TestJobManager.HasRunningJob && !MCPServiceLocator.Tests.HasPendingRun)
                 {
                     var unsavedRefusal = UnsavedScenesRefusal(TestRunnerService.UnsavedScenes());
                     if (unsavedRefusal != null)

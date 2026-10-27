@@ -152,11 +152,18 @@ namespace MCPForUnity.Editor.Clients.Configurators
 
         public override string GetManualSnippet()
         {
-            var snippet = new JObject
+            try
             {
-                ["mcp"] = new JObject { [ServerName] = BuildServerEntry() }
-            };
-            return JsonConvert.SerializeObject(snippet, Formatting.Indented);
+                var snippet = new JObject
+                {
+                    ["mcp"] = new JObject { [ServerName] = BuildServerEntry() }
+                };
+                return JsonConvert.SerializeObject(snippet, Formatting.Indented);
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { error = ex.Message });
+            }
         }
 
         public override IList<string> GetInstallationSteps() => new List<string>

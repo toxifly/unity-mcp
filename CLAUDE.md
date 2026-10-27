@@ -221,8 +221,9 @@ Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setu
 Projects can opt into enforced test ordering with `ProjectSettings/McpTestStages.json` (non-empty
 `inputs` paths relative to the project). `TestJobManager.StartJob` applies `TestStageGuard` for MCP,
 batch and bridge CLI calls. Full suites need a successful focused test/group/category run with at
-least one passing test for unchanged inputs; assembly-only selection is a full suite. A failed full
-suite blocks other full-suite modes until repaired. Focused diagnosis remains allowed.
+least one passing test for unchanged inputs; assembly-only and exclusion-only selections are full
+suites. A failed full suite blocks other full-suite modes until repaired. Focused diagnosis remains
+allowed.
 
 The guard hashes configured input contents/paths and persists ordering evidence under `Library/`.
 It does not skip suites or infer test relevance. Projects without the config are unaffected.

@@ -294,7 +294,9 @@ namespace MCPForUnity.Editor.Helpers
         /// <summary>
         /// Joins command-line parts so CommandLineToArgvW (and .NET's argument parser) reads each
         /// back unchanged: parts that are empty or contain whitespace or quotes are quoted, embedded
-        /// quotes are escaped, and backslashes are doubled where they precede a quote.
+        /// quotes are escaped, and backslashes are doubled where they precede a quote. A single
+        /// quote counts too: Mono on macOS/Linux and sh split shell-style, where a bare one opens a
+        /// quoted string.
         /// </summary>
         public static string JoinCommandLine(IEnumerable<string> parts)
         {
@@ -304,7 +306,7 @@ namespace MCPForUnity.Editor.Helpers
                 if (line.Length > 0)
                     line.Append(' ');
 
-                if (part.Length > 0 && !part.Any(c => char.IsWhiteSpace(c) || c == '"'))
+                if (part.Length > 0 && !part.Any(c => char.IsWhiteSpace(c) || c == '"' || c == '\''))
                 {
                     line.Append(part);
                     continue;
@@ -380,6 +382,13 @@ namespace MCPForUnity.Editor.Helpers
             }
 
             string checkPath = GetLocalServerCheckPath(path);
+
+            // Path.Combine throws on these (a Windows "Copy as path" value keeps its quotes);
+            // validation reports them as an invalid override instead.
+            if (checkPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+            {
+                return path;
+            }
 
             // Already correct — pyproject.toml exists at this path
             if (System.IO.File.Exists(System.IO.Path.Combine(checkPath, "pyproject.toml")))

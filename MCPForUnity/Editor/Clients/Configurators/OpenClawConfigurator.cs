@@ -132,6 +132,16 @@ namespace MCPForUnity.Editor.Clients.Configurators
 
         public override string GetManualSnippet()
         {
+            JObject serverEntry;
+            try
+            {
+                serverEntry = BuildUnityServerEntry();
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { error = ex.Message });
+            }
+
             JObject snippet = new JObject
             {
                 ["plugins"] = new JObject
@@ -145,7 +155,7 @@ namespace MCPForUnity.Editor.Clients.Configurators
                             {
                                 ["servers"] = new JObject
                                 {
-                                    [ServerName] = BuildUnityServerEntry()
+                                    [ServerName] = serverEntry
                                 }
                             }
                         }

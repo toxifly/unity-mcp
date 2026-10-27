@@ -232,12 +232,7 @@ namespace MCPForUnity.Editor.Services
                 if (!string.IsNullOrEmpty(_currentJobId)
                     && Jobs.TryGetValue(_currentJobId, out var job) && job.Status == TestJobStatus.Running)
                 {
-                    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    job.Status = TestJobStatus.Failed;
-                    job.Error = "Job cleared manually (stuck or orphaned)";
-                    job.FinishedUnixMs = now;
-                    job.LastUpdateUnixMs = now;
-                    job.Summary = BuildSummary(job, null, now);
+                    FailJob(job, "Job cleared manually (stuck or orphaned)", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                     McpLog.Warn($"[TestJobManager] Manually cleared stuck job {_currentJobId}");
                     cleared = true;
                 }
@@ -398,11 +393,15 @@ namespace MCPForUnity.Editor.Services
                 return;
             }
             
+            TestJob stageJob = null;
             try
             {
                 PersistedState snapshot;
                 lock (LockObj)
                 {
+                    if (TestStageGuard.PendingJob != null)
+                        Jobs.TryGetValue(TestStageGuard.PendingJob, out stageJob);
+
                     var jobs = Jobs.Values
                         .OrderByDescending(j => j.LastUpdateUnixMs)
                         .Take(MaxJobsToKeep)
@@ -446,6 +445,9 @@ namespace MCPForUnity.Editor.Services
             {
                 McpLog.Warn($"[TestJobManager] Failed to persist SessionState: {ex.Message}");
             }
+
+            // SessionState does not survive an editor restart, so the stage records its outcome too.
+            TestStageGuard.RecordEnded(stageJob);
         }
 
         public static string StartJob(
@@ -575,12 +577,8 @@ namespace MCPForUnity.Editor.Services
                     return;
                 }
 
-                job.Status = TestJobStatus.Failed;
-                job.Error = "The Unity Test Framework reported the run failed: "
-                    + (string.IsNullOrWhiteSpace(message) ? "no reason given" : message);
-                job.FinishedUnixMs = now;
-                job.LastUpdateUnixMs = now;
-                job.Summary = BuildSummary(job, null, now);
+                FailJob(job, "The Unity Test Framework reported the run failed: "
+                    + (string.IsNullOrWhiteSpace(message) ? "no reason given" : message), now);
                 job.CurrentTestFullName = null;
                 job.Preparing = false;
                 _currentJobId = null;
@@ -762,11 +760,7 @@ namespace MCPForUnity.Editor.Services
                         && now - ChargeableSince(job.LastUpdateUnixMs, now) > initTimeout)
                     {
                         McpLog.Warn($"[TestJobManager] Job {jobId} stalled before any test started (no RunFinished within {initTimeout}ms), auto-failing");
-                        job.Status = TestJobStatus.Failed;
-                        job.Error = "Test job failed to initialize (tests did not start within timeout)";
-                        job.FinishedUnixMs = now;
-                        job.Summary = BuildSummary(job, null, now);
-                        job.LastUpdateUnixMs = now;
+                        FailJob(job, "Test job failed to initialize (tests did not start within timeout)", now);
                         if (_currentJobId == jobId)
                         {
                             _currentJobId = null;
@@ -811,11 +805,7 @@ namespace MCPForUnity.Editor.Services
                     if (now - job.LastUpdateUnixMs > StuckThresholdMs)
                     {
                         McpLog.Warn($"[TestJobManager] Job {jobId} wedged mid-run at {job.CompletedTests}/{job.TotalTests} (play mode exited without RunFinished), auto-failing");
-                        job.Status = TestJobStatus.Failed;
-                        job.Error = "Test runner died mid-run (play mode exited without delivering RunFinished)";
-                        job.FinishedUnixMs = now;
-                        job.Summary = BuildSummary(job, null, now);
-                        job.LastUpdateUnixMs = now;
+                        FailJob(job, "Test runner died mid-run (play mode exited without delivering RunFinished)", now);
                         if (_currentJobId == jobId)
                         {
                             _currentJobId = null;
@@ -979,6 +969,16 @@ namespace MCPForUnity.Editor.Services
                 list[i] = new { full_name = f?.FullName, message = f?.Message };
             }
             return list;
+        }
+
+        /// <summary>Ends a job as failed without a run result. Callers hold <see cref="LockObj"/>.</summary>
+        private static void FailJob(TestJob job, string error, long now)
+        {
+            job.Status = TestJobStatus.Failed;
+            job.Error = error;
+            job.FinishedUnixMs = now;
+            job.LastUpdateUnixMs = now;
+            job.Summary = BuildSummary(job, null, now);
         }
 
         private static TestJobSummary BuildSummary(TestJob job, TestRunResult result, long finishedUnixMs)

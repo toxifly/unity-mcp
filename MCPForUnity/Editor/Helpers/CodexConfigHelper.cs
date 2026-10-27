@@ -63,11 +63,6 @@ namespace MCPForUnity.Editor.Helpers
             return writer.ToString();
         }
 
-        public static bool TryParseCodexServer(string toml, out string command, out string[] args)
-        {
-            return TryParseCodexServer(toml, out command, out args, out _);
-        }
-
         public static bool TryParseCodexServer(string toml, out string command, out string[] args, out string url)
         {
             command = null;

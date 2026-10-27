@@ -179,38 +179,19 @@ namespace MCPForUnity.Editor.Tools
                 return false;
             }
 
-            if (!StartsWithYamlHeader(bytes))
+            string text = Encoding.UTF8.GetString(bytes);
+            if (!text.TrimStart('\uFEFF').StartsWith("%YAML", StringComparison.Ordinal))
             {
                 error = $"'source_path' '{resolvedPath}' is not a Unity YAML file (it must start with '%YAML').";
                 return false;
             }
 
             // Every scene serializes a RenderSettings object; prefabs, materials and other assets do not.
-            if (Encoding.UTF8.GetString(bytes).IndexOf("\n--- !u!104 &", StringComparison.Ordinal) < 0)
+            if (text.IndexOf("\n--- !u!104 &", StringComparison.Ordinal) < 0)
             {
                 error = $"'source_path' '{resolvedPath}' is not a Unity scene (it has no RenderSettings "
                         + "'--- !u!104' object); a prefab or other asset cannot replace a scene.";
                 return false;
-            }
-
-            return true;
-        }
-
-        private static bool StartsWithYamlHeader(byte[] bytes)
-        {
-            byte[] header = Encoding.ASCII.GetBytes("%YAML");
-            int offset = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF ? 3 : 0;
-            if (bytes.Length < offset + header.Length)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < header.Length; i++)
-            {
-                if (bytes[offset + i] != header[i])
-                {
-                    return false;
-                }
             }
 
             return true;

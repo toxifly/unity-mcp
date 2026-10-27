@@ -266,6 +266,25 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void UnscopedReorderUnderAScopedParent_KeepsDiskOrder_AndReportsIt()
+        {
+            // The save lets Unity write memory itself when nothing is held back, so a held-back
+            // reorder inside a written block must still count as drift.
+            string blocks(string parentName, IEnumerable<long> children) =>
+                GameObjectBlock(100, parentName) + TransformBlock(101, 100, 0, children)
+                + GameObjectBlock(200, "A") + TransformBlock(201, 200, 101, null)
+                + GameObjectBlock(300, "B") + TransformBlock(301, 300, 101, null);
+            string disk = Header + blocks("Parent", new long[] { 201, 301 }) + SceneRootsBlock(101);
+            string temp = Header + blocks("Parent", new long[] { 301, 201 }) + SceneRootsBlock(101);
+
+            var result = SceneYamlMerge.Merge(disk, temp, new HashSet<long> { 101 }, None);
+
+            Assert.AreEqual(disk, result.MergedText, "the unscoped reorder must not reach the file");
+            Assert.AreEqual(1, result.BlocksScoped);
+            CollectionAssert.AreEquivalent(new[] { 101L }, result.DriftSuppressedIds);
+        }
+
+        [Test]
         public void ScopedPrefabInstance_TakesStrippedMemberBlocksToo()
         {
             string prefabInstance(long id, string modsName) =>

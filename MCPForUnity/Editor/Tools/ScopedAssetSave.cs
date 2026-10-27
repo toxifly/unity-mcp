@@ -151,25 +151,20 @@ namespace MCPForUnity.Editor.Tools
             bool changed = !string.Equals(merge.MergedText, NormalizeNewlines(diskText), StringComparison.Ordinal);
             bool written = false;
             bool reloaded = false;
-            if (changed && !driftKeptOut)
+            if (changed || scene.isDirty)
             {
-                // Nothing is held back, so memory holds exactly the merge's content. Unity's own save
-                // writes it and leaves the scene clean with every handle valid, at the cost of
-                // Unity's canonical block order where the file had another.
-                if (!EditorSceneManager.SaveScene(scene))
-                    return Error("SAVE_FAILED", $"Unity did not save scene '{scenePath}'.");
-                written = true;
-            }
-            else if (changed || scene.isDirty)
-            {
-                // A dirty scene whose serialization is the file byte for byte only needs its flag
-                // cleared, and Unity's save rewrites identical bytes. Anything else -- drift held
-                // back, or the same content in another block order -- is reopened from the file.
-                if (!changed && !driftKeptOut
-                    && string.Equals(NormalizeNewlines(tempText), NormalizeNewlines(diskText), StringComparison.Ordinal))
+                // With nothing held back, Unity's own save leaves the scene clean with every handle
+                // valid: memory holds exactly the merge's content when it changed (at the cost of
+                // Unity's canonical block order where the file had another), and a dirty scene whose
+                // serialization is the file byte for byte only needs its flag cleared. Anything
+                // else -- drift held back, or the same content in another block order -- is
+                // reopened from the file. Unchanged, the merge's text is the normalized disk text.
+                if (!driftKeptOut
+                    && (changed || string.Equals(NormalizeNewlines(tempText), merge.MergedText, StringComparison.Ordinal)))
                 {
                     if (!EditorSceneManager.SaveScene(scene))
                         return Error("SAVE_FAILED", $"Unity did not save scene '{scenePath}'.");
+                    written = changed;
                 }
                 else
                 {
@@ -197,7 +192,7 @@ namespace MCPForUnity.Editor.Tools
                     : string.Empty;
             return new SuccessResponse(
                 (changed
-                    ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; {merge.BlocksDriftSuppressed} drifted block(s) left untouched."
+                    ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; unscoped changes held back in {merge.BlocksDriftSuppressed} block(s)."
                     : "No scoped changes to write; the on-disk scene already matches.") + driftHint,
                 new
                 {
@@ -233,6 +228,21 @@ namespace MCPForUnity.Editor.Tools
             reopened = default;
             written = false;
             error = null;
+            if (text != null)
+            {
+                // Closing discards the scene's in-memory edits, so a file that cannot be written
+                // (read-only under version control, locked by another process) must fail first.
+                try
+                {
+                    using (new FileStream(scenePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) { }
+                }
+                catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException)
+                {
+                    error = $"'{scenePath}' is not writable, so the scene was left open and unsaved: {exception.Message}";
+                    return false;
+                }
+            }
+
             SceneSetup[] setup = EditorSceneManager.GetSceneManagerSetup();
             bool wasActive = SceneManager.GetActiveScene() == scene;
             bool othersLoaded = LoadedScenes().Any(other => other.isLoaded && other != scene);

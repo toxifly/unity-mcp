@@ -63,6 +63,14 @@ namespace MCPForUnityTests.Editor.Helpers
         }
 
         [Test]
+        public void ResolveLocalServerPath_LeavesAnUnusablePathForValidationToReport()
+        {
+            string path = "/unity-mcp/Ser\0ver";
+
+            Assert.AreEqual(path, AssetPathUtility.ResolveLocalServerPath(path));
+        }
+
+        [Test]
         public void GetServerProjectDirectory_ReturnsLocalServerDirectory()
         {
             using var source = new TempServerSource();
@@ -153,6 +161,7 @@ namespace MCPForUnityTests.Editor.Helpers
         [TestCase(@"C:\My Projects\unity-mcp\Server\", @"""C:\My Projects\unity-mcp\Server\\""")]
         [TestCase(@"say ""hi""", @"""say \""hi\""""")]
         [TestCase(@"a\""b", @"""a\\\""b""")]
+        [TestCase("/Users/x/Bob's/Server", @"""/Users/x/Bob's/Server""")]
         [TestCase("", @"""""")]
         public void JoinCommandLine_QuotesEachPartSoArgvParsingReadsItBack(string part, string expected)
         {

@@ -222,7 +222,7 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
                         throw new MutationTransactionException(
                             "SCENE_ALREADY_DIRTY",
                             "A preserved pre-dirty scene cannot be saved by this transaction.");
-                    Dictionary<int, string> identitiesBeforeSave = CaptureObjectIdentities();
+                    Dictionary<Object, string> identitiesBeforeSave = CaptureTemporaryIdentities();
                     SaveTargetsOnly();
                     IReadOnlyDictionary<string, string> stabilizedIdentities =
                         CaptureStabilizedIdentityAliases(identitiesBeforeSave);
@@ -821,21 +821,29 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             return true;
         }
 
-        private Dictionary<int, string> CaptureObjectIdentities()
+        // Keyed by object: on 6000.6+ every handle GetInstanceIDCompat issues lives for the session,
+        // and a save would otherwise issue one for every object in its scenes.
+        private Dictionary<Object, string> CaptureTemporaryIdentities()
         {
-            return EnumerateSnapshotObjects(targets, targetScenes, targetAssetPaths)
-                .Where(target => target != null)
-                .ToDictionary(target => target.GetInstanceIDCompat(), ObjectIdentity);
+            var identities = new Dictionary<Object, string>();
+            foreach (Object target in EnumerateSnapshotObjects(targets, targetScenes, targetAssetPaths))
+            {
+                if (target == null)
+                    continue;
+                string id = ObjectIdentity(target);
+                if (id.StartsWith("temporary:", StringComparison.Ordinal))
+                    identities[target] = id;
+            }
+            return identities;
         }
 
         private IReadOnlyDictionary<string, string> CaptureStabilizedIdentityAliases(
-            IReadOnlyDictionary<int, string> identitiesBeforeSave)
+            IReadOnlyDictionary<Object, string> identitiesBeforeSave)
         {
             var aliases = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (Object target in EnumerateSnapshotObjects(targets, targetScenes, targetAssetPaths))
             {
-                if (target == null || !identitiesBeforeSave.TryGetValue(target.GetInstanceIDCompat(), out string beforeId)
-                    || !beforeId.StartsWith("temporary:", StringComparison.Ordinal))
+                if (target == null || !identitiesBeforeSave.TryGetValue(target, out string beforeId))
                     continue;
 
                 string afterId = ObjectIdentity(target);
@@ -877,7 +885,9 @@ namespace MCPForUnity.Editor.Services.MutationTransactions
             string stable = id.ToString();
             if (!stable.EndsWith("-0-0", StringComparison.Ordinal))
                 return stable;
-            return $"temporary:{ObjectPath(target)}:{target.GetType().FullName}:{target.GetInstanceIDCompat()}";
+            // Objects in unsaved or preview scenes have no stable id. The path is reported apart:
+            // in the identity, a rename or reparent would read as every property removed and re-added.
+            return $"temporary:{target.GetType().FullName}:{target.GetInstanceIDCompat()}";
         }
 
         private static string ObjectPath(Object target)
