@@ -449,6 +449,9 @@ async def _wait_for_test_job(
     annotations=ToolAnnotations(
         title="Get Test Job",
         readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
     ),
 )
 async def get_test_job(

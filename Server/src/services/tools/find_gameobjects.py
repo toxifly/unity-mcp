@@ -5,6 +5,7 @@ Returns only instance IDs with pagination support for efficient searches.
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
@@ -20,7 +21,16 @@ from services.tools.preflight import preflight
         "This tool is read-only and returns paginated instance IDs rather than serialized "
         "object or component data. Important parameters: search_method, search_term, "
         "include_inactive, page_size, and cursor."
-    )
+    ),
+    annotations=ToolAnnotations(
+        title="Find GameObjects",
+        # Not readOnly: preflight(refresh_if_dirty=True) below can trigger an
+        # asset refresh and domain reload.
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
 )
 async def find_gameobjects(
     ctx: Context,

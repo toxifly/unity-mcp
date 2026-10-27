@@ -12,6 +12,7 @@ Game View.
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from services.registry import mcp_for_unity_tool
@@ -33,7 +34,15 @@ from transport.legacy.unity_connection import async_send_command_with_retry
         "Set include_children to also measure each target's immediate "
         "RectTransform children. Inactive objects are "
         "included by default. Geometry assertions can be evaluated in the same call."
-    )
+    ),
+    annotations=ToolAnnotations(
+        title="Measure UI",
+        # Not readOnly: prefab measurement force-rebuilds layout groups first.
+        readOnlyHint=False,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
 )
 async def measure_ui(
     ctx: Context,

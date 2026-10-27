@@ -472,6 +472,9 @@ async def delete_script(
     annotations=ToolAnnotations(
         title="Validate Script",
         readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
     ),
 )
 async def validate_script(
@@ -618,6 +621,9 @@ async def manage_script(
     annotations=ToolAnnotations(
         title="Manage Script Capabilities",
         readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
     ),
 )
 async def manage_script_capabilities(ctx: Context) -> dict[str, Any]:
@@ -650,6 +656,9 @@ async def manage_script_capabilities(ctx: Context) -> dict[str, Any]:
     annotations=ToolAnnotations(
         title="Get SHA",
         readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
     ),
 )
 async def get_sha(

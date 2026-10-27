@@ -3,6 +3,7 @@
 from typing import Annotated, Any
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from services.registry import mcp_for_unity_tool
@@ -20,6 +21,13 @@ from transport.unity_transport import send_with_unity_instance
         "distinctly and can include compact prefab source/override provenance. Set prefab_path "
         "to scope name/path/GlobalObjectId targets to an Assets/ or Packages/ prefab. A matching "
         "open Prefab Stage is reused so unsaved edits are inspected."
+    ),
+    annotations=ToolAnnotations(
+        title="Inspect Serialized",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
     ),
 )
 async def inspect_serialized(

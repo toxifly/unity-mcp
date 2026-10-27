@@ -15,6 +15,8 @@ from transport.legacy.unity_connection import async_send_command_with_retry
     description="Control and query Unity Editor state and settings. Read-only actions: telemetry_status, telemetry_ping, and get_scripting_defines. Mutating actions: play, pause, stop, set_active_tool, add_tag, remove_tag, add_layer, remove_layer, set_scripting_defines, deploy_package, restore_package, undo, and redo. set_scripting_defines replaces the whole symbol list for a build target (pass [] to clear) and triggers a recompile. deploy_package copies the configured MCPForUnity source into the installed package and triggers recompilation without a confirmation dialog; restore_package restores its backup. undo and redo return the affected group name.",
     annotations=ToolAnnotations(
         title="Manage Editor",
+        readOnlyHint=False,
+        destructiveHint=True,
     ),
 )
 async def manage_editor(

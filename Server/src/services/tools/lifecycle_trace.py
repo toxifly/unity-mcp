@@ -3,6 +3,7 @@
 from typing import Annotated, Any, Literal
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from services.registry import mcp_for_unity_tool
@@ -17,6 +18,13 @@ from transport.unity_transport import send_with_unity_instance
         "Start, poll, inspect, or stop a bounded opt-in trace of lifecycle callbacks, "
         "selection changes, and whitelisted serialized-property changes. Temporary "
         "instrumentation is removed on stop, timeout, play-mode exit, or domain reload."
+    ),
+    annotations=ToolAnnotations(
+        title="Lifecycle Trace",
+        # Temporary DontSave probes; dirty state is restored on stop.
+        readOnlyHint=False,
+        destructiveHint=False,
+        openWorldHint=False,
     ),
 )
 async def lifecycle_trace(

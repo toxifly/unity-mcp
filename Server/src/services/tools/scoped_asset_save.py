@@ -126,7 +126,12 @@ async def save_assets_scoped(
         "Preview dirty objects for declared asset paths or one loaded scene without saving. "
         "Returns the same bounded scoped-save report shape with assets_saved empty."
     ),
-    annotations=ToolAnnotations(title="Preview Asset Changes", readOnlyHint=True),
+    annotations=ToolAnnotations(
+        title="Preview Asset Changes",
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+    ),
 )
 async def preview_asset_changes(
     ctx: Context,

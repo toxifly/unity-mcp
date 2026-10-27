@@ -5,6 +5,7 @@ Supports add, remove, set_property, get_properties, and get_components operation
 from typing import Annotated, Any, Literal, Optional
 
 from fastmcp import Context
+from mcp.types import ToolAnnotations
 from services.registry import mcp_for_unity_tool
 from services.tools import get_unity_instance_from_context
 from transport.unity_transport import send_with_unity_instance
@@ -19,7 +20,12 @@ from services.tools.preflight import preflight
         "get_components. Mutating actions: add, remove, and set_property. Targets accept a "
         "GameObject name, hierarchy path, instance ID, or structured target; property filters "
         "can bound serialized-property reads."
-    )
+    ),
+    annotations=ToolAnnotations(
+        title="Manage Components",
+        readOnlyHint=False,
+        destructiveHint=True,
+    ),
 )
 async def manage_components(
     ctx: Context,
