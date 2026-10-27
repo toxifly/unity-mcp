@@ -39,7 +39,7 @@ Full history: [Release Notes](website/docs/releases.md).
 
 ## What it does
 
-Control the Unity Editor in natural language from any MCP client — create scenes & GameObjects, edit C# scripts, manage assets, run tests, profile, and build. 47 focused MCP tool entrypoints, any client, free & MIT.
+Control the Unity Editor in natural language from any MCP client — create scenes & GameObjects, edit C# scripts, manage assets, run tests, profile, and build. 48 focused MCP tool entrypoints, any client, free & MIT.
 
 **[Browse the full tool catalog →](website/docs/reference/tools/index.md)**
 
