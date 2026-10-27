@@ -384,8 +384,14 @@ def execute_menu(menu_path: str):
     is_flag=True,
     help="Include details for skipped tests only."
 )
+@click.option(
+    "--clear-stuck",
+    is_flag=True,
+    help="Clear an orphaned running job that is blocking new runs, instead of starting a run."
+)
 @handle_unity_errors
-def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, failed: bool, skipped: bool):
+def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, failed: bool, skipped: bool,
+              clear_stuck: bool):
     """Run Unity tests.
 
     \b
@@ -394,8 +400,14 @@ def run_tests(mode: str, async_mode: bool, wait: Optional[int], details: bool, f
         unity-mcp editor tests --mode PlayMode
         unity-mcp editor tests --async
         unity-mcp editor tests --wait 60 --failed
+        unity-mcp editor tests --clear-stuck
     """
     config = get_config()
+
+    if clear_stuck:
+        result = run_command("run_tests", {"clear_stuck": True}, config)
+        click.echo(format_output(result, config.format))
+        return
 
     params: dict[str, Any] = {"mode": mode}
     if wait is not None:
