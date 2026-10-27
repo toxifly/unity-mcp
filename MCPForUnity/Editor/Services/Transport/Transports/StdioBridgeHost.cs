@@ -362,26 +362,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
             }
         }
 
-        private static bool IsCompiling()
-        {
-            // Play-mode aware: a recompile deferred by Recompile-After-Finished-Playing keeps the raw
-            // EditorApplication.isCompiling flag true for the whole play session (upstream issue #549).
-            if (EditorStateCache.GetActualIsCompiling())
-            {
-                return true;
-            }
-            try
-            {
-                Type pipeline = Type.GetType("UnityEditor.Compilation.CompilationPipeline, UnityEditor");
-                var prop = pipeline?.GetProperty("isCompiling", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (prop != null)
-                {
-                    return (bool)prop.GetValue(null);
-                }
-            }
-            catch { }
-            return false;
-        }
+        // Routed through EditorStateCache so a deferred domain reload (issue #1276) does not
+        // pin the bridge off: raw EditorApplication.isCompiling stays true for as long as the
+        // reload is held, and this gates bridge startup.
+        private static bool IsCompiling() => EditorStateCache.GetActualIsCompiling();
 
         public static void Start()
         {

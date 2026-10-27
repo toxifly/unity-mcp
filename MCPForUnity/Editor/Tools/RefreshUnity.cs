@@ -118,7 +118,7 @@ namespace MCPForUnity.Editor.Tools
                 }
             }
 
-            string resultingState = EditorApplication.isCompiling
+            string resultingState = EditorStateCache.GetActualIsCompiling()
                 ? "compiling"
                 : (EditorApplication.isUpdating ? "asset_import" : "idle");
 
@@ -155,7 +155,7 @@ namespace MCPForUnity.Editor.Tools
                         return;
                     }
 
-                    if (!EditorApplication.isCompiling
+                    if (!EditorStateCache.GetActualIsCompiling()
                         && !EditorApplication.isUpdating
                         && !TestRunStatus.IsRunning
                         && !EditorApplication.isPlayingOrWillChangePlaymode)
