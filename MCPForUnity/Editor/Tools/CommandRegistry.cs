@@ -324,7 +324,8 @@ namespace MCPForUnity.Editor.Tools
                     new HandlerInfo(commandName, null, _ => returnedTask),
                     @params,
                     commandName,
-                    tcs);
+                    tcs,
+                    queueWait == null ? null : (JObject)queueWait.DeepClone());
                 return null;
             }
 
