@@ -91,5 +91,33 @@ namespace MCPForUnityTests.Editor.Services
                 SessionState.SetString(key, original);
             }
         }
+
+        [Test]
+        public void EditorStateSnapshot_ReportsTrackerCompileTimestamps()
+        {
+            // refresh_unity compares these against a baseline to see its compile happen. They
+            // must be the tracker's event-recorded times: tick sampling can miss a short compile
+            // and keep reporting the previous one.
+            const string startedKey = "MCPForUnity.Compilation.StartedUnixMs";
+            const string finishedKey = "MCPForUnity.Compilation.FinishedUnixMs";
+            string originalStarted = SessionState.GetString(startedKey, string.Empty);
+            string originalFinished = SessionState.GetString(finishedKey, string.Empty);
+            try
+            {
+                SessionState.SetString(startedKey, "1000");
+                SessionState.SetString(finishedKey, "2000");
+                EditorStateCache.ForceUpdate("test");
+
+                var compilation = EditorStateCache.GetSnapshot()["compilation"];
+                Assert.AreEqual(1000L, compilation.Value<long?>("last_compile_started_unix_ms"));
+                Assert.AreEqual(2000L, compilation.Value<long?>("last_compile_finished_unix_ms"));
+            }
+            finally
+            {
+                SessionState.SetString(startedKey, originalStarted);
+                SessionState.SetString(finishedKey, originalFinished);
+                EditorStateCache.ForceUpdate("test_restore");
+            }
+        }
     }
 }

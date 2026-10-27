@@ -23,8 +23,6 @@ namespace MCPForUnity.Editor.Services
         private static long _observedUnixMs;
 
         private static bool _lastIsCompiling;
-        private static long? _lastCompileStartedUnixMs;
-        private static long? _lastCompileFinishedUnixMs;
 
         private static bool _domainReloadPending;
         private static long? _domainReloadBeforeUnixMs;
@@ -282,8 +280,22 @@ namespace MCPForUnity.Editor.Services
                 // Tracks whether an assembly compilation is actually running, for
                 // GetActualIsCompiling. Statics reset on domain reload and this
                 // [InitializeOnLoad] ctor re-subscribes, so the flag is per-domain.
-                UnityEditor.Compilation.CompilationPipeline.compilationStarted += _ => _pipelineCompilationRunning = true;
-                UnityEditor.Compilation.CompilationPipeline.compilationFinished += _ => _pipelineCompilationRunning = false;
+                // Each edge also rebuilds the snapshot: a compile shorter than an update tick
+                // never shows up as a tick-sampled edge, so without this its timestamps stay
+                // hidden behind the cached snapshot. The tracker records those timestamps from
+                // the same events; running its constructor first subscribes it ahead of these
+                // handlers, so its SessionState writes land before the rebuild reads them.
+                System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(CompilationStateTracker).TypeHandle);
+                UnityEditor.Compilation.CompilationPipeline.compilationStarted += _ =>
+                {
+                    _pipelineCompilationRunning = true;
+                    ForceUpdate("compilation_started");
+                };
+                UnityEditor.Compilation.CompilationPipeline.compilationFinished += _ =>
+                {
+                    _pipelineCompilationRunning = false;
+                    ForceUpdate("compilation_finished");
+                };
 
                 AssemblyReloadEvents.beforeAssemblyReload += () =>
                 {
@@ -385,7 +397,7 @@ namespace MCPForUnity.Editor.Services
             ForceUpdate("tick");
         }
 
-        private static void ForceUpdate(string reason)
+        internal static void ForceUpdate(string reason)
         {
             lock (LockObj)
             {
@@ -399,14 +411,6 @@ namespace MCPForUnity.Editor.Services
             _observedUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
             bool isCompiling = GetActualIsCompiling();
-            if (isCompiling && !_lastIsCompiling)
-            {
-                _lastCompileStartedUnixMs = _observedUnixMs;
-            }
-            else if (!isCompiling && _lastIsCompiling)
-            {
-                _lastCompileFinishedUnixMs = _observedUnixMs;
-            }
             _lastIsCompiling = isCompiling;
 
             var scene = EditorSceneManager.GetActiveScene();
@@ -480,8 +484,8 @@ namespace MCPForUnity.Editor.Services
                 {
                     IsCompiling = isCompiling,
                     IsDomainReloadPending = _domainReloadPending,
-                    LastCompileStartedUnixMs = _lastCompileStartedUnixMs ?? CompilationStateTracker.LastStartedUnixMs,
-                    LastCompileFinishedUnixMs = _lastCompileFinishedUnixMs ?? CompilationStateTracker.LastFinishedUnixMs,
+                    LastCompileStartedUnixMs = CompilationStateTracker.LastStartedUnixMs,
+                    LastCompileFinishedUnixMs = CompilationStateTracker.LastFinishedUnixMs,
                     LastDomainReloadBeforeUnixMs = _domainReloadBeforeUnixMs,
                     LastDomainReloadAfterUnixMs = _domainReloadAfterUnixMs,
                     LastCompileErrors = CompilationStateTracker.LastErrors,
