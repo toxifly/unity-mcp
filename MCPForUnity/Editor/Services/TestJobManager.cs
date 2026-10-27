@@ -896,6 +896,7 @@ namespace MCPForUnity.Editor.Services
                     last_finished_unix_ms = job.LastFinishedUnixMs,
                     stuck_suspected = IsStuck(job),
                     editor_is_focused = InternalEditorUtility.isApplicationActive,
+                    run_in_background = UnityEngine.Application.runInBackground,
                     blocked_reason = GetBlockedReason(job),
                     failures_so_far = BuildFailuresPayload(job.FailuresSoFar),
                     failures_capped = (job.FailuresSoFar != null && job.FailuresSoFar.Count >= FailureCap)

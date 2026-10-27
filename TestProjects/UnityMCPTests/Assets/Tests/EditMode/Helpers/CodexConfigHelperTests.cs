@@ -9,7 +9,7 @@ using UnityEditor;
 
 namespace MCPForUnityTests.Editor.Helpers
 {
-    public class CodexConfigHelperTests
+    public class CodexConfigHelperTests : TransportPreferenceTestBase
     {
         /// <summary>
         /// Validates that a stdio entry runs the Server Source checkout in its locked

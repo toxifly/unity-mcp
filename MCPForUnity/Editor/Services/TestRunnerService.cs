@@ -155,6 +155,7 @@ namespace MCPForUnity.Editor.Services
         public TestRunnerService()
         {
             _testRunnerApi = ScriptableObject.CreateInstance<TestRunnerApi>();
+            _testRunnerApi.hideFlags = HideFlags.HideAndDontSave;
             _testRunnerApi.RegisterCallbacks(this);
         }
 
@@ -472,7 +473,7 @@ namespace MCPForUnity.Editor.Services
                 return;
             }
 
-            if (!result.HasChildren)
+            if (!result.HasChildren && result.Test?.IsSuite != true)
             {
                 _leafResults.Add(result);
                 try
