@@ -4,8 +4,7 @@ import useDocusaurusContext from '@docusaurus/useDocusaurusContext';
 import CopyButton from '@site/src/components/CopyButton';
 import styles from './styles.module.css';
 
-const UPM_MAIN = 'https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main';
-const UPM_BETA = 'https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#beta';
+const LOCAL_DEPENDENCY = '"com.coplaydev.unity-mcp": "file:/path/to/unity-mcp/MCPForUnity"';
 
 export default function HomeHero() {
   const { siteConfig } = useDocusaurusContext();
@@ -47,22 +46,16 @@ export default function HomeHero() {
 
         <div className={styles.install}>
           <div className={styles.installHeader}>
-            <span className={styles.installLabel}>// INSTALL · Unity Package Manager</span>
+            <span className={styles.installLabel}>// INSTALL · local checkout</span>
             <span className={styles.installHint}>
-              Window → Package Manager → + → Add package from git URL
+              Add to Packages/manifest.json, or Package Manager → + → Add package from disk
             </span>
           </div>
 
           <div className={styles.installLine}>
-            <span className={styles.installChannel}>STABLE</span>
-            <code className={styles.installUrl}>{UPM_MAIN}</code>
-            <CopyButton text={UPM_MAIN} label="stable URL" className={styles.installCopy} />
-          </div>
-
-          <div className={styles.installLine}>
-            <span className={`${styles.installChannel} ${styles.installChannelBeta}`}>BETA</span>
-            <code className={styles.installUrl}>{UPM_BETA}</code>
-            <CopyButton text={UPM_BETA} label="beta URL" className={styles.installCopy} />
+            <span className={styles.installChannel}>FILE</span>
+            <code className={styles.installUrl}>{LOCAL_DEPENDENCY}</code>
+            <CopyButton text={LOCAL_DEPENDENCY} label="manifest entry" className={styles.installCopy} />
           </div>
         </div>
 

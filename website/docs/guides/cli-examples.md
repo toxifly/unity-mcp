@@ -246,7 +246,7 @@ unity-mcp raw manage_packages '{"action":"list_packages"}'
 
 ### Note on MCP Server
 
-The MCP HTTP server still needs to be running for CLI to work. Here is an example to run the server manually on Mac:
+The MCP HTTP server still needs to be running for CLI to work. Here is an example to run the server manually from your checkout:
 ```bash
-/opt/homebrew/bin/uvx --no-cache --refresh --from /XXX/unity-mcp/Server mcp-for-unity --transport http --http-url http://localhost:8080
+uv run --frozen --project /XXX/unity-mcp/Server mcp-for-unity --transport http --http-url http://localhost:8080
 ```

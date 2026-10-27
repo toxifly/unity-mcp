@@ -61,12 +61,12 @@ Each MCP tool does one thing well. Resist the urge to add "convenient" parameter
 ### 6. Use Resources for Reading
 Keep them smart and focused rather than "read everything" type resources. Resources should be quick and LLM-friendly.
 
-### 7. Exact Server Version Is Mandatory
-The Unity package and Python server are one versioned release unit. Default configuration must always use an exact normalized PEP 440 equality pin derived from the installed Unity package version, for example `10.1.1-beta.1` becomes `mcpforunityserver==10.1.1b1`.
+### 7. The Local Server Checkout Is Mandatory
+The Unity package and Python server are one release unit, and MCP for Unity runs only the local `Server/` checkout from the same revision. Client registrations and the local HTTP server run `uv run --frozen --project <Server/> mcp-for-unity`, where `<Server/>` is the required **Server Source** setting; `Server/uv.lock` pins every dependency.
 
-Never introduce an unpinned package source, a version range (`>=`, `~=`, wildcard, etc.), a prerelease channel, a `latest` lookup, or any fallback that can resolve a different server version. If the package version is missing, unknown, invalid, or unavailable, fail with an actionable error. Do not silently continue with another version. An explicitly configured local **Server Source Override** is allowed for development; it is user intent, not an automatic fallback.
+Never run, register, or fall back to a published server: no `mcpforunityserver` from PyPI, `uvx --from`, git URL, version range, prerelease channel, or `latest` lookup. If Server Source is unset or is not a local `Server/` directory containing `pyproject.toml`, fail with an actionable error.
 
-Keep `MCPForUnity/package.json`, root `manifest.json`, `Server/pyproject.toml`, and `Server/uv.lock` synchronized. Preserve regression tests that assert exact prerelease normalization and reject broad or unpinned sources.
+Keep `MCPForUnity/package.json`, `Server/pyproject.toml`, and `Server/uv.lock` synchronized. Preserve regression tests that assert the locked local command and the absence of published-package paths.
 
 ## Key Patterns
 
@@ -152,7 +152,7 @@ We support a wide Unity version range (2021+ → 6.x → CoreCLR 6.8). When an A
 
 The catalog of active shims, the policy for when to add one, what does NOT belong in a shim, and the reflection-cache pattern all live in **`MCPForUnity/Runtime/Helpers/UnityCompatShims.cs`** — the XML doc on that empty marker class is the source of truth and ships inside the UPM package, so end-users can `F12`/Go-to-definition into it. Sources for current deprecations: Unity 6.x upgrade guides and the [CoreCLR 2026 thread](https://discussions.unity.com/t/path-to-coreclr-2026-upgrade-guide/1714279).
 
-When you touch a shim or anything else gated by `#if UNITY_*_OR_NEWER`, run `tools/check-unity-versions.sh` to compile-check across the CI matrix locally before committing — the matrix lives in `tools/unity-versions.json`.
+When you touch a shim or anything else gated by `#if UNITY_*_OR_NEWER`, run `tools/check-unity-versions.sh` to compile-check across the Unity-version matrix locally before committing — the matrix lives in `tools/unity-versions.json`.
 
 ## Commands
 
@@ -169,13 +169,13 @@ cd Server && uv run pytest tests/ -k "test_create_material" -v
 
 # Unity - open TestProjects/UnityMCPTests in Unity, use Test Runner window
 
-# Local multi-version compile check (parity with CI matrix, see tools/unity-versions.json)
+# Local multi-version compile check (versions in tools/unity-versions.json)
 tools/check-unity-versions.sh           # compile-only across installed Unity Hub editors
 tools/check-unity-versions.sh --full    # full EditMode test run
 ```
 
 #### Local headless test harness
-One command boots a headless Hub-licensed Editor against `TestProjects/UnityMCPTests` and runs the smoke + EditMode + PlayMode legs over the bridge — the same entrypoint CI uses (`.github/workflows/e2e-bridge.yml`):
+One command boots a headless Hub-licensed Editor against `TestProjects/UnityMCPTests` and runs the smoke + EditMode + PlayMode legs over the bridge:
 
 ```bash
 uv run --project Server python tools/local_harness.py
@@ -195,9 +195,9 @@ Unity.exe -batchmode -nographics -projectPath TestProjects/UnityMCPTests \
 Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setup failure, `3` project does not compile, `4` no Unity license / Hub seat, `5` Editor binary/version not found. Requires a Hub-activated Editor locally (no ULF/serial).
 
 ### Local Development
-1. Set **Server Source Override** in MCP for Unity Advanced Settings to your local `Server/` path
-2. Enable **Dev Mode** checkbox to force fresh installs
-3. Use `mcp_source.py` to switch Unity package sources
+1. Set **Server Source** in MCP for Unity Advanced Settings to your local `Server/` path (required)
+2. Server code edits take effect on the next server start; after dependency changes, run `uv lock` in `Server/` (servers run `--frozen`)
+3. Point a Unity project at this checkout with a `file:` dependency on `MCPForUnity/` in its `Packages/manifest.json`
 4. Test on Windows and Mac if possible, and multiple clients (Claude Desktop and Claude Code are tricky for configuration as of this writing)
 
 ### Adding a New Tool
@@ -212,6 +212,20 @@ Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setu
 - Don't add features without tests
 - Don't create helper functions for one-time operations
 - Don't add error handling for scenarios that can't happen
-- Don't commit to `main` directly - branch off `beta` for PRs
+- Don't commit to `develop` or `main` directly - branch off `develop` and open PRs against `develop`
 - Don't add docstrings/comments to code you didn't change
-- Don't add server-version fallbacks, ranges, channels, unpinned sources, or `latest` resolution; require the exact Unity-package-matched server version
+- Don't run, register, or fall back to a published server package; every server command runs the Server Source checkout
+
+## Project Test-Stage Enforcement
+
+Projects can opt into enforced test ordering with `ProjectSettings/McpTestStages.json` (non-empty
+`inputs` paths relative to the project). `TestJobManager.StartJob` applies `TestStageGuard` for MCP,
+batch and bridge CLI calls. Full suites need a successful focused test/group/category run with at
+least one passing test for unchanged inputs; assembly-only and exclusion-only selections are full
+suites. A failed full suite blocks other full-suite modes until repaired. Focused diagnosis remains
+allowed.
+
+The guard hashes configured input contents/paths and persists ordering evidence under `Library/`.
+It does not skip suites or infer test relevance. Projects without the config are unaffected.
+The consuming Chaos Fusion project's `McpTestStagesTests` exercises the installed guard, including
+failure recovery and source-change invalidation; run that focused fixture before its full Unity gates.

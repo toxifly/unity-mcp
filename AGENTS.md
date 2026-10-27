@@ -2,16 +2,29 @@
 
 These repository instructions apply to every agent and all subdirectories.
 
-## Mandatory Server-Version Invariant
+## Mandatory Local-Server Invariant
 
-The Unity package and Python server are released and validated as one exact versioned unit.
+The Unity package and Python server are released and validated as one unit: MCP for Unity runs only the local `Server/` checkout from the same revision as the package.
 
-- Default client and server configuration must use `mcpforunityserver==<exact-version>` derived from the installed Unity package version.
-- Normalize SemVer prereleases to their exact PEP 440 spelling: for example, `10.1.1-beta.1` must become `10.1.1b1`.
-- Never use an unpinned package name, version range (`>=`, `~=`, wildcard, or similar), prerelease channel, `latest` lookup, or compatibility fallback that can select another server version.
-- If the local package version is missing, unknown, invalid, cannot be normalized, or the exact server release is unavailable, stop with an actionable error. Never silently download, select, or add a different version.
-- An explicit local **Server Source Override** pointing to `Server/` is permitted for development. It represents a deliberate user choice and must never be synthesized as a fallback.
-- Keep `MCPForUnity/package.json`, root `manifest.json`, `Server/pyproject.toml`, and `Server/uv.lock` version-aligned.
-- Any change to package-source generation or version compatibility must retain or add tests proving exact stable and prerelease pins and proving that broad or unpinned fallbacks are absent.
+- Every client registration and the local HTTP server run `uv run --frozen --project <Server/> mcp-for-unity`, where `<Server/>` is the **Server Source** setting. The checkout's `Server/uv.lock` pins every dependency.
+- Server Source is required. When it is unset, or is not a local directory named `Server` that contains `pyproject.toml`, stop with an actionable error.
+- Never run, register, or fall back to a published server: no `mcpforunityserver` package from PyPI, `uvx --from`, git URL, version range, prerelease channel, or `latest` lookup.
+- Status checks treat a stdio registration as current only when its `--project` argument is the Server Source directory.
+- Keep `MCPForUnity/package.json`, `Server/pyproject.toml`, and `Server/uv.lock` version-aligned.
+- Any change to server-command generation must retain or add tests proving the command is the locked local run and that no published-package path remains.
 
 Do not weaken this invariant to preserve backward compatibility. The mandatory bridge handshake is expected to reject mismatched versions.
+
+## Project Test-Stage Enforcement
+
+Projects can opt into enforced test ordering with `ProjectSettings/McpTestStages.json` (non-empty
+`inputs` paths relative to the project). `TestJobManager.StartJob` applies `TestStageGuard` for MCP,
+batch and bridge CLI calls. Full suites need a successful focused test/group/category run with at
+least one passing test for unchanged inputs; assembly-only and exclusion-only selections are full
+suites. A failed full suite blocks other full-suite modes until repaired. Focused diagnosis remains
+allowed.
+
+The guard hashes configured input contents/paths and persists ordering evidence under `Library/`.
+It does not skip suites or infer test relevance. Projects without the config are unaffected.
+The consuming Chaos Fusion project's `McpTestStagesTests` exercises the installed guard, including
+failure recovery and source-change invalidation; run that focused fixture before its full Unity gates.

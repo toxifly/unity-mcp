@@ -152,11 +152,18 @@ namespace MCPForUnity.Editor.Clients.Configurators
 
         public override string GetManualSnippet()
         {
-            var snippet = new JObject
+            try
             {
-                ["mcp"] = new JObject { [ServerName] = BuildServerEntry() }
-            };
-            return JsonConvert.SerializeObject(snippet, Formatting.Indented);
+                var snippet = new JObject
+                {
+                    ["mcp"] = new JObject { [ServerName] = BuildServerEntry() }
+                };
+                return JsonConvert.SerializeObject(snippet, Formatting.Indented);
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { error = ex.Message });
+            }
         }
 
         public override IList<string> GetInstallationSteps() => new List<string>
@@ -171,24 +178,12 @@ namespace MCPForUnity.Editor.Clients.Configurators
         {
             if (HttpEndpointUtility.GetCurrentServerTransport() == ConfiguredTransport.Stdio)
             {
-                var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
-                if (string.IsNullOrWhiteSpace(uvxPath))
-                {
-                    throw new InvalidOperationException("uvx not found. Install uv/uvx or set the override in Advanced Settings.");
-                }
-
-                var command = new JArray { uvxPath };
-                foreach (string value in AssetPathUtility.GetUvxDevFlagsList())
+                var (serverCommand, serverArgs) = AssetPathUtility.GetStdioServerCommand();
+                var command = new JArray { serverCommand };
+                foreach (string value in serverArgs)
                 {
                     command.Add(value);
                 }
-                foreach (string value in AssetPathUtility.GetBetaServerFromArgsList())
-                {
-                    command.Add(value);
-                }
-                command.Add(packageName);
-                command.Add("--transport");
-                command.Add("stdio");
 
                 return new JObject
                 {
@@ -214,7 +209,8 @@ namespace MCPForUnity.Editor.Clients.Configurators
             if (expected == ConfiguredTransport.Stdio)
             {
                 return string.Equals(entryType, LocalType, StringComparison.OrdinalIgnoreCase)
-                    && entry["command"] is JArray;
+                    && entry["command"] is JArray command
+                    && RunsConfiguredServer(command.ToObject<string[]>());
             }
 
             return string.Equals(entryType, RemoteType, StringComparison.OrdinalIgnoreCase)

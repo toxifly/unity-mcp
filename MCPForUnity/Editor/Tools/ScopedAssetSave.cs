@@ -102,7 +102,9 @@ namespace MCPForUnity.Editor.Tools
         /// where only new blocks and blocks the <see cref="SceneMutationLedger"/> marks as
         /// intentionally mutated come from that serialization; everything else keeps its on-disk
         /// bytes. This is what makes the save "scoped": ambient drift from [ExecuteAlways]
-        /// previews or layout-driven RectTransforms is reported, not baked in.
+        /// previews or layout-driven RectTransforms is reported, not baked in. The scene always ends
+        /// clean and matching its file: with nothing held back Unity saves it itself, otherwise it
+        /// is reopened from the (merged) file.
         /// </summary>
         private static object MergeSave(Scene scene, bool rejectDrift, object[] dirtyObjects)
         {
@@ -142,27 +144,59 @@ namespace MCPForUnity.Editor.Tools
             }
 
             object drift = DriftReport(merge);
-            if (rejectDrift && (merge.BlocksDriftSuppressed > 0 || merge.UnscopedDeletionsKept.Count > 0))
+            bool driftKeptOut = merge.BlocksDriftSuppressed > 0 || merge.UnscopedDeletionsKept.Count > 0;
+            if (rejectDrift && driftKeptOut)
                 return Error("UNSCOPED_CHANGES", "The scene holds unscoped in-memory changes and unscoped_changes=reject was requested.", drift);
 
             bool changed = !string.Equals(merge.MergedText, NormalizeNewlines(diskText), StringComparison.Ordinal);
-            if (changed)
+            bool written = false;
+            bool reloaded = false;
+            if (changed || scene.isDirty)
             {
-                File.WriteAllText(scenePath, merge.MergedText);
-                AssetDatabase.ImportAsset(scenePath);
+                // With nothing held back, Unity's own save leaves the scene clean with every handle
+                // valid: memory holds exactly the merge's content when it changed (at the cost of
+                // Unity's canonical block order where the file had another), and a dirty scene whose
+                // serialization is the file byte for byte only needs its flag cleared. Anything
+                // else -- drift held back, or the same content in another block order -- is
+                // reopened from the file. Unchanged, the merge's text is the normalized disk text.
+                if (!driftKeptOut
+                    && (changed || string.Equals(NormalizeNewlines(tempText), merge.MergedText, StringComparison.Ordinal)))
+                {
+                    if (!EditorSceneManager.SaveScene(scene))
+                        return Error("SAVE_FAILED", $"Unity did not save scene '{scenePath}'.");
+                    written = changed;
+                }
+                else
+                {
+                    bool reopenedScene = TryWriteClosedAndReopen(scene, scenePath, changed ? merge.MergedText : null,
+                        out scene, out written, out string reopenError);
+                    if (!reopenedScene)
+                    {
+                        // The file already holds the ledgered edits; keeping their entries would
+                        // re-merge them into whatever the scene holds next.
+                        if (written)
+                            SceneMutationLedger.Clear(scenePath);
+                        return Error("SAVE_FAILED", reopenError, new { scene_written = written });
+                    }
+                    reloaded = true;
+                }
             }
             SceneMutationLedger.Clear(scenePath);
 
-            string driftHint = merge.BlocksDriftSuppressed > 0 || merge.UnscopedDeletionsKept.Count > 0
-                ? " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits); if some were intentional, save via the editor or retry with unscoped_changes=include."
-                : string.Empty;
+            string driftHint = driftKeptOut
+                ? reloaded
+                    ? " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits) and the scene was reopened from its file, which discarded them from memory; object handles from before the save are stale. If some were intentional, redo them and retry with unscoped_changes=include."
+                    : " Unscoped in-memory changes were kept out of the file (ambient drift, Inspector or execute_code edits); if some were intentional, save via the editor or retry with unscoped_changes=include."
+                : reloaded
+                    ? " The scene was reopened from its file to clear its unsaved flag; object handles from before the save are stale."
+                    : string.Empty;
             return new SuccessResponse(
                 (changed
-                    ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; {merge.BlocksDriftSuppressed} drifted block(s) left untouched."
+                    ? $"Merged scoped save: {merge.BlocksNew} new, {merge.BlocksScoped} scoped, {merge.BlocksDeleted} deleted block(s) written; unscoped changes held back in {merge.BlocksDriftSuppressed} block(s)."
                     : "No scoped changes to write; the on-disk scene already matches.") + driftHint,
                 new
                 {
-                    assets_saved = changed ? new[] { scenePath } : Array.Empty<string>(),
+                    assets_saved = written ? new[] { scenePath } : Array.Empty<string>(),
                     save_mode = "merge_scoped",
                     blocks = new
                     {
@@ -173,11 +207,101 @@ namespace MCPForUnity.Editor.Tools
                         drift_suppressed = merge.BlocksDriftSuppressed,
                     },
                     unscoped_drift = drift,
+                    scene_reloaded = reloaded,
                     scene_still_dirty_in_memory = scene.isDirty,
                     dirty_objects = SummarizeDirty(dirtyObjects),
-                    dirty_assets_left_unsaved = DirtyAssetPaths(changed ? new[] { scenePath } : Array.Empty<string>()),
+                    dirty_assets_left_unsaved = DirtyAssetPaths(written ? new[] { scenePath } : Array.Empty<string>()),
                     rolled_back = false,
                 });
+        }
+
+        /// <summary>
+        /// Writes the merged file while the scene is closed, then reopens it; a null
+        /// <paramref name="text"/> only reopens. Writing the file of an open scene that still holds
+        /// other in-memory changes raises Unity's modal "modified externally" prompt, which blocks
+        /// the main thread the bridge runs on (see <see cref="SceneExternalEdit"/>). Afterwards
+        /// memory matches disk.
+        /// </summary>
+        private static bool TryWriteClosedAndReopen(Scene scene, string scenePath, string text,
+            out Scene reopened, out bool written, out string error)
+        {
+            reopened = default;
+            written = false;
+            error = null;
+            if (text != null)
+            {
+                // Closing discards the scene's in-memory edits, so a file that cannot be written
+                // (read-only under version control, locked by another process) must fail first.
+                try
+                {
+                    using (new FileStream(scenePath, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) { }
+                }
+                catch (Exception exception) when (exception is IOException || exception is UnauthorizedAccessException)
+                {
+                    error = $"'{scenePath}' is not writable, so the scene was left open and unsaved: {exception.Message}";
+                    return false;
+                }
+            }
+
+            SceneSetup[] setup = EditorSceneManager.GetSceneManagerSetup();
+            bool wasActive = SceneManager.GetActiveScene() == scene;
+            bool othersLoaded = LoadedScenes().Any(other => other.isLoaded && other != scene);
+            // An additive scene unloads in place; the last loaded scene can only be swapped out.
+            if (othersLoaded)
+            {
+                if (!EditorSceneManager.CloseScene(scene, false))
+                {
+                    error = $"Unity could not close '{scenePath}' to write it.";
+                    return false;
+                }
+            }
+            else
+            {
+                EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+            }
+
+            try
+            {
+                if (text != null)
+                {
+                    File.WriteAllText(scenePath, text);
+                    written = true;
+                    AssetDatabase.ImportAsset(scenePath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                }
+            }
+            catch (Exception exception)
+            {
+                error = written
+                    ? $"The merged scene was written but could not be imported: {exception.Message}"
+                    : $"The merged scene could not be written: {exception.Message}";
+            }
+            finally
+            {
+                // Reopen whatever is on disk, so the editor never stays on the stand-in scene.
+                try
+                {
+                    if (othersLoaded)
+                    {
+                        reopened = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
+                        if (wasActive)
+                            SceneManager.SetActiveScene(reopened);
+                    }
+                    else
+                    {
+                        EditorSceneManager.RestoreSceneManagerSetup(setup);
+                        reopened = SceneManager.GetSceneByPath(scenePath);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    error = (error == null ? string.Empty : error + " ")
+                        + $"'{scenePath}' could not be reopened: {exception.Message}";
+                }
+            }
+
+            if (error == null && !(reopened.IsValid() && reopened.isLoaded))
+                error = $"'{scenePath}' could not be reopened.";
+            return error == null;
         }
 
         private static object DriftReport(SceneYamlMerge.MergeResult merge) => new
@@ -225,6 +349,10 @@ namespace MCPForUnity.Editor.Tools
             if (prefabOnly && paths.Any(path => !path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase)))
                 return Error("INVALID_ASSET_PATH", "save_prefab_scoped accepts only a .prefab asset path.");
 
+            var stage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (prefabOnly && stage != null && paths.Contains(stage.assetPath) && stage.scene.isDirty)
+                return SaveOpenPrefabStage(stage);
+
             object[] dirtyObjects = DirtyObjects(paths);
             string[] dirtyPaths = DirtyRequestedPaths(paths);
             if (preview)
@@ -248,6 +376,27 @@ namespace MCPForUnity.Editor.Tools
             }
         }
 
+        private static object SaveOpenPrefabStage(PrefabStage stage)
+        {
+            string path = stage.assetPath;
+            try
+            {
+                using (var transaction = MutationTransaction.BeginAssets(new[] { path },
+                    new MutationTransactionOptions { Name = "MCP scoped prefab stage save", AllowDirtyAssets = true }))
+                {
+                    PrefabUtility.SaveAsPrefabAsset(stage.prefabContentsRoot, path, out bool saved);
+                    if (!saved)
+                        throw new MutationTransactionException("PREFAB_SAVE_FAILED", $"Could not save '{path}'.");
+                    var changes = transaction.Commit(save: false);
+                    stage.ClearDirtiness();
+                    return Saved(new[] { path }, Array.Empty<object>(), changes);
+                }
+            }
+            catch (MutationTransactionException exception)
+            {
+                return Error(exception.Code, exception.Message, new { assets = new[] { path }, rolled_back = true });
+            }
+        }
         private sealed class DirtyEntry
         {
             public string asset_path;

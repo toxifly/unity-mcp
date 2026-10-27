@@ -72,7 +72,7 @@ async def manage_prefabs(
     link_scene_instance: Annotated[bool | str, "For create_and_replace, connect the source hierarchy to the new prefab; false creates only the asset."] | None = None,
     dirty_scene_policy: Annotated[Literal["reject", "preserve", "allow"], "Dirty-scene policy for create_and_replace. Defaults to reject; dry runs preserve prior dirtiness."] | None = None,
     change_guard: Annotated[dict[str, Any], "Expected serialized change scope for create_and_replace."] | None = None,
-    dry_run: Annotated[bool | str, "Preview create_and_replace changes and roll back the scene and prefab asset."] | None = None,
+    dry_run: Annotated[bool | str, "Preview without saving. create_and_replace rolls back the scene and prefab asset; modify_contents returns the change preview and leaves the prefab file untouched. Other mutating actions reject dry_run."] | None = None,
     unpack_mode: Annotated[str,
                            "For unpack_instance: unpack mode. Valid values: OutermostRoot, Completely."] | None = None,
     # modify_contents parameters
@@ -189,7 +189,6 @@ async def manage_prefabs(
                 ("preserveSceneReferences", preserve_scene_references),
                 ("saveScene", save_scene),
                 ("linkSceneInstance", link_scene_instance),
-                ("dryRun", dry_run),
             ):
                 coerced = coerce_bool(value)
                 if coerced is not None:
@@ -198,6 +197,12 @@ async def manage_prefabs(
                 params["dirtyScenePolicy"] = dirty_scene_policy
             if change_guard is not None:
                 params["changeGuard"] = change_guard
+
+        # Forwarded for every action: Unity previews what supports it and rejects the other
+        # mutating actions, so a dry run never mutates silently.
+        dry_run_val = coerce_bool(dry_run)
+        if dry_run_val is not None:
+            params["dryRun"] = dry_run_val
 
         # modify_contents parameters
         if position is not None:

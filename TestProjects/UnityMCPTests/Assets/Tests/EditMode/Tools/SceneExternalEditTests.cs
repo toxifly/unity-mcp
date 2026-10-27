@@ -327,6 +327,171 @@ namespace MCPForUnity.Tests.EditMode.Tools
             Assert.AreEqual(TempScene, result["data"].Value<string>("path"));
         }
 
+        [Test]
+        public void ASourceFileReplacesTheSceneByteForByte()
+        {
+            byte[] snapshot = WriteSnapshot(out string snapshotPath);
+            try
+            {
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                var result = Invoke(p);
+
+                Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+                Assert.AreEqual(Path.GetFullPath(snapshotPath), result["data"].Value<string>("source"));
+                CollectionAssert.AreEqual(snapshot, File.ReadAllBytes(FullPath));
+                AssertNoTransactionFilesRemain();
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
+        public void ASourceRestoresAnOpenDirtySceneAndReloadsIt()
+        {
+            // The rescue this exists for: an open scene picked up unwanted changes and must return
+            // to a snapshot without its file ever being written behind the Editor's back.
+            if (SceneManager.loadedSceneCount != 1 || SceneManager.GetActiveScene().isDirty)
+            {
+                Assert.Ignore("Test requires one clean scene so it can restore the prior Editor state.");
+            }
+
+            string previousScenePath = SceneManager.GetActiveScene().path;
+            byte[] snapshot = WriteSnapshot(out string snapshotPath);
+            try
+            {
+                EditorSceneManager.OpenScene(TempScene, OpenSceneMode.Single);
+                new GameObject("UnwantedChange");
+                EditorSceneManager.MarkSceneDirty(SceneManager.GetActiveScene());
+
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                p["discard_unsaved"] = true;
+                var result = Invoke(p);
+
+                Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+                Assert.IsTrue(result["data"].Value<bool>("reopened"));
+                Scene active = SceneManager.GetActiveScene();
+                Assert.AreEqual(TempScene, active.path);
+                Assert.IsFalse(active.isDirty);
+                Assert.IsNull(GameObject.Find("UnwantedChange"));
+                CollectionAssert.AreEqual(snapshot, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+                if (string.IsNullOrEmpty(previousScenePath))
+                {
+                    EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                }
+                else
+                {
+                    EditorSceneManager.OpenScene(previousScenePath, OpenSceneMode.Single);
+                }
+            }
+        }
+
+        [Test]
+        public void ADryRunWithASourceWritesNothing()
+        {
+            byte[] before = File.ReadAllBytes(FullPath);
+            WriteSnapshot(out string snapshotPath);
+            try
+            {
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                p["dry_run"] = true;
+                var result = Invoke(p);
+
+                Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+                Assert.IsTrue(result["data"].Value<bool>("dryRun"));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
+        public void ASourceThatIsNotUnityYamlIsRejected()
+        {
+            byte[] before = File.ReadAllBytes(FullPath);
+            string snapshotPath = Path.Combine(Path.GetTempPath(), $"mcp-scene-{Guid.NewGuid():N}.unity");
+            File.WriteAllText(snapshotPath, "not a scene");
+            try
+            {
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                var result = Invoke(p);
+
+                Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+                StringAssert.Contains("%YAML", result.Value<string>("error"));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
+        public void ASourceThatIsUnityYamlButNotASceneIsRejected()
+        {
+            byte[] before = File.ReadAllBytes(FullPath);
+            string snapshotPath = Path.Combine(Path.GetTempPath(), $"mcp-scene-{Guid.NewGuid():N}.prefab");
+            File.WriteAllText(snapshotPath,
+                "%YAML 1.1\n%TAG !u! tag:unity3d.com,2011:\n--- !u!1 &100\nGameObject:\n  m_Name: NotAScene\n");
+            try
+            {
+                var p = Params(null);
+                p["source_path"] = snapshotPath;
+                var result = Invoke(p);
+
+                Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+                StringAssert.Contains("is not a Unity scene", result.Value<string>("error"));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        [Test]
+        public void ASourceTogetherWithEditsIsRejected()
+        {
+            byte[] before = File.ReadAllBytes(FullPath);
+            WriteSnapshot(out string snapshotPath);
+            try
+            {
+                var p = Params(Edits(Anchor, "m_HaloStrength: 0.25"));
+                p["source_path"] = snapshotPath;
+                var result = Invoke(p);
+
+                Assert.IsFalse(result.Value<bool>("success"), result.ToString());
+                StringAssert.Contains("not both", result.Value<string>("error"));
+                CollectionAssert.AreEqual(before, File.ReadAllBytes(FullPath));
+            }
+            finally
+            {
+                File.Delete(snapshotPath);
+            }
+        }
+
+        /// <summary>A copy of the temp scene with one value changed, outside the project.</summary>
+        private byte[] WriteSnapshot(out string snapshotPath)
+        {
+            string text = File.ReadAllText(FullPath);
+            StringAssert.Contains(Anchor, text);
+            byte[] snapshot = System.Text.Encoding.UTF8.GetBytes(text.Replace(Anchor, "m_HaloStrength: 0.25"));
+            snapshotPath = Path.Combine(Path.GetTempPath(), $"mcp-scene-{Guid.NewGuid():N}.unity");
+            File.WriteAllBytes(snapshotPath, snapshot);
+            return snapshot;
+        }
+
         private static JArray Edits(string oldText, string newText) => new JArray
         {
             new JObject { ["old_text"] = oldText, ["new_text"] = newText },

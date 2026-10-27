@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 using NUnit.Framework;
 using MCPForUnity.Editor.Helpers;
 using MCPForUnity.External.Tommy;
@@ -13,22 +12,20 @@ namespace MCPForUnityTests.Editor.Helpers
     public class CodexConfigHelperTests
     {
         /// <summary>
-        /// Validates that a TOML args array contains the expected uvx structure:
-        /// --from, a mcpforunityserver reference, mcp-for-unity package name,
-        /// with both stable and prerelease builds represented by exact package pins.
+        /// Validates that a stdio entry runs the Server Source checkout in its locked
+        /// environment through uv, never a published package through uvx.
         /// </summary>
-        private static void AssertValidUvxArgs(TomlArray args)
+        private void AssertRunsServerCheckout(string command, TomlArray args)
         {
+            Assert.AreEqual("uv", Path.GetFileNameWithoutExtension(command), "Command should be uv");
+
             var argValues = new List<string>();
             foreach (TomlNode child in args.Children)
                 argValues.Add((child as TomlString).Value);
 
-            Assert.IsTrue(argValues.Contains("--from"), "Args should contain --from");
-            Assert.IsTrue(argValues.Any(a => a.Contains("mcpforunityserver")), "Args should contain PyPI package reference");
-            Assert.IsTrue(argValues.Contains("mcp-for-unity"), "Args should contain package name");
-
-            Assert.IsFalse(argValues.Contains("--prerelease"),
-                "An exact prerelease pin does not need a broad prerelease resolution mode");
+            CollectionAssert.AreEqual(
+                new[] { "run", "--frozen", "--project", _serverSource.ServerDirectory, "mcp-for-unity", "--transport", "stdio" },
+                argValues);
         }
 
         /// <summary>
@@ -49,12 +46,9 @@ namespace MCPForUnityTests.Editor.Helpers
             public string GetSystemRoot() => _isWindows ? _systemRoot : null;
         }
 
-        private bool _hadGitOverride;
-        private string _originalGitOverride;
+        private TempServerSource _serverSource;
         private bool _hadHttpTransport;
         private bool _originalHttpTransport;
-        private bool _hadDevForceRefresh;
-        private bool _originalDevForceRefresh;
         private bool _hadHttpScope;
         private string _originalHttpScope;
         private IPlatformService _originalPlatformService;
@@ -62,12 +56,8 @@ namespace MCPForUnityTests.Editor.Helpers
         [OneTimeSetUp]
         public void OneTimeSetUp()
         {
-            _hadGitOverride = EditorPrefs.HasKey(EditorPrefKeys.GitUrlOverride);
-            _originalGitOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
             _hadHttpTransport = EditorPrefs.HasKey(EditorPrefKeys.UseHttpTransport);
             _originalHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
-            _hadDevForceRefresh = EditorPrefs.HasKey(EditorPrefKeys.DevModeForceServerRefresh);
-            _originalDevForceRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             _hadHttpScope = EditorPrefs.HasKey(EditorPrefKeys.HttpTransportScope);
             _originalHttpScope = EditorPrefs.GetString(EditorPrefKeys.HttpTransportScope, string.Empty);
             _originalPlatformService = MCPServiceLocator.Platform;
@@ -76,13 +66,10 @@ namespace MCPForUnityTests.Editor.Helpers
         [SetUp]
         public void SetUp()
         {
-            // Ensure per-test deterministic Git URL (ignore developer overrides)
-            EditorPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
+            // Point Server Source at a throwaway checkout (ignore developer overrides)
+            _serverSource = new TempServerSource();
             // Default to stdio mode for existing tests unless specified otherwise
             EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, false);
-            // Ensure deterministic uvx args ordering for these tests regardless of editor settings
-            // (dev-mode inserts --no-cache/--refresh, which changes the first args).
-            EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             // Pin the HTTP scope to local so a developer's "remote" scope (whose
             // base URL may be empty) cannot leak into the generated endpoints.
             EditorPrefs.SetString(EditorPrefKeys.HttpTransportScope, "local");
@@ -93,6 +80,8 @@ namespace MCPForUnityTests.Editor.Helpers
         [TearDown]
         public void TearDown()
         {
+            _serverSource.Dispose();
+
             // IMPORTANT:
             // These tests can be executed while an MCP session is active (e.g., when running tests via MCP).
             // MCPServiceLocator.Reset() disposes the bridge + transport manager, which can kill the MCP connection
@@ -112,15 +101,6 @@ namespace MCPForUnityTests.Editor.Helpers
         [OneTimeTearDown]
         public void OneTimeTearDown()
         {
-            if (_hadGitOverride)
-            {
-                EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, _originalGitOverride);
-            }
-            else
-            {
-                EditorPrefs.DeleteKey(EditorPrefKeys.GitUrlOverride);
-            }
-
             if (_hadHttpTransport)
             {
                 EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, _originalHttpTransport);
@@ -128,15 +108,6 @@ namespace MCPForUnityTests.Editor.Helpers
             else
             {
                 EditorPrefs.DeleteKey(EditorPrefKeys.UseHttpTransport);
-            }
-
-            if (_hadDevForceRefresh)
-            {
-                EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, _originalDevForceRefresh);
-            }
-            else
-            {
-                EditorPrefs.DeleteKey(EditorPrefKeys.DevModeForceServerRefresh);
             }
 
             if (_hadHttpScope)
@@ -160,7 +131,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = [\"mcp-for-unity\"]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should detect server definition");
             Assert.AreEqual("uvx --from git+https://github.com/CoplayDev/unity-mcp@v6.3.0#subdirectory=Server", command);
@@ -179,7 +150,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should handle multi-line arrays with trailing comma");
             Assert.AreEqual("uvx", command);
@@ -198,7 +169,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should tolerate comments within the array block");
             Assert.AreEqual("uvx", command);
@@ -215,7 +186,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = [\"mcp-for-unity\"]"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should recognize section headers even with inline comments");
             Assert.AreEqual("uvx", command);
@@ -232,7 +203,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "args = ['mcp-for-unity']"
             });
 
-            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args);
+            bool result = CodexConfigHelper.TryParseCodexServer(toml, out string command, out string[] args, out _);
 
             Assert.IsTrue(result, "Parser should accept single-quoted arrays with escaped apostrophes");
             Assert.AreEqual("uvx", command);
@@ -250,9 +221,7 @@ namespace MCPForUnityTests.Editor.Helpers
             // Mock Windows platform
             MCPServiceLocator.Register<IPlatformService>(new MockPlatformService(isWindows: true));
 
-            string uvPath = "C:\\Program Files\\uv\\uv.exe";
-
-            string result = CodexConfigHelper.BuildCodexServerBlock(uvPath);
+            string result = CodexConfigHelper.BuildCodexServerBlock();
 
             Assert.IsNotNull(result, "BuildCodexServerBlock should return a valid TOML string");
 
@@ -275,13 +244,8 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.IsTrue(unityMcp.TryGetNode("command", out var commandNode), "unityMCP should contain command");
             Assert.IsTrue(unityMcp.TryGetNode("args", out var argsNode), "unityMCP should contain args");
 
-            // Verify command contains uvx
-            var command = (commandNode as TomlString).Value;
-            Assert.IsTrue(command.Contains("uvx"), "Command should contain uvx");
-
-            // Verify args contains the proper uvx command structure
-            var args = argsNode as TomlArray;
-            AssertValidUvxArgs(args);
+            // Verify the entry runs the Server Source checkout
+            AssertRunsServerCheckout((commandNode as TomlString).Value, argsNode as TomlArray);
 
             // Verify env.SystemRoot is present on Windows
             bool hasEnv = unityMcp.TryGetNode("env", out var envNode);
@@ -307,9 +271,7 @@ namespace MCPForUnityTests.Editor.Helpers
             // Mock non-Windows platform (e.g., macOS/Linux)
             MCPServiceLocator.Register<IPlatformService>(new MockPlatformService(isWindows: false));
 
-            string uvPath = "/usr/local/bin/uv";
-
-            string result = CodexConfigHelper.BuildCodexServerBlock(uvPath);
+            string result = CodexConfigHelper.BuildCodexServerBlock();
 
             Assert.IsNotNull(result, "BuildCodexServerBlock should return a valid TOML string");
 
@@ -332,13 +294,8 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.IsTrue(unityMcp.TryGetNode("command", out var commandNode), "unityMCP should contain command");
             Assert.IsTrue(unityMcp.TryGetNode("args", out var argsNode), "unityMCP should contain args");
 
-            // Verify command contains uvx
-            var command = (commandNode as TomlString).Value;
-            Assert.IsTrue(command.Contains("uvx"), "Command should contain uvx");
-
-            // Verify args contains the proper uvx command structure
-            var args = argsNode as TomlArray;
-            AssertValidUvxArgs(args);
+            // Verify the entry runs the Server Source checkout
+            AssertRunsServerCheckout((commandNode as TomlString).Value, argsNode as TomlArray);
 
             // Verify env is NOT present on non-Windows platforms
             bool hasEnv = unityMcp.TryGetNode("env", out _);
@@ -363,9 +320,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "key = \"value\""
             });
 
-            string uvPath = "C:\\path\\to\\uv.exe";
-
-            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml, uvPath);
+            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml);
 
             Assert.IsNotNull(result, "UpsertCodexServerBlock should return a valid TOML string");
 
@@ -391,13 +346,8 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.IsTrue(unityMcp.TryGetNode("command", out var commandNode), "unityMCP should contain command");
             Assert.IsTrue(unityMcp.TryGetNode("args", out var argsNode), "unityMCP should contain args");
 
-            // Verify command contains uvx
-            var command = (commandNode as TomlString).Value;
-            Assert.IsTrue(command.Contains("uvx"), "Command should contain uvx");
-
-            // Verify args contains the proper uvx command structure
-            var args = argsNode as TomlArray;
-            AssertValidUvxArgs(args);
+            // Verify the entry runs the Server Source checkout
+            AssertRunsServerCheckout((commandNode as TomlString).Value, argsNode as TomlArray);
 
             // Verify env.SystemRoot is present on Windows
             bool hasEnv = unityMcp.TryGetNode("env", out var envNode);
@@ -429,9 +379,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "key = \"value\""
             });
 
-            string uvPath = "/usr/local/bin/uv";
-
-            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml, uvPath);
+            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml);
 
             Assert.IsNotNull(result, "UpsertCodexServerBlock should return a valid TOML string");
 
@@ -457,13 +405,8 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.IsTrue(unityMcp.TryGetNode("command", out var commandNode), "unityMCP should contain command");
             Assert.IsTrue(unityMcp.TryGetNode("args", out var argsNode), "unityMCP should contain args");
 
-            // Verify command contains uvx
-            var command = (commandNode as TomlString).Value;
-            Assert.IsTrue(command.Contains("uvx"), "Command should contain uvx");
-
-            // Verify args contains the proper uvx command structure
-            var args = argsNode as TomlArray;
-            AssertValidUvxArgs(args);
+            // Verify the entry runs the Server Source checkout
+            AssertRunsServerCheckout((commandNode as TomlString).Value, argsNode as TomlArray);
 
             // Verify env is NOT present on non-Windows platforms
             bool hasEnv = unityMcp.TryGetNode("env", out _);
@@ -478,9 +421,7 @@ namespace MCPForUnityTests.Editor.Helpers
             // Force HTTP mode
             EditorPrefs.SetBool(EditorPrefKeys.UseHttpTransport, true);
 
-            string uvPath = "C:\\Program Files\\uv\\uv.exe";
-
-            string result = CodexConfigHelper.BuildCodexServerBlock(uvPath);
+            string result = CodexConfigHelper.BuildCodexServerBlock();
 
             Assert.IsNotNull(result, "BuildCodexServerBlock should return a valid TOML string");
 
@@ -556,9 +497,7 @@ namespace MCPForUnityTests.Editor.Helpers
                 "key = \"value\""
             });
 
-            string uvPath = "C:\\path\\to\\uv.exe";
-
-            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml, uvPath);
+            string result = CodexConfigHelper.UpsertCodexServerBlock(existingToml);
 
             Assert.IsNotNull(result, "UpsertCodexServerBlock should return a valid TOML string");
 

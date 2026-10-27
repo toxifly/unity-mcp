@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.RegularExpressions;
+using System.Linq;
+using System.Text;
 using MCPForUnity.Editor.Constants;
 using MCPForUnity.Editor.Services;
+using MCPForUnity.Editor.Services.Server;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -204,86 +206,152 @@ namespace MCPForUnity.Editor.Helpers
         }
 
         /// <summary>
-        /// Gets the package source for the MCP server (used with uvx --from).
-        /// Checks for an explicit local Server/ override first, then falls back to
-        /// the exact PyPI release paired with the installed Unity package.
-        /// When the override is a local path, auto-corrects to the "Server" subdirectory
-        /// if the path doesn't contain pyproject.toml but Server/pyproject.toml exists.
+        /// The local Server/ checkout every client configuration runs, from the Server Source
+        /// setting. MCP for Unity never runs a published server package, so the setting is
+        /// required. A path to the repository root is corrected to its Server/ subdirectory and
+        /// the correction persisted; a file:// URI resolves to its local path.
+        /// MUST be called from the main thread (reads EditorPrefs).
         /// </summary>
-        /// <returns>Package source string for uvx --from argument</returns>
-        public static string GetMcpServerPackageSource()
+        /// <exception cref="InvalidOperationException">Server Source is unset or not a local Server/ directory.</exception>
+        public static string GetServerProjectDirectory()
         {
-            // A development override is deliberately limited to a local Server/ source.
-            // Remote URLs and package requirements could resolve a different build and
-            // would then be rejected by the mandatory bridge handshake.
-            string sourceOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "").Trim();
-            if (!string.IsNullOrEmpty(sourceOverride))
-            {
-                string resolved = ResolveLocalServerPath(sourceOverride);
-                ValidateLocalServerSourceOverride(sourceOverride, resolved);
-                // Persist the corrected path so future reads are consistent
-                if (resolved != sourceOverride)
-                {
-                    EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, resolved);
-                    McpLog.Info($"Auto-corrected server source override from '{sourceOverride}' to '{resolved}'");
-                }
-                return resolved;
-            }
-
-            // Default to the exact server release paired with this installed Unity package.
-            // Never emit an unpinned or ranged source: doing so allows uvx to resolve a
-            // different server that the mandatory bridge handshake will reject.
-            string version = GetPackageVersion();
-            if (string.IsNullOrWhiteSpace(version) || version == "unknown")
-            {
-                throw new InvalidOperationException(
-                    "Cannot configure the MCP server because the installed Unity package version is unavailable. " +
-                    "Set an explicit local Server Source Override or reinstall the Unity package.");
-            }
-
-            return BuildPinnedServerPackageSource(version);
+            return ResolveServerProjectDirectory(persistCorrection: true);
         }
 
-        internal static string BuildPinnedServerPackageSource(string version)
+        private static string ResolveServerProjectDirectory(bool persistCorrection)
         {
-            return $"mcpforunityserver=={NormalizePythonPackageVersion(version)}";
+            string sourceOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "").Trim();
+            if (string.IsNullOrEmpty(sourceOverride))
+            {
+                throw new InvalidOperationException(
+                    "Server Source is not set. In Advanced Settings, set it to your local unity-mcp Server/ " +
+                    "directory: MCP for Unity runs only a local server checkout.");
+            }
+
+            string resolved = ResolveLocalServerPath(sourceOverride);
+            ValidateLocalServerSourceOverride(sourceOverride, resolved);
+            // Persist the corrected path so future reads are consistent
+            if (persistCorrection && resolved != sourceOverride)
+            {
+                EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, resolved);
+                McpLog.Info($"Auto-corrected server source override from '{sourceOverride}' to '{resolved}'");
+            }
+
+            // Validation guarantees a directory named Server, so trimming never empties a root.
+            return Path.GetFullPath(GetLocalServerCheckPath(resolved))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         /// <summary>
-        /// Converts the package's SemVer spelling to the exact PEP 440 version published on PyPI.
-        /// For example, 10.1.1-beta.1 becomes 10.1.1b1.
+        /// The command that runs the Server/ checkout in the environment its uv.lock pins:
+        /// <c>uv run --frozen --project &lt;Server&gt; mcp-for-unity</c>. Callers append the
+        /// transport arguments. MUST be called from the main thread (reads EditorPrefs).
         /// </summary>
-        internal static string NormalizePythonPackageVersion(string version)
+        public static (string command, string[] args) GetServerCommand()
         {
-            string normalized = (version ?? string.Empty).ToLowerInvariant();
-
-            Match match = Regex.Match(
-                normalized,
-                @"^(?<base>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))(?:-(?<label>alpha|beta|preview|pre|rc|a|b)(?:\.(?<number>0|[1-9][0-9]*))?)?$",
-                RegexOptions.CultureInvariant,
-                TimeSpan.FromSeconds(2));
-            if (!match.Success)
+            string projectDirectory = GetServerProjectDirectory();
+            string uvxPath = MCPServiceLocator.Paths.GetUvxPath();
+            if (string.IsNullOrEmpty(uvxPath))
             {
-                throw new InvalidOperationException(
-                    $"Unity package version '{version}' cannot be converted to an exact Python package pin.");
+                throw new InvalidOperationException("uv not found. Install uv or set its path in Advanced Settings.");
             }
 
-            string label = match.Groups["label"].Value;
-            if (string.IsNullOrEmpty(label))
-                return match.Groups["base"].Value;
+            string uvPath = new ServerCommandBuilder().BuildUvPathFromUvx(uvxPath);
+            return (uvPath, new[] { "run", "--frozen", "--project", projectDirectory, "mcp-for-unity" });
+        }
 
-            switch (label)
+        /// <summary><see cref="GetServerCommand"/> with the stdio transport, for client registrations.</summary>
+        public static (string command, string[] args) GetStdioServerCommand()
+        {
+            var (command, args) = GetServerCommand();
+            return (command, args.Concat(new[] { "--transport", "stdio" }).ToArray());
+        }
+
+        /// <summary><see cref="GetStdioServerCommand"/> as one command line.</summary>
+        public static string GetStdioServerCommandLine()
+        {
+            var (command, args) = GetStdioServerCommand();
+            return JoinCommandLine(new[] { command }.Concat(args));
+        }
+
+        /// <summary>
+        /// <see cref="GetServerProjectDirectory"/>, or null when Server Source is unset or invalid.
+        /// Never rewrites the setting, so status reads stay side-effect free.
+        /// MUST be called from the main thread (reads EditorPrefs).
+        /// </summary>
+        public static string TryGetServerProjectDirectory()
+        {
+            try
             {
-                case "alpha": label = "a"; break;
-                case "beta": label = "b"; break;
-                case "preview":
-                case "pre": label = "rc"; break;
+                return ResolveServerProjectDirectory(persistCorrection: false);
+            }
+            catch (InvalidOperationException)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Joins command-line parts so CommandLineToArgvW (and .NET's argument parser) reads each
+        /// back unchanged: parts that are empty or contain whitespace or quotes are quoted, embedded
+        /// quotes are escaped, and backslashes are doubled where they precede a quote. A single
+        /// quote counts too: Mono on macOS/Linux and sh split shell-style, where a bare one opens a
+        /// quoted string.
+        /// </summary>
+        public static string JoinCommandLine(IEnumerable<string> parts)
+        {
+            var line = new StringBuilder();
+            foreach (string part in parts)
+            {
+                if (line.Length > 0)
+                    line.Append(' ');
+
+                if (part.Length > 0 && !part.Any(c => char.IsWhiteSpace(c) || c == '"' || c == '\''))
+                {
+                    line.Append(part);
+                    continue;
+                }
+
+                line.Append('"');
+                int backslashes = 0;
+                foreach (char c in part)
+                {
+                    if (c == '\\')
+                    {
+                        backslashes++;
+                        continue;
+                    }
+
+                    // Backslashes are literal unless they precede a quote.
+                    line.Append('\\', c == '"' ? backslashes * 2 + 1 : backslashes);
+                    line.Append(c);
+                    backslashes = 0;
+                }
+
+                // Doubled so trailing backslashes do not escape the closing quote.
+                line.Append('\\', backslashes * 2);
+                line.Append('"');
             }
 
-            string number = match.Groups["number"].Success
-                ? match.Groups["number"].Value
-                : "0";
-            return $"{match.Groups["base"].Value}{label}{number}";
+            return line.ToString();
+        }
+
+        /// <summary>
+        /// The <c>--project</c> directory in a server command's arguments, or null when the
+        /// command runs no server project (for example a published package through uvx).
+        /// </summary>
+        public static string ExtractServerProjectDirectory(IReadOnlyList<string> args)
+        {
+            if (args == null)
+                return null;
+
+            for (int i = 0; i < args.Count - 1; i++)
+            {
+                if (args[i] == "--project")
+                    return args[i + 1];
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -314,6 +382,13 @@ namespace MCPForUnity.Editor.Helpers
             }
 
             string checkPath = GetLocalServerCheckPath(path);
+
+            // Path.Combine throws on these (a Windows "Copy as path" value keeps its quotes);
+            // validation reports them as an invalid override instead.
+            if (checkPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0)
+            {
+                return path;
+            }
 
             // Already correct — pyproject.toml exists at this path
             if (System.IO.File.Exists(System.IO.Path.Combine(checkPath, "pyproject.toml")))
@@ -375,7 +450,7 @@ namespace MCPForUnity.Editor.Helpers
             }
 
             // LocalPath unescapes encoded path segments and maps URI authorities to
-            // UNC paths on Windows. The original URI remains the value passed to uv.
+            // UNC paths on Windows.
             return fileUri.LocalPath;
         }
 
@@ -383,305 +458,7 @@ namespace MCPForUnity.Editor.Helpers
         {
             return new InvalidOperationException(
                 $"Server Source Override '{source}' is invalid. Set it to an explicit local Server/ " +
-                "directory containing pyproject.toml, or clear it to use the exact server release " +
-                "paired with the installed Unity package.");
-        }
-
-        /// <summary>
-        /// Deprecated: Use GetMcpServerPackageSource() instead.
-        /// Kept for backwards compatibility.
-        /// </summary>
-        [System.Obsolete("Use GetMcpServerPackageSource() instead")]
-        public static string GetMcpServerGitUrl() => GetMcpServerPackageSource();
-
-        /// <summary>
-        /// Gets structured uvx command parts for different client configurations
-        /// </summary>
-        /// <returns>Tuple containing (uvxPath, fromUrl, packageName)</returns>
-        public static (string uvxPath, string fromUrl, string packageName) GetUvxCommandParts()
-        {
-            string uvxPath = MCPServiceLocator.Paths.GetUvxPath();
-            string fromUrl = GetMcpServerPackageSource();
-            string packageName = "mcp-for-unity";
-
-            return (uvxPath, fromUrl, packageName);
-        }
-
-        /// <summary>
-        /// Builds the uvx package source arguments for the MCP server.
-        /// Preserves an explicit source override or uses the exact package-version pin.
-        /// NOTE: This overload reads from EditorPrefs/cache and MUST be called from the main thread.
-        /// For background threads, use the overload that accepts pre-captured parameters.
-        /// </summary>
-        /// <param name="quoteFromPath">Whether to quote the --from path (needed for command-line strings, not for arg lists)</param>
-        /// <returns>The package source arguments (e.g., "--from mcpforunityserver==10.1.1b1")</returns>
-        public static string GetBetaServerFromArgs(bool quoteFromPath = false)
-        {
-            string gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
-            string packageSource = GetMcpServerPackageSource();
-            return GetBetaServerFromArgs(gitUrlOverride, packageSource, quoteFromPath);
-        }
-
-        /// <summary>
-        /// Thread-safe overload that accepts pre-captured values.
-        /// Use this when calling from background threads.
-        /// </summary>
-        /// <param name="gitUrlOverride">Pre-captured value from EditorPrefs GitUrlOverride</param>
-        /// <param name="packageSource">Pre-captured value from GetMcpServerPackageSource()</param>
-        /// <param name="quoteFromPath">Whether to quote the --from path</param>
-        public static string GetBetaServerFromArgs(string gitUrlOverride, string packageSource, bool quoteFromPath = false)
-        {
-            // The only supported override is an explicit local Server/ source.
-            if (!string.IsNullOrWhiteSpace(gitUrlOverride))
-            {
-                string source = ResolveLocalServerPath(gitUrlOverride.Trim());
-                ValidateLocalServerSourceOverride(gitUrlOverride, source);
-                string fromValue = quoteFromPath ? $"\"{source}\"" : source;
-                return $"--from {fromValue}";
-            }
-
-            // Stable and prerelease builds both use one exact PEP 440 pin.
-            ValidatePinnedServerPackageSource(packageSource);
-            string pinnedFromValue = quoteFromPath ? $"\"{packageSource}\"" : packageSource;
-            return $"--from {pinnedFromValue}";
-        }
-
-        /// <summary>
-        /// Builds the uvx package source arguments as a list (for JSON config builders).
-        /// Preserves an explicit source override or uses the exact package-version pin.
-        /// NOTE: This overload reads from EditorPrefs/cache and MUST be called from the main thread.
-        /// For background threads, use the overload that accepts pre-captured parameters.
-        /// </summary>
-        /// <returns>List of arguments to add to uvx command</returns>
-        public static System.Collections.Generic.IList<string> GetBetaServerFromArgsList()
-        {
-            string gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, "");
-            string packageSource = GetMcpServerPackageSource();
-            return GetBetaServerFromArgsList(gitUrlOverride, packageSource);
-        }
-
-        /// <summary>
-        /// Thread-safe overload that accepts pre-captured values.
-        /// Use this when calling from background threads.
-        /// </summary>
-        /// <param name="gitUrlOverride">Pre-captured value from EditorPrefs GitUrlOverride</param>
-        /// <param name="packageSource">Pre-captured value from GetMcpServerPackageSource()</param>
-        public static System.Collections.Generic.IList<string> GetBetaServerFromArgsList(string gitUrlOverride, string packageSource)
-        {
-            var args = new System.Collections.Generic.List<string>();
-
-            // The only supported override is an explicit local Server/ source.
-            if (!string.IsNullOrWhiteSpace(gitUrlOverride))
-            {
-                string source = ResolveLocalServerPath(gitUrlOverride.Trim());
-                ValidateLocalServerSourceOverride(gitUrlOverride, source);
-                args.Add("--from");
-                args.Add(source);
-                return args;
-            }
-
-            // Stable and prerelease builds both use one exact PEP 440 pin.
-            ValidatePinnedServerPackageSource(packageSource);
-            args.Add("--from");
-            args.Add(packageSource);
-
-            return args;
-        }
-
-        private static void ValidatePinnedServerPackageSource(string packageSource)
-        {
-            if (string.IsNullOrWhiteSpace(packageSource) || !Regex.IsMatch(
-                    packageSource,
-                    @"^mcpforunityserver==(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:(?:a|b|rc)(?:0|[1-9][0-9]*))?$",
-                    RegexOptions.CultureInvariant,
-                    TimeSpan.FromSeconds(2)))
-            {
-                throw new InvalidOperationException(
-                    $"MCP server package source '{packageSource ?? "(null)"}' is not an exact " +
-                    "mcpforunityserver release pin derived from the installed Unity package.");
-            }
-        }
-
-        /// <summary>
-        /// Determines whether uvx should use --no-cache --refresh flags.
-        /// Returns true if DevModeForceServerRefresh is enabled OR if the server URL is a local path.
-        /// Local paths (file:// or absolute) always need fresh builds to avoid stale uvx cache.
-        /// Note: --reinstall is not supported by uvx and will cause a warning.
-        /// </summary>
-        public static bool ShouldForceUvxRefresh()
-        {
-            bool devForceRefresh = false;
-            try { devForceRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false); } catch { }
-
-            if (devForceRefresh)
-                return true;
-
-            // Auto-enable force refresh when using a local path override.
-            return IsLocalServerPath();
-        }
-
-        private static bool _offlineCacheResult;
-        private static double _offlineCacheTimestamp = -999;
-        private const double OfflineCacheTtlSeconds = 30.0;
-
-        /// <summary>
-        /// Determines whether uvx should use --offline mode for faster startup.
-        /// Runs a lightweight probe (uvx --offline ... mcp-for-unity --help) with a 3-second timeout
-        /// to check if the package is already cached. If cached, --offline skips the network
-        /// dependency check that can hang for 30+ seconds on poor connections.
-        /// Returns false if force refresh is enabled (new download needed).
-        /// The result is cached for 30 seconds to avoid redundant subprocess spawns.
-        /// Must be called on the main thread (reads EditorPrefs).
-        /// </summary>
-        public static bool ShouldUseUvxOffline()
-        {
-            if (ShouldForceUvxRefresh())
-                return false;
-            return GetCachedOfflineProbeResult();
-        }
-
-        private static bool GetCachedOfflineProbeResult()
-        {
-            double now = EditorApplication.timeSinceStartup;
-            if (now - _offlineCacheTimestamp < OfflineCacheTtlSeconds)
-                return _offlineCacheResult;
-
-            bool result = RunOfflineProbe();
-            _offlineCacheResult = result;
-            _offlineCacheTimestamp = now;
-            return result;
-        }
-
-        private static bool RunOfflineProbe()
-        {
-            try
-            {
-                string uvxPath = MCPServiceLocator.Paths.GetUvxPath();
-                if (string.IsNullOrEmpty(uvxPath))
-                    return false;
-
-                string fromArgs = GetBetaServerFromArgs(quoteFromPath: false);
-                string probeArgs = string.IsNullOrEmpty(fromArgs)
-                    ? "--offline mcp-for-unity --help"
-                    : $"--offline {fromArgs} mcp-for-unity --help";
-
-                return ExecPath.TryRun(uvxPath, probeArgs, null, out _, out _, timeoutMs: 3000);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Returns the uvx dev-mode flags as a single string for command-line builders.
-        /// Returns "--no-cache --refresh " if force refresh is enabled,
-        /// "--offline " if the cache is warm, or string.Empty otherwise.
-        /// Must be called on the main thread (reads EditorPrefs).
-        /// </summary>
-        public static string GetUvxDevFlags()
-        {
-            bool forceRefresh = ShouldForceUvxRefresh();
-            return GetUvxDevFlags(forceRefresh, !forceRefresh && GetCachedOfflineProbeResult());
-        }
-
-        /// <summary>
-        /// Returns the uvx dev-mode flags from pre-captured bool values.
-        /// Use this overload when values were captured on the main thread for background use.
-        /// </summary>
-        public static string GetUvxDevFlags(bool forceRefresh, bool useOffline)
-        {
-            if (forceRefresh) return "--no-cache --refresh ";
-            if (useOffline) return "--offline ";
-            return string.Empty;
-        }
-
-        /// <summary>
-        /// Returns the uvx dev-mode flags as a list of individual arguments.
-        /// Suitable for callers that build argument lists (ConfigJsonBuilder, CodexConfigHelper).
-        /// Must be called on the main thread (reads EditorPrefs).
-        /// </summary>
-        public static IReadOnlyList<string> GetUvxDevFlagsList()
-        {
-            bool forceRefresh = ShouldForceUvxRefresh();
-            if (forceRefresh) return new[] { "--no-cache", "--refresh" };
-            if (GetCachedOfflineProbeResult()) return new[] { "--offline" };
-            return Array.Empty<string>();
-        }
-
-        /// <summary>
-        /// Returns true if the server URL is a local path (file:// or absolute path).
-        /// </summary>
-        public static bool IsLocalServerPath()
-        {
-            string fromUrl = GetMcpServerPackageSource();
-            if (string.IsNullOrEmpty(fromUrl))
-                return false;
-
-            // Check for file:// protocol or absolute local path
-            if (fromUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                return true;
-
-            try
-            {
-                return System.IO.Path.IsPathRooted(fromUrl);
-            }
-            catch (System.ArgumentException)
-            {
-                // fromUrl contains characters illegal in paths (e.g. a remote URL)
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// Gets the local server path if GitUrlOverride points to a local directory.
-        /// Returns null if not using a local path.
-        /// </summary>
-        public static string GetLocalServerPath()
-        {
-            if (!IsLocalServerPath())
-                return null;
-
-            string fromUrl = GetMcpServerPackageSource();
-            if (fromUrl.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-            {
-                // Strip file:// prefix
-                fromUrl = fromUrl.Substring(7);
-            }
-
-            return fromUrl;
-        }
-
-        /// <summary>
-        /// Cleans stale Python build artifacts from the local server path.
-        /// This is necessary because Python's build system doesn't remove deleted files from build/,
-        /// and the auto-discovery mechanism will pick up old .py files causing ghost resources/tools.
-        /// </summary>
-        /// <returns>True if cleaning was performed, false if not applicable or failed.</returns>
-        public static bool CleanLocalServerBuildArtifacts()
-        {
-            string localPath = GetLocalServerPath();
-            if (string.IsNullOrEmpty(localPath))
-                return false;
-
-            // Clean the build/ directory which can contain stale .py files
-            string buildPath = System.IO.Path.Combine(localPath, "build");
-            if (System.IO.Directory.Exists(buildPath))
-            {
-                try
-                {
-                    System.IO.Directory.Delete(buildPath, recursive: true);
-                    McpLog.Info($"Cleaned stale build artifacts from: {buildPath}");
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    McpLog.Warn($"Failed to clean build artifacts: {ex.Message}");
-                    return false;
-                }
-            }
-
-            return false;
+                "directory containing pyproject.toml.");
         }
 
         /// <summary>
@@ -706,40 +483,6 @@ namespace MCPForUnity.Editor.Helpers
                 McpLog.Warn($"Failed to get package version: {ex.Message}");
                 return "unknown";
             }
-        }
-
-        /// <summary>
-        /// Returns true if the installed package version is a prerelease (beta, alpha, rc, etc.).
-        /// Used to auto-enable beta server mode for beta package users.
-        /// </summary>
-        public static bool IsPreReleaseVersion()
-        {
-            try
-            {
-                string version = GetPackageVersion();
-                if (string.IsNullOrEmpty(version) || version == "unknown")
-                    return false;
-
-                return IsSemVerPreRelease(version);
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static bool IsSemVerPreRelease(string version)
-        {
-            if (string.IsNullOrEmpty(version))
-                return false;
-
-            // Common semver prerelease indicators:
-            // e.g., "9.3.0-beta.1", "9.3.0-alpha", "9.3.0-rc.2", "9.3.0-preview"
-            return version.Contains("-beta", StringComparison.OrdinalIgnoreCase) ||
-                   version.Contains("-alpha", StringComparison.OrdinalIgnoreCase) ||
-                   version.Contains("-rc", StringComparison.OrdinalIgnoreCase) ||
-                   version.Contains("-preview", StringComparison.OrdinalIgnoreCase) ||
-                   version.Contains("-pre", StringComparison.OrdinalIgnoreCase);
         }
     }
 }

@@ -1,11 +1,11 @@
 # MCP for Unity - 开发者指南
 
-| [English](README-DEV.md) | [简体中文](README-DEV-zh.md) |
+| [English](../../website/docs/contributing/dev-setup.md) | [简体中文](README-DEV-zh.md) |
 |---------------------------|------------------------------|
 
 ## 贡献代码
 
-**从 `beta` 分支创建 PR**。`main` 分支仅用于稳定版本发布。
+**从 `develop` 分支创建分支**，并向 `develop` 提交 PR。
 
 在提出重大新功能之前，请先联系讨论——可能已有人在开发，或者该功能曾被讨论过。请通过 issue 或 discussion 进行协调。
 
@@ -17,24 +17,17 @@
 
 1. 打开 Unity，进入 **Window > MCP for Unity**
 2. 打开 **Settings > Advanced Settings**
-3. 将 **Server Source Override** 设置为本地 `Server/` 目录路径
-4. 启用 **Dev Mode (Force fresh server install)** - 这会在 uvx 命令中添加 `--refresh`，确保每次启动 server 时都使用最新代码
+3. 将 **Server Source** 设置为本地 `Server/` 目录路径（必填）。客户端和本地 HTTP server 都用 `uv run --frozen --project` 运行这份代码，所以代码修改会在下次启动 server 时生效。修改依赖后，在 `Server/` 里运行 `uv lock`。
 
-### 2. 切换包源
+### 2. 让 Unity 项目使用本地 checkout
 
-使用 `mcp_source.py` 快速切换 Unity 项目的 MCP 包源：
+在项目的 `Packages/manifest.json` 中添加指向本 checkout 的 `MCPForUnity/` 文件夹的 `file:` 依赖：
 
-```bash
-python mcp_source.py
+```json
+"com.coplaydev.unity-mcp": "file:/path/to/unity-mcp/MCPForUnity"
 ```
 
-选项：
-1. **Upstream main** - 稳定版本 (CoplayDev/unity-mcp)
-2. **Upstream beta** - 开发分支 (CoplayDev/unity-mcp#beta)
-3. **Remote branch** - 你的 fork 当前分支
-4. **Local workspace** - 指向本地 MCPForUnity 文件夹的 file: URL
-
-切换后，在 Unity 中打开 Package Manager 并 Refresh 以重新解析依赖。
+Unity 会在下次导入时重新解析依赖。不要直接修改 `Library/PackageCache/`，Unity 可能会在下次解析时覆盖它。
 
 ## 工具选择与 Meta-Tool
 

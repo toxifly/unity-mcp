@@ -3,11 +3,9 @@
 
 This script updates the version in all files that need it:
 - MCPForUnity/package.json (Unity package version)
-- manifest.json (MCP bundle manifest)
 - Server/pyproject.toml (Python package version)
-- Server/README.md (version references)
-- README.md (fixed version examples)
-- docs/i18n/README-zh.md (fixed version examples)
+
+Run `uv lock` in Server/ afterwards so Server/uv.lock records the new version.
 
 Usage:
     python3 tools/update_versions.py [--dry-run] [--version VERSION]
@@ -35,11 +33,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_JSON = REPO_ROOT / "MCPForUnity" / "package.json"
-MANIFEST_JSON = REPO_ROOT / "manifest.json"
 PYPROJECT_TOML = REPO_ROOT / "Server" / "pyproject.toml"
-SERVER_README = REPO_ROOT / "Server" / "README.md"
-ROOT_README = REPO_ROOT / "README.md"
-ZH_README = REPO_ROOT / "docs" / "i18n" / "README-zh.md"
 
 
 def load_package_version() -> str:
@@ -82,32 +76,6 @@ def update_package_json(new_version: str, dry_run: bool = False) -> bool:
     return True
 
 
-def update_manifest_json(new_version: str, dry_run: bool = False) -> bool:
-    """Update version in manifest.json."""
-    if not MANIFEST_JSON.exists():
-        print(f"Warning: {MANIFEST_JSON.relative_to(REPO_ROOT)} not found")
-        return False
-
-    manifest = json.loads(MANIFEST_JSON.read_text(encoding="utf-8"))
-    current_version = manifest.get("version", "unknown")
-
-    if current_version == new_version:
-        print(f"✓ {MANIFEST_JSON.relative_to(REPO_ROOT)} already at v{new_version}")
-        return False
-
-    print(
-        f"Updating {MANIFEST_JSON.relative_to(REPO_ROOT)}: {current_version} → {new_version}")
-
-    if not dry_run:
-        manifest["version"] = new_version
-        MANIFEST_JSON.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-
-    return True
-
-
 def update_pyproject_toml(new_version: str, dry_run: bool = False) -> bool:
     """Update version in Server/pyproject.toml."""
     if not PYPROJECT_TOML.exists():
@@ -137,86 +105,6 @@ def update_pyproject_toml(new_version: str, dry_run: bool = False) -> bool:
         content = re.sub(
             r'^version = ".*"', f'version = "{new_version}"', content, count=1, flags=re.MULTILINE)
         PYPROJECT_TOML.write_text(content, encoding="utf-8")
-
-    return True
-
-
-def update_server_readme(new_version: str, dry_run: bool = False) -> bool:
-    """Update version references in Server/README.md."""
-    if not SERVER_README.exists():
-        print(f"Warning: {SERVER_README.relative_to(REPO_ROOT)} not found")
-        return False
-
-    content = SERVER_README.read_text(encoding="utf-8")
-
-    # Pattern to match git+https URLs with version tags
-    pattern = r'git\+https://github\.com/CoplayDev/unity-mcp@v[0-9]+\.[0-9]+\.[0-9]+#subdirectory=Server'
-    replacement = f'git+https://github.com/CoplayDev/unity-mcp@v{new_version}#subdirectory=Server'
-
-    if not re.search(pattern, content):
-        print(
-            f"✓ {SERVER_README.relative_to(REPO_ROOT)} has no version references to update")
-        return False
-
-    print(
-        f"Updating version references in {SERVER_README.relative_to(REPO_ROOT)}")
-
-    if not dry_run:
-        content = re.sub(pattern, replacement, content)
-        SERVER_README.write_text(content, encoding="utf-8")
-
-    return True
-
-
-def update_root_readme(new_version: str, dry_run: bool = False) -> bool:
-    """Update fixed version examples in README.md."""
-    if not ROOT_README.exists():
-        print(f"Warning: {ROOT_README.relative_to(REPO_ROOT)} not found")
-        return False
-
-    content = ROOT_README.read_text(encoding="utf-8")
-
-    # Pattern to match git URLs with fixed version tags
-    pattern = r'https://github\.com/CoplayDev/unity-mcp\.git\?path=/MCPForUnity#v[0-9]+\.[0-9]+\.[0-9]+'
-    replacement = f'https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v{new_version}'
-
-    if not re.search(pattern, content):
-        print(
-            f"✓ {ROOT_README.relative_to(REPO_ROOT)} has no version references to update")
-        return False
-
-    print(
-        f"Updating version references in {ROOT_README.relative_to(REPO_ROOT)}")
-
-    if not dry_run:
-        content = re.sub(pattern, replacement, content)
-        ROOT_README.write_text(content, encoding="utf-8")
-
-    return True
-
-
-def update_zh_readme(new_version: str, dry_run: bool = False) -> bool:
-    """Update fixed version examples in docs/i18n/README-zh.md."""
-    if not ZH_README.exists():
-        print(f"Warning: {ZH_README.relative_to(REPO_ROOT)} not found")
-        return False
-
-    content = ZH_README.read_text(encoding="utf-8")
-
-    # Pattern to match git URLs with fixed version tags
-    pattern = r'https://github\.com/CoplayDev/unity-mcp\.git\?path=/MCPForUnity#v[0-9]+\.[0-9]+\.[0-9]+'
-    replacement = f'https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#v{new_version}'
-
-    if not re.search(pattern, content):
-        print(
-            f"✓ {ZH_README.relative_to(REPO_ROOT)} has no version references to update")
-        return False
-
-    print(f"Updating version references in {ZH_README.relative_to(REPO_ROOT)}")
-
-    if not dry_run:
-        content = re.sub(pattern, replacement, content)
-        ZH_README.write_text(content, encoding="utf-8")
 
     return True
 
@@ -256,15 +144,8 @@ def main() -> int:
             if update_package_json(version, args.dry_run):
                 updates_made.append("MCPForUnity/package.json")
 
-        if update_manifest_json(version, args.dry_run):
-            updates_made.append("manifest.json")
-
         if update_pyproject_toml(version, args.dry_run):
             updates_made.append("Server/pyproject.toml")
-
-        if update_server_readme(version, args.dry_run):
-            updates_made.append("Server/README.md")
-
 
         # Summary
         if args.dry_run:
@@ -273,6 +154,7 @@ def main() -> int:
             if updates_made:
                 print(
                     f"\nUpdated {len(updates_made)} files: {', '.join(updates_made)}")
+                print("Run `uv lock` in Server/ to record the new version in uv.lock.")
             else:
                 print("\nAll files already at the correct version.")
 

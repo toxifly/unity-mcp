@@ -68,6 +68,10 @@ namespace MCPForUnity.Editor.Services
         public TestRunResult Result { get; set; }
         public TestJobSummary Summary { get; set; }
         public long InitTimeoutMs { get; set; }
+        // Not persisted: set from StartJob until the runner dispatches the run (waiting on its lock,
+        // reading the test tree, checking scenes). The init watchdog leaves such a job alone; a
+        // domain reload ends the preparation, and the exemption with it.
+        public bool Preparing { get; set; }
     }
 
     /// <summary>
@@ -102,6 +106,12 @@ namespace MCPForUnity.Editor.Services
         private static long _lastLoopTickUnixMs;
         private static long _lastStallEndedUnixMs;
 
+        // The auto-fail checks in GetJob used to run only when a client polled the job id. A run_tests
+        // call whose reply was lost never hands out that id, so a dead current job wedged every later
+        // run behind "tests_running". The editor loop re-evaluates the current job at this cadence.
+        private const long ReapIntervalMs = 1_000;
+        private static long _lastReapUnixMs;
+
         static TestJobManager()
         {
             // Restore after domain reloads (e.g., compilation while a job is running).
@@ -131,6 +141,34 @@ namespace MCPForUnity.Editor.Services
             if (previous > 0 && now - previous > LoopStallThresholdMs)
             {
                 _lastStallEndedUnixMs = now;
+            }
+
+            if (now - _lastReapUnixMs >= ReapIntervalMs)
+            {
+                _lastReapUnixMs = now;
+                ReapCurrentJobIfDead();
+            }
+        }
+
+        /// <summary>
+        /// Applies GetJob's auto-fail checks to the current job without waiting for a poll, so a run
+        /// that died before anyone learned its id still releases the runner.
+        /// </summary>
+        internal static void ReapCurrentJobIfDead()
+        {
+            string jobId = CurrentJobId;
+            if (string.IsNullOrEmpty(jobId))
+            {
+                return;
+            }
+
+            try
+            {
+                GetJob(jobId);
+            }
+            catch (Exception ex)
+            {
+                McpLog.Warn($"[TestJobManager] Reaping job {jobId} failed: {ex.Message}");
             }
         }
 
@@ -185,25 +223,16 @@ namespace MCPForUnity.Editor.Services
         /// Force-clears any stuck or orphaned test job. Call this when tests get stuck due to
         /// assembly reloads or other interruptions.
         /// </summary>
-        /// <returns>True if a job was cleared, false if no running job exists.</returns>
+        /// <returns>True if a job was cleared or a pending run was aborted.</returns>
         public static bool ClearStuckJob()
         {
             bool cleared = false;
             lock (LockObj)
             {
-                if (string.IsNullOrEmpty(_currentJobId))
+                if (!string.IsNullOrEmpty(_currentJobId)
+                    && Jobs.TryGetValue(_currentJobId, out var job) && job.Status == TestJobStatus.Running)
                 {
-                    return false;
-                }
-
-                if (Jobs.TryGetValue(_currentJobId, out var job) && job.Status == TestJobStatus.Running)
-                {
-                    long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-                    job.Status = TestJobStatus.Failed;
-                    job.Error = "Job cleared manually (stuck or orphaned)";
-                    job.FinishedUnixMs = now;
-                    job.LastUpdateUnixMs = now;
-                    job.Summary = BuildSummary(job, null, now);
+                    FailJob(job, "Job cleared manually (stuck or orphaned)", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                     McpLog.Warn($"[TestJobManager] Manually cleared stuck job {_currentJobId}");
                     cleared = true;
                 }
@@ -211,10 +240,11 @@ namespace MCPForUnity.Editor.Services
                 _currentJobId = null;
             }
             PersistToSessionState(force: true);
-            // Also unwind the runner service's pending run task (it holds the operation lock);
-            // no-op when the editor is legitimately in play mode or nothing is pending.
-            AbortWedgedRunnerSafely("clear_stuck requested");
-            return cleared;
+            // Also unwind the runner service's pending run task (it holds the operation lock), even
+            // with no current job: a run whose job already ended can still hold it. No-op when the
+            // editor is legitimately in play mode or nothing is pending.
+            bool aborted = AbortWedgedRunnerSafely("clear_stuck requested");
+            return cleared || aborted;
         }
 
         private sealed class PersistedState
@@ -363,11 +393,15 @@ namespace MCPForUnity.Editor.Services
                 return;
             }
             
+            TestJob stageJob = null;
             try
             {
                 PersistedState snapshot;
                 lock (LockObj)
                 {
+                    if (TestStageGuard.PendingJob != null)
+                        Jobs.TryGetValue(TestStageGuard.PendingJob, out stageJob);
+
                     var jobs = Jobs.Values
                         .OrderByDescending(j => j.LastUpdateUnixMs)
                         .Take(MaxJobsToKeep)
@@ -411,6 +445,9 @@ namespace MCPForUnity.Editor.Services
             {
                 McpLog.Warn($"[TestJobManager] Failed to persist SessionState: {ex.Message}");
             }
+
+            // SessionState does not survive an editor restart, so the stage records its outcome too.
+            TestStageGuard.RecordEnded(stageJob);
         }
 
         public static string StartJob(
@@ -449,23 +486,33 @@ namespace MCPForUnity.Editor.Services
                 Error = null,
                 Result = null,
                 Summary = null,
-                InitTimeoutMs = initTimeoutMs
+                InitTimeoutMs = initTimeoutMs,
+                Preparing = true
             };
 
-            // Single lock scope for check-and-set to avoid TOCTOU race
+            ThrowIfBusy();
+            // A run whose job already ended (it never reported starting before the init timeout)
+            // can still be live in the Test Framework; a second run beside it would take its results.
+            if (MCPServiceLocator.Tests.HasPendingRun)
+            {
+                throw new InvalidOperationException("A Unity test run is already in progress: an earlier run "
+                    + "whose job already ended has not released the Test Runner. Wait for it to finish, or "
+                    + "call run_tests(clear_stuck=true).");
+            }
+
+            // Outside the lock: the guard hashes every configured input.
+            TestStageGuard.Begin(jobId, modeStr, filterOptions);
+
             lock (LockObj)
             {
-                if (!string.IsNullOrEmpty(_currentJobId))
-                {
-                    throw new InvalidOperationException("A Unity test run is already in progress.");
-                }
+                ThrowIfBusy();
                 Jobs[jobId] = job;
                 _currentJobId = jobId;
             }
             PersistToSessionState(force: true);
 
             // Kick the run (must be called on main thread; our command handlers already run there).
-            Task<TestRunResult> task = MCPServiceLocator.Tests.RunTestsAsync(mode, filterOptions);
+            Task<TestRunResult> task = MCPServiceLocator.Tests.RunTestsAsync(mode, filterOptions, jobId);
 
             void FinalizeJob(Action finalize)
             {
@@ -487,6 +534,58 @@ namespace MCPForUnity.Editor.Services
             return jobId;
         }
 
+        private static void ThrowIfBusy()
+        {
+            lock (LockObj)
+            {
+                if (!string.IsNullOrEmpty(_currentJobId))
+                {
+                    throw new InvalidOperationException("A Unity test run is already in progress.");
+                }
+            }
+        }
+
+        /// <summary>
+        /// The runner is about to hand <paramref name="jobId"/>'s run to the Test Framework; the init
+        /// window starts now. False when the job ended while the run was being prepared.
+        /// </summary>
+        internal static bool OnRunDispatching(string jobId)
+        {
+            lock (LockObj)
+            {
+                if (_currentJobId != jobId || !Jobs.TryGetValue(jobId, out var job)
+                    || job.Status != TestJobStatus.Running)
+                {
+                    return false;
+                }
+
+                job.Preparing = false;
+                job.LastUpdateUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                return true;
+            }
+        }
+
+        /// <summary>The Test Framework reported that the current run died before RunFinished.</summary>
+        public static void OnRunFailed(string message)
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            lock (LockObj)
+            {
+                if (string.IsNullOrEmpty(_currentJobId) || !Jobs.TryGetValue(_currentJobId, out var job)
+                    || job.Status != TestJobStatus.Running)
+                {
+                    return;
+                }
+
+                FailJob(job, "The Unity Test Framework reported the run failed: "
+                    + (string.IsNullOrWhiteSpace(message) ? "no reason given" : message), now);
+                job.CurrentTestFullName = null;
+                job.Preparing = false;
+                _currentJobId = null;
+            }
+            PersistToSessionState(force: true);
+        }
+
         public static void FinalizeCurrentJobFromRunFinished(TestRunResult resultPayload)
         {
             long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -499,11 +598,7 @@ namespace MCPForUnity.Editor.Services
 
                 job.LastUpdateUnixMs = now;
                 job.FinishedUnixMs = now;
-                job.Status = resultPayload != null && resultPayload.Failed > 0
-                    ? TestJobStatus.Failed
-                    : TestJobStatus.Succeeded;
-                job.Error = null;
-                job.Result = resultPayload;
+                ApplyRunResult(job, resultPayload);
                 job.Summary = BuildSummary(job, resultPayload, now);
                 job.CurrentTestFullName = null;
                 _currentJobId = null;
@@ -630,6 +725,7 @@ namespace MCPForUnity.Editor.Services
             TestJob jobToReturn = null;
             bool shouldPersist = false;
             bool shouldAbortRunner = false;
+            bool releaseRunStatus = false;
             lock (LockObj)
             {
                 if (!Jobs.TryGetValue(jobId, out var job))
@@ -651,10 +747,12 @@ namespace MCPForUnity.Editor.Services
                 // timeout measured from the last observed activity (StartedUnixMs when no callback ever
                 // fired, or the RunStarted timestamp for case (b)). A genuinely slow first test is not
                 // affected: once TestStarted fires, CurrentTestFullName is set and this guard is inert.
+                // A job whose run the runner is still preparing has not been dispatched yet, so no
+                // init time is charged against it.
                 bool noTestHasBegun = job.Status == TestJobStatus.Running
                     && job.CompletedTests == 0
                     && string.IsNullOrEmpty(job.CurrentTestFullName);
-                if (noTestHasBegun)
+                if (noTestHasBegun && !job.Preparing)
                 {
                     long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
                     long initTimeout = job.InitTimeoutMs > 0 ? job.InitTimeoutMs : DefaultInitializationTimeoutMs;
@@ -662,11 +760,7 @@ namespace MCPForUnity.Editor.Services
                         && now - ChargeableSince(job.LastUpdateUnixMs, now) > initTimeout)
                     {
                         McpLog.Warn($"[TestJobManager] Job {jobId} stalled before any test started (no RunFinished within {initTimeout}ms), auto-failing");
-                        job.Status = TestJobStatus.Failed;
-                        job.Error = "Test job failed to initialize (tests did not start within timeout)";
-                        job.FinishedUnixMs = now;
-                        job.Summary = BuildSummary(job, null, now);
-                        job.LastUpdateUnixMs = now;
+                        FailJob(job, "Test job failed to initialize (tests did not start within timeout)", now);
                         if (_currentJobId == jobId)
                         {
                             _currentJobId = null;
@@ -674,9 +768,16 @@ namespace MCPForUnity.Editor.Services
                             // a progressing RunStarted nor RunFinished clears the running flag, so it would
                             // otherwise leak. Only clear it if this job is still the active one — a newer
                             // job may have taken over.
-                            TestRunStatus.MarkFinished();
+                            releaseRunStatus = true;
                         }
                         shouldPersist = true;
+                        // Case (b) died during setup yet still holds the runner's completion source and
+                        // operation lock; release them or the next run queues behind the dead one. In
+                        // case (a) the Test Framework may still be working through the tasks that run
+                        // before RunStarted, and those span frames: aborting would free the runner for
+                        // a second run alongside this one. StartJob refuses while it stays pending, and
+                        // OnError, RunFinished or clear_stuck releases it.
+                        shouldAbortRunner = job.TotalTests.HasValue;
                     }
                 }
 
@@ -704,11 +805,7 @@ namespace MCPForUnity.Editor.Services
                     if (now - job.LastUpdateUnixMs > StuckThresholdMs)
                     {
                         McpLog.Warn($"[TestJobManager] Job {jobId} wedged mid-run at {job.CompletedTests}/{job.TotalTests} (play mode exited without RunFinished), auto-failing");
-                        job.Status = TestJobStatus.Failed;
-                        job.Error = "Test runner died mid-run (play mode exited without delivering RunFinished)";
-                        job.FinishedUnixMs = now;
-                        job.Summary = BuildSummary(job, null, now);
-                        job.LastUpdateUnixMs = now;
+                        FailJob(job, "Test runner died mid-run (play mode exited without delivering RunFinished)", now);
                         if (_currentJobId == jobId)
                         {
                             _currentJobId = null;
@@ -728,7 +825,11 @@ namespace MCPForUnity.Editor.Services
             }
             if (shouldAbortRunner)
             {
-                AbortWedgedRunnerSafely($"job {jobId} wedged mid-run");
+                AbortWedgedRunnerSafely($"job {jobId} wedged");
+            }
+            if (releaseRunStatus && !MCPServiceLocator.Tests.HasPendingRun)
+            {
+                TestRunStatus.MarkFinished();
             }
             return jobToReturn;
         }
@@ -741,15 +842,16 @@ namespace MCPForUnity.Editor.Services
         /// Called OUTSIDE the job lock: cancelling resumes the awaiting RunTestsAsync and fires
         /// FinalizeFromTask, which re-enters this class.
         /// </summary>
-        private static void AbortWedgedRunnerSafely(string reason)
+        private static bool AbortWedgedRunnerSafely(string reason)
         {
             try
             {
-                MCPServiceLocator.Tests.TryAbortWedgedRun(reason);
+                return MCPServiceLocator.Tests.TryAbortWedgedRun(reason);
             }
             catch (Exception ex)
             {
                 McpLog.Warn($"[TestJobManager] Failed to abort wedged runner: {ex.Message}");
+                return false;
             }
         }
 
@@ -869,6 +971,16 @@ namespace MCPForUnity.Editor.Services
             return list;
         }
 
+        /// <summary>Ends a job as failed without a run result. Callers hold <see cref="LockObj"/>.</summary>
+        private static void FailJob(TestJob job, string error, long now)
+        {
+            job.Status = TestJobStatus.Failed;
+            job.Error = error;
+            job.FinishedUnixMs = now;
+            job.LastUpdateUnixMs = now;
+            job.Summary = BuildSummary(job, null, now);
+        }
+
         private static TestJobSummary BuildSummary(TestJob job, TestRunResult result, long finishedUnixMs)
         {
             if (result != null)
@@ -942,11 +1054,7 @@ namespace MCPForUnity.Editor.Services
                 else
                 {
                     var result = task.Result;
-                    existing.Status = result != null && result.Failed > 0
-                        ? TestJobStatus.Failed
-                        : TestJobStatus.Succeeded;
-                    existing.Error = null;
-                    existing.Result = result;
+                    ApplyRunResult(existing, result);
                     existing.Summary = BuildSummary(existing, result, existing.FinishedUnixMs.Value);
                 }
 
@@ -956,6 +1064,38 @@ namespace MCPForUnity.Editor.Services
                 }
             }
             PersistToSessionState(force: true);
+        }
+
+        /// <summary>
+        /// A finished run passes only if it executed a test and none failed. A run that executed
+        /// nothing -- a filter matching no test, a selection of skipped tests only, a runner that
+        /// loaded no test assemblies -- proves nothing and must never read as green.
+        /// </summary>
+        internal static void ApplyRunResult(TestJob job, TestRunResult result)
+        {
+            job.Result = result;
+            if (result == null)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = "The test run finished without a result.";
+            }
+            else if (result.Failed > 0)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = null;
+            }
+            else if (result.Passed == 0)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = $"no_tests_executed: The run executed no tests ({result.Total} reported, "
+                    + $"{result.Skipped} skipped). A selection that matches nothing or only skipped "
+                    + "tests is not a pass.";
+            }
+            else
+            {
+                job.Status = TestJobStatus.Succeeded;
+                job.Error = null;
+            }
         }
     }
 }

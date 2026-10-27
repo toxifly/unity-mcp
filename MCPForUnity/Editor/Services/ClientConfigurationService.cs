@@ -23,24 +23,11 @@ namespace MCPForUnity.Editor.Services
 
         public void ConfigureClient(IMcpClientConfigurator configurator)
         {
-            // When using a local server path, clean stale build artifacts first.
-            // This prevents old deleted .py files from being picked up by Python's auto-discovery.
-            if (AssetPathUtility.IsLocalServerPath())
-            {
-                AssetPathUtility.CleanLocalServerBuildArtifacts();
-            }
-
             ConfigureWithTransportCoercion(configurator);
         }
 
         public ClientConfigurationSummary ConfigureAllDetectedClients()
         {
-            // When using a local server path, clean stale build artifacts once before configuring all clients.
-            if (AssetPathUtility.IsLocalServerPath())
-            {
-                AssetPathUtility.CleanLocalServerBuildArtifacts();
-            }
-
             var summary = new ClientConfigurationSummary();
             foreach (var configurator in configurators)
             {

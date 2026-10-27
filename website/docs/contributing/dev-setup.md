@@ -1,11 +1,11 @@
 # MCP for Unity - Developer Guide
 
-| English | [简体中文](https://github.com/CoplayDev/unity-mcp/blob/beta/docs/development/README-DEV-zh.md) |
+| English | [简体中文](https://github.com/toxifly/unity-mcp/blob/develop/docs/development/README-DEV-zh.md) |
 |---------------------------|------------------------------|
 
 ## Contributing
 
-**Branch off `beta`** to create PRs. The `main` branch is reserved for stable releases.
+**Branch off `develop`** and open PRs against `develop`.
 
 Before proposing major new features, please reach out to discuss - someone may already be working on it or it may have been considered previously. Open an issue or discussion to coordinate.
 
@@ -14,11 +14,10 @@ Keep PRs focused. A small fix with a clear repro and the exact Unity/package ver
 For bug fixes, include:
 
 - Unity version(s) tested
-- package source used (`#beta`, `#main`, tag, fork branch, or `file:`)
-- resolved Git commit from `Packages/packages-lock.json` when the package source is a Git URL
+- the unity-mcp commit you tested (Unity loads the package and the server from the same checkout)
 - commands/tests run locally
 
-Avoid mixing release/version bumps with feature or bug-fix PRs. The release workflows handle package and server version updates.
+Avoid mixing version bumps with feature or bug-fix PRs; bump versions in a separate change with `tools/update_versions.py`.
 
 ## Repository Map
 
@@ -26,19 +25,18 @@ Avoid mixing release/version bumps with feature or bug-fix PRs. The release work
 - `Server/` - the Python MCP server, CLI, FastMCP tool/resource registry, transports, and server-side tests.
 - `TestProjects/UnityMCPTests/` - Unity project used for EditMode/PlayMode tests. Its manifest points at `file:../../../MCPForUnity`.
 - `docs/` - user, contributor, release, migration, and reference documentation.
-- `tools/` - release/build helpers, documentation update prompt, stress tools, and publishing scripts.
+- `tools/` - version bumps, docs reference generation, git hooks, the local test harness, Unity-version checks, and stress tools.
 - `CustomTools/` - examples and support code for project-defined custom tools.
 
 ## Local Development Setup
 
 ### 0. Prepare the Python Server
 
-For server work, use the same setup path as CI:
+For server work, set up the environment and run the tests:
 
 ```bash
 cd Server
-uv sync
-uv pip install -e ".[dev]"
+uv sync --extra dev
 uv run pytest tests/ -v --tb=short
 ```
 
@@ -50,38 +48,17 @@ For the fastest iteration when working on the Python server:
 
 1. Open Unity and go to **Window > MCP for Unity**
 2. Open **Settings > Advanced Settings**
-3. Set **Server Source Override** to your local `Server/` directory path
-4. Enable **Dev Mode (Force fresh server install)** - this adds `--refresh` to uvx commands so your changes are picked up on every server start
+3. Set **Server Source** to your local `Server/` directory path. It is required: clients and the local HTTP server run that checkout with `uv run --frozen --project`, so code edits take effect on the next server start. After dependency changes, run `uv lock` in `Server/`.
 
-### 2. Switch Package Sources
+### 2. Point a Unity Project at Your Checkout
 
-You may want to use the `mcp_source.py` script to quickly switch your Unity project between different MCP package sources [allows you to quickly point your personal project to your local or remote unity-mcp repo, or the live upstream (Coplay) versions of the unity-mcp package]:
-
-```bash
-python mcp_source.py
-```
-
-Options:
-1. **Upstream main** - stable release (CoplayDev/unity-mcp)
-2. **Upstream beta** - development branch (CoplayDev/unity-mcp#beta)
-3. **Remote branch** - your fork's current branch
-4. **Local workspace** - file: URL to your local MCPForUnity folder
-
-After switching, open Package Manager in Unity and Refresh to re-resolve packages.
-
-When testing Unity package changes, prefer **Local workspace**. Do not patch `Library/PackageCache/` directly; Unity may overwrite it on the next resolve.
-
-`#beta` and `#main` are moving branch names. When debugging a package-source issue, check `Packages/packages-lock.json` as well as `Packages/manifest.json`; the lock file tells you the commit Unity actually resolved.
-
-Example Git package lock entry:
+Add a `file:` dependency on this checkout's `MCPForUnity/` folder to the project's `Packages/manifest.json`:
 
 ```json
-"com.coplaydev.unity-mcp": {
-  "version": "https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#beta",
-  "source": "git",
-  "hash": "<resolved-git-commit>"
-}
+"com.coplaydev.unity-mcp": "file:/path/to/unity-mcp/MCPForUnity"
 ```
+
+Unity re-resolves packages on its next import. Do not patch `Library/PackageCache/` directly; Unity may overwrite it on the next resolve.
 
 ## Adding or Changing Tools and Resources
 
@@ -111,7 +88,7 @@ Current server tool groups are:
 
 Tools with `group=None` are server meta-tools and are always visible. The default enabled group is `core`; other groups can be enabled through the Tools tab or `manage_tools`.
 
-When adding, removing, or renaming tools/resources, update the public docs and client metadata. Start with `tools/UPDATE_DOCS_PROMPT.md`, then review the changes manually.
+When adding, removing, or renaming tools/resources, regenerate the reference pages (see [Docs Workflow](./docs.md)) and update `unity-mcp-skill/` if agents need new guidance.
 
 ## Tool Selection & the Meta-Tool
 
@@ -221,7 +198,7 @@ get_test_job(job_id="<id>", wait_timeout=60)
 
 ### Local headless test harness
 
-`python tools/local_harness.py` boots a headless Editor and runs the smoke + EditMode + PlayMode legs over the bridge — the same entrypoint CI uses. See [Testing → Local headless test harness](./testing.md#local-headless-test-harness) for the flags and exit-code contract.
+`uv run --project Server python tools/local_harness.py` boots a headless Editor and runs the smoke + EditMode + PlayMode legs over the bridge. See [Testing → Local headless test harness](./testing.md#local-headless-test-harness) for the flags and exit-code contract.
 
 ### Code Coverage
 
@@ -235,42 +212,28 @@ open htmlcov/index.html
 
 The Unity package currently declares Unity `2021.3` as its minimum version in `MCPForUnity/package.json`. Code that uses Unity API conditionals (`UNITY_2022_3_OR_NEWER`, `UNITY_2023_1_OR_NEWER`, `UNITY_6000_*`) should be tested against the affected editor line, not just the oldest supported version.
 
-For compatibility PRs, note the exact editor versions you tested in the PR body. If a Git package URL is involved, include the resolved `packages-lock.json` hash.
+For compatibility PRs, note the exact editor versions you tested in the PR body.
 
 ## Troubleshooting During Development
 
-- **Unity still loads an old Git package**: close Unity, check `Packages/packages-lock.json`, then refresh Package Manager. If needed, remove only the stale `Library/PackageCache/com.coplaydev.unity-mcp@<hash>` folder while Unity is closed.
 - **Unity opens in Safe Mode after changing package source**: the package failed to compile before MCP can start. Fix the compile errors first; the MCP server cannot recover from package compile failures.
-- **Server changes are not picked up**: make sure **Server Source Override** points to your local `Server/` directory and **Dev Mode (Force fresh server install)** is enabled.
+- **Server changes are not picked up**: make sure **Server Source** points to your local `Server/` directory, then restart the server (for stdio, restart the MCP client session). After dependency changes, run `uv lock` in `Server/`.
 - **Stdio tool visibility looks stale**: call `manage_tools(action="sync")` or restart the MCP session. HTTP mode can push `tools/list_changed` notifications automatically.
 - **Multiple Unity editors are open**: use `mcpforunity://instances` and `set_active_instance` to confirm which project the server is targeting.
-## Unity-version CI matrix
+## Unity-version matrix
 
-CI exercises the package across multiple Unity versions to catch breaks in `#if UNITY_*_OR_NEWER` branches. The matrix is configured in `tools/unity-versions.json` and consumed by `.github/workflows/unity-tests.yml`.
+`tools/unity-versions.json` lists the Unity versions the package is checked against, to catch breaks in `#if UNITY_*_OR_NEWER` branches. The `floor` role (`2021.3.45f2`) is the package minimum. `defaultVersion` (currently Unity 6.0 LTS, `6000.0.75f1`) is the Editor `tools/local_harness.py` boots when the target project has no `ProjectVersion.txt`.
 
-**Every PR gets a unity-tests status check on open** (mirrors `python-tests.yml`). For same-repo PRs the default Unity 6 leg actually runs; for fork PRs the workflow appears but skips with a "missing license secrets" notice until a maintainer applies `safe-to-test` (existing secret-safety gate). The full 4-version matrix is opt-in via the `full-matrix` label.
+## Checking the matrix locally
 
-**When the full matrix runs (all 4 versions in parallel):**
-
-- Push to `beta` (the release gate).
-- `workflow_call` from `beta-release.yml` / `release.yml`.
-- Manual `workflow_dispatch` from the Actions tab.
-- Any PR (in-repo or fork) labeled with **`full-matrix`** — apply when your change touches compat shims, conditional compilation, or anything else version-sensitive. Triggers a full-matrix run on the next `pull_request` or `pull_request_target` event. Cost is ~6-8 min wall clock vs ~3 min for the default leg.
-
-Fork PRs still need `safe-to-test` as the base gate (so secrets are exposed against reviewed-only fork code); `full-matrix` is layered on top for fork-PR full-matrix runs.
-
-**Default (single leg)** — every other path runs only against `defaultVersion` from `tools/unity-versions.json` (currently Unity 6.0 LTS, `6000.0.75f1`). The `floor` role (`2021.3.45f2`) still identifies the package minimum and runs as part of the full matrix; it's no longer the default-leg version.
-
-## Local Unity-version parity check
-
-The same `tools/unity-versions.json` drives a local script so you can reproduce CI behavior before pushing.
+`tools/check-unity-versions.sh` reads the same file. This fork has no CI, so run it before pushing changes to compat shims, conditional compilation, or anything else version-sensitive.
 
 The script has two runners. Use whichever fits your setup:
 
 | Runner | When to use | Cost |
 |---|---|---|
 | **Local Unity Hub** (default) | You already have one or more matrix versions installed via Unity Hub. Fastest. | Disk: each editor is 3-6 GB. |
-| **GameCI Docker** (`--docker`) | You don't want to install every editor locally. Same containers CI uses. | One-time pull is 5-15 GB per version. On Apple Silicon, expect ~5-10× slowdown from amd64 emulation. |
+| **GameCI Docker** (`--docker`) | You don't want to install every editor locally. Uses the GameCI editor images. | One-time pull is 5-15 GB per version. On Apple Silicon, expect ~5-10× slowdown from amd64 emulation. |
 
 ### Local Unity Hub mode
 
@@ -278,7 +241,7 @@ The script has two runners. Use whichever fits your setup:
 # Compile-only check across every locally-installed Unity in the matrix (~30-60s warm per version).
 tools/check-unity-versions.sh
 
-# Full EditMode test run — matches what CI runs end-to-end.
+# Full EditMode test run on each installed version.
 tools/check-unity-versions.sh --full
 
 # Filter to one version family.
@@ -293,7 +256,7 @@ pwsh .\tools\check-unity-versions.ps1 -Full
 pwsh .\tools\check-unity-versions.ps1 -Only 6000.0
 ```
 
-Versions not installed via Unity Hub are skipped — the script never forces you to install every editor in the matrix. Install the versions you most care about (typically the floor `2021.3.45f2` and your daily-driver Unity 6) and CI / Docker mode cover the rest.
+Versions not installed via Unity Hub are skipped — the script never forces you to install every editor in the matrix. Install the versions you most care about (typically the floor `2021.3.45f2` and your daily-driver Unity 6) and use Docker mode for the rest.
 
 ### GameCI Docker mode (no Unity Hub install required)
 
@@ -330,8 +293,6 @@ tools/check-unity-versions.sh --docker
 
 PowerShell equivalent for step 3: `$env:UNITY_LICENSE = Get-Content C:\path\to\Unity_v<version>.ulf -Raw`.
 
-The same `UNITY_LICENSE` secret is what `.github/workflows/unity-tests.yml` uses in CI — once you have it, your local Docker runs and CI behave identically.
-
 **Coverage gap on Apple Silicon Macs**: GameCI publishes only `linux/amd64` images. Docker Desktop runs them under Rosetta/QEMU at ~5-10× the native amd64 speed. A compile that takes 30s on Intel takes 3-5 min on M-series. Still faster than installing four Unity editors, but plan for it.
 
 **Opt-in pre-push hook**
@@ -341,11 +302,11 @@ tools/install-hooks.sh             # installs .git/hooks/pre-push (idempotent)
 tools/install-hooks.sh --uninstall # removes our hooks
 ```
 
-Once installed, `git push` runs the compile-only check first when the push touches `MCPForUnity/Editor/**`, `MCPForUnity/Runtime/**`, `TestProjects/UnityMCPTests/**`, `tools/unity-versions.json`, or `.github/workflows/unity-tests.yml`. Pushes that touch only docs, Server/, or unrelated files skip the check.
+Once installed, `git push` runs the compile-only check first when the push touches `MCPForUnity/Editor/**`, `MCPForUnity/Runtime/**`, `TestProjects/UnityMCPTests/**`, or `tools/unity-versions.json`. Pushes that touch only docs, Server/, or unrelated files skip the check.
 
 To bypass for a single push: `git push --no-verify`.
 
 **Bumping the matrix**
 
-Edit `tools/unity-versions.json` and update CI + local scripts both in one commit. The file is the single source of truth.
+Edit `tools/unity-versions.json`; both check scripts and the local harness read it. Every id needs a GameCI image for `--docker` mode (see the file's `$comment`).
 

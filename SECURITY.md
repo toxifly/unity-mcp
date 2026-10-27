@@ -12,15 +12,14 @@ Instead, email **security@coplay.dev** with:
 - Your OS, Unity Editor version, and MCP client
 - Optional: a suggested fix
 
-We aim to acknowledge reports within **3 business days** and to share an initial assessment within **10 business days**. Critical fixes are released as patch versions on both `main` and the beta channel.
+We aim to acknowledge reports within **3 business days** and to share an initial assessment within **10 business days**. Fixes land on `develop`.
 
 ## Supported Versions
 
 | Version | Supported |
 |---------|-----------|
-| latest (`main`) | Yes |
-| latest beta (`beta`) | Yes |
-| older releases | No — please upgrade |
+| `develop` | Yes |
+| anything older | No — please update to `develop` |
 
 ## Network Defaults (Safe by Default)
 
@@ -28,7 +27,7 @@ MCP for Unity is intentionally fail-closed:
 
 - **HTTP Local** binds to loopback only by default (`127.0.0.1`, `localhost`, `::1`). LAN bind (`0.0.0.0`, `::`) requires explicit opt-in via **Allow LAN Bind (HTTP Local)** in Advanced Settings.
 - **HTTP Remote** requires `https://` by default. Plaintext `http://` for remote endpoints requires explicit opt-in via **Allow Insecure Remote HTTP**.
-- Remote-hosted mode requires API key authentication. See [Remote Server Auth](https://coplaydev.github.io/unity-mcp/guides/remote-server-auth).
+- Remote-hosted mode requires API key authentication. See [Remote Server Auth](website/docs/guides/remote-server-auth.md).
 
 If you find a way to bypass any of these guards, that qualifies as a security vulnerability and warrants a private report.
 

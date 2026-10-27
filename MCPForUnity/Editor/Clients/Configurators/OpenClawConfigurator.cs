@@ -132,6 +132,16 @@ namespace MCPForUnity.Editor.Clients.Configurators
 
         public override string GetManualSnippet()
         {
+            JObject serverEntry;
+            try
+            {
+                serverEntry = BuildUnityServerEntry();
+            }
+            catch (Exception ex)
+            {
+                return JsonConvert.SerializeObject(new { error = ex.Message });
+            }
+
             JObject snippet = new JObject
             {
                 ["plugins"] = new JObject
@@ -145,7 +155,7 @@ namespace MCPForUnity.Editor.Clients.Configurators
                             {
                                 ["servers"] = new JObject
                                 {
-                                    [ServerName] = BuildUnityServerEntry()
+                                    [ServerName] = serverEntry
                                 }
                             }
                         }
@@ -274,32 +284,15 @@ namespace MCPForUnity.Editor.Clients.Configurators
             ConfiguredTransport transport = HttpEndpointUtility.GetCurrentServerTransport();
             if (transport == ConfiguredTransport.Stdio)
             {
-                var (uvxPath, _, packageName) = AssetPathUtility.GetUvxCommandParts();
-                if (string.IsNullOrWhiteSpace(uvxPath))
-                {
-                    throw new InvalidOperationException("uvx not found. Install uv/uvx or set the override in Advanced Settings.");
-                }
-
-                var args = new JArray();
-                foreach (string value in AssetPathUtility.GetUvxDevFlagsList())
-                {
-                    args.Add(value);
-                }
-                foreach (string value in AssetPathUtility.GetBetaServerFromArgsList())
-                {
-                    args.Add(value);
-                }
-                args.Add(packageName);
-                args.Add("--transport");
-                args.Add("stdio");
+                var (command, serverArgs) = AssetPathUtility.GetStdioServerCommand();
 
                 return new JObject
                 {
                     ["enabled"] = true,
                     ["url"] = StdioUrl,
                     ["transport"] = StdioTransportName,
-                    ["command"] = uvxPath,
-                    ["args"] = args,
+                    ["command"] = command,
+                    ["args"] = JArray.FromObject(serverArgs),
                     ["toolPrefix"] = ServerName,
                     ["requestTimeoutMs"] = 60000,
                     ["connectTimeoutMs"] = 15000
@@ -339,12 +332,7 @@ namespace MCPForUnity.Editor.Clients.Configurators
                     return false;
                 }
 
-                // Validate the --from package source hasn't drifted (e.g. stable vs prerelease switch)
-                string[] args = (server["args"] as JArray)?.ToObject<string[]>();
-                string configuredSource = McpConfigurationHelper.ExtractUvxUrl(args);
-                string expectedSource = GetExpectedPackageSourceForValidation();
-                if (!string.IsNullOrEmpty(configuredSource) && !string.IsNullOrEmpty(expectedSource) &&
-                    !McpConfigurationHelper.PathsEqual(configuredSource, expectedSource))
+                if (!RunsConfiguredServer((server["args"] as JArray)?.ToObject<string[]>()))
                 {
                     return false;
                 }

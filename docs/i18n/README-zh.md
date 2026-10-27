@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[English](../../README.md) <img src="../images/connector.svg" alt="↔" height="14"> [简体中文](README-zh.md) &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; [Discord](https://discord.gg/y4p8KfzrN4) <img src="../images/connector.svg" alt="↔" height="14"> [Wiki](https://coplaydev.github.io/unity-mcp/)
+[English](../../README.md) <img src="../images/connector.svg" alt="↔" height="14"> [简体中文](README-zh.md) &nbsp;&nbsp;&nbsp;|&nbsp;&nbsp;&nbsp; [Discord](https://discord.gg/y4p8KfzrN4) <img src="../images/connector.svg" alt="↔" height="14"> [Docs](../../website/docs/)
 
 #### 由 [Aura](https://www.tryaura.dev/) 荣誉赞助并维护 —— 面向 Unreal 与 Unity 的 AI 助手。
 ##### 别错过 [Godot AI](https://github.com/hi-godot/godot-ai) 🤖，MCP for Unity 团队推出的全新开源项目！
@@ -31,7 +31,7 @@
 * **[v9.7.0](https://github.com/CoplayDev/unity-mcp/releases/tag/v9.7.0)**（2026-05-22）
 * **[v9.6.8](https://github.com/CoplayDev/unity-mcp/releases/tag/v9.6.8)**（2026-04-27）
 
-完整更新历史见 [发布说明](https://coplaydev.github.io/unity-mcp/releases)。
+完整更新历史见 [发布说明](../../website/docs/releases.md)。
 
 </details>
 
@@ -41,7 +41,7 @@
 
 用自然语言从任意 MCP 客户端操作 Unity 编辑器：搭场景、建 GameObject、写改 C# 脚本、调材质和着色器、跑测试、看性能、出包。47 个 MCP 工具入口，任意客户端可用，免费、MIT 开源。
 
-**[查看完整工具目录 →](https://coplaydev.github.io/unity-mcp/reference/tools/)**
+**[查看完整工具目录 →](../../website/docs/reference/tools/index.md)**
 
 ---
 
@@ -49,9 +49,8 @@
 
 **环境要求：** Unity **2021.3 LTS → 6.x** · Python **3.10+**（用 [`uv`](https://docs.astral.sh/uv/) 管理）。兼容**任意 MCP 客户端**——Claude Desktop 与 Claude Code、Cursor、VS Code、Windsurf、Cline、Gemini CLI 等等。
 
-1. **安装** —— 在 Unity 里打开 Package Manager，从 git URL 添加：
-   `https://github.com/CoplayDev/unity-mcp.git?path=/MCPForUnity#main` &nbsp;_（如需固定本次发布，可用 `#v10.0.0`；也可以用 `openupm add com.coplaydev.unity-mcp`）_
-2. **配置客户端** —— `Window → MCP for Unity → Configure All Detected Clients`，一键搞定所有检测到的客户端。
+1. **安装** —— 克隆本仓库，然后在 Unity 里打开 Package Manager → Add package from disk → 选择克隆目录中的 `MCPForUnity/package.json`。
+2. **配置客户端** —— 在 Advanced Settings 里把 **Server Source** 设为该克隆的 `Server/` 目录，然后 `Window → MCP for Unity → Configure All Detected Clients`，一键搞定所有检测到的客户端。
 3. **发个提示试试** —— *"在原点放一个立方体，加个 Rigidbody。"* 立方体几秒就出现在场景里了。
 
 <details>
@@ -83,27 +82,16 @@
 ```
 
 <details>
-<summary>Stdio 配置（uvx）</summary>
+<summary>Stdio 配置（uv）</summary>
 
-**macOS/Linux：**
+把 `/path/to/unity-mcp/Server` 换成你的 Server Source 绝对路径。Windows 上若 `uv` 不在 `PATH` 中，把 `command` 换成 `uv.exe` 的完整路径。
+
 ```json
 {
   "mcpServers": {
     "unityMCP": {
-      "command": "uvx",
-      "args": ["--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"]
-    }
-  }
-}
-```
-
-**Windows：**
-```json
-{
-  "mcpServers": {
-    "unityMCP": {
-      "command": "C:/Users/YOUR_USERNAME/AppData/Local/Microsoft/WinGet/Links/uvx.exe",
-      "args": ["--from", "mcpforunityserver", "mcp-for-unity", "--transport", "stdio"]
+      "command": "uv",
+      "args": ["run", "--frozen", "--project", "/path/to/unity-mcp/Server", "mcp-for-unity", "--transport", "stdio"]
     }
   }
 }
@@ -163,7 +151,7 @@ MCP for Unity 支持同时开多个 Unity 编辑器实例。想把操作定向�
 <details>
 <summary><strong>参与贡献</strong></summary>
 
-开发环境配置见 [README-DEV.md](../development/README-DEV.md)，自定义工具见 [CUSTOM_TOOLS.md](../reference/CUSTOM_TOOLS.md)。
+开发环境配置见 [README-DEV-zh.md](../development/README-DEV-zh.md)，自定义工具见 [custom-tools.md](../../website/docs/guides/custom-tools.md)。
 
 1. Fork → 开 issue → 建分支（`feature/your-idea`）→ 改 → 提 PR
 </details>
@@ -171,7 +159,7 @@ MCP for Unity 支持同时开多个 Unity 编辑器实例。想把操作定向�
 <details>
 <summary><strong>遥测与隐私</strong></summary>
 
-匿名、注重隐私的遥测（不收集代码、项目名或任何个人数据），用 `DISABLE_TELEMETRY=true` 就能关掉。详见 [TELEMETRY.md](../reference/TELEMETRY.md)。
+本 fork 默认关闭遥测：除非把 `Server/src/core/config.py` 中的 `telemetry_enabled` 设为 `True`，否则 server 不会发送任何数据。详见 [telemetry.md](../../website/docs/architecture/telemetry.md)。
 </details>
 
 ---

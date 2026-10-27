@@ -2,6 +2,8 @@
 
 MCP for Unity includes privacy-focused, anonymous telemetry to help us improve the product. This document explains what data is collected, how to opt out, and our privacy practices.
 
+> **This fork:** telemetry is off by default. The server sends nothing unless its `ServerConfig.telemetry_enabled` is set to `True`. The Unity package registers no network sender for its own events; with debug logging on, it only logs them. The `DISABLE_TELEMETRY` variables below still force it off.
+
 ## 🔒 Privacy First
 
 - **Anonymous**: We use randomly generated UUIDs - no personal information

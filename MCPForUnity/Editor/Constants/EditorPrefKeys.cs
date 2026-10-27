@@ -28,7 +28,6 @@ namespace MCPForUnity.Editor.Constants
         internal const string SessionId = "MCPForUnity.SessionId";
         internal const string WebSocketUrlOverride = "MCPForUnity.WebSocketUrl";
         internal const string GitUrlOverride = "MCPForUnity.GitUrlOverride";
-        internal const string DevModeForceServerRefresh = "MCPForUnity.DevModeForceServerRefresh";
         internal const string ProjectScopedToolsLocalHttp = "MCPForUnity.ProjectScopedTools.LocalHttp";
         internal const string AllowLanHttpBind = "MCPForUnity.Security.AllowLanHttpBind";
         internal const string AllowInsecureRemoteHttp = "MCPForUnity.Security.AllowInsecureRemoteHttp";
@@ -59,10 +58,6 @@ namespace MCPForUnity.Editor.Constants
 
         internal const string CustomToolRegistrationEnabled = "MCPForUnity.CustomToolRegistrationEnabled";
 
-        internal const string LastUpdateCheck = "MCPForUnity.LastUpdateCheck";
-        internal const string LatestKnownVersion = "MCPForUnity.LatestKnownVersion";
-        internal const string LastAssetStoreUpdateCheck = "MCPForUnity.LastAssetStoreUpdateCheck";
-        internal const string LatestKnownAssetStoreVersion = "MCPForUnity.LatestKnownAssetStoreVersion";
         internal const string LastStdIoUpgradeVersion = "MCPForUnity.LastStdIoUpgradeVersion";
 
         internal const string TelemetryDisabled = "MCPForUnity.TelemetryDisabled";

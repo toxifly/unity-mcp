@@ -1088,6 +1088,54 @@ namespace MCPForUnityTests.Editor.Services
         }
 
         [Test]
+        public void ManagePrefabs_CreateAndReplaceInstantiatesUnderOriginalParent()
+        {
+            // A Canvas prefab instantiated at the scene root is a root canvas until it is
+            // reparented, and the layout that root canvas drives gets saved as overrides.
+            var host = new GameObject("AtomicCanvasHost", typeof(RectTransform), typeof(Canvas));
+            host.GetComponent<Canvas>().renderMode = RenderMode.WorldSpace;
+            var source = new GameObject("AtomicNestedCanvas", typeof(RectTransform), typeof(Canvas), typeof(ParentAtEnableProbe));
+            source.transform.SetParent(host.transform, false);
+            var sourceRect = (RectTransform)source.transform;
+            sourceRect.anchorMin = new Vector2(0.25f, 0.5f);
+            sourceRect.anchorMax = new Vector2(0.75f, 0.5f);
+            sourceRect.sizeDelta = new Vector2(40f, 30f);
+            sourceRect.pivot = new Vector2(0f, 1f);
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+
+            try
+            {
+                JObject response = JObject.FromObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "create_and_replace",
+                    ["target"] = source.GetInstanceIDCompat(),
+                    ["searchMethod"] = "by_id",
+                    ["prefabPath"] = PrefabPath
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                Transform replaced = host.transform.Find("AtomicNestedCanvas");
+                Assert.IsNotNull(replaced);
+                Assert.IsTrue(PrefabUtility.IsPartOfPrefabInstance(replaced.gameObject));
+                var probe = replaced.GetComponent<ParentAtEnableProbe>();
+                Assert.IsTrue(probe.WasEnabled);
+                Assert.AreSame(host.transform, probe.ParentAtFirstEnable,
+                    "The replacement must be instantiated under the original parent, not at the scene root");
+                var rect = (RectTransform)replaced;
+                Assert.AreEqual(new Vector2(0.25f, 0.5f), rect.anchorMin);
+                Assert.AreEqual(new Vector2(0.75f, 0.5f), rect.anchorMax);
+                Assert.AreEqual(new Vector2(40f, 30f), rect.sizeDelta);
+                Assert.AreEqual(new Vector2(0f, 1f), rect.pivot);
+                Assert.AreEqual(Vector3.one, rect.localScale);
+                Assert.IsFalse(testScene.isDirty);
+            }
+            finally
+            {
+                Object.DestroyImmediate(host);
+            }
+        }
+
+        [Test]
         public void ManagePrefabs_CreateAndReplaceNestedWithoutReferencePreservationAllowsParentChildSlot()
         {
             var parent = new GameObject("AtomicNestedParent");
@@ -1256,15 +1304,242 @@ namespace MCPForUnityTests.Editor.Services
             Assert.AreEqual(ScenePath, response["data"]["assets_saved"][0].Value<string>());
             Assert.AreEqual(1, response["data"]["blocks"]["scoped"].Value<int>());
             Assert.GreaterOrEqual(response["data"]["blocks"]["drift_suppressed"].Value<int>(), 1);
-            Assert.IsTrue(response["data"]["scene_still_dirty_in_memory"].Value<bool>());
+            // Writing an open scene that still holds the drift raises Unity's "modified externally"
+            // modal, so the scene is reopened from the merged file instead and comes back clean.
+            Assert.IsFalse(response["data"]["scene_still_dirty_in_memory"].Value<bool>());
+            Assert.IsTrue(response["data"]["scene_reloaded"].Value<bool>());
 
             string savedText = File.ReadAllText(ScenePath);
             StringAssert.Contains("ScopedRenamedRoot", savedText);
             StringAssert.DoesNotContain("DriftRenamedObject", savedText);
             StringAssert.Contains("DriftObject", savedText);
 
+            testScene = SceneManager.GetSceneByPath(ScenePath);
+            Assert.IsTrue(testScene.isLoaded);
+            Assert.IsFalse(testScene.isDirty);
+            Assert.AreEqual(testScene, SceneManager.GetActiveScene());
+            string[] rootNames = testScene.GetRootGameObjects().Select(go => go.name).ToArray();
+            CollectionAssert.Contains(rootNames, "ScopedRenamedRoot");
+            CollectionAssert.Contains(rootNames, "DriftObject");
+            CollectionAssert.DoesNotContain(rootNames, "DriftRenamedObject");
+            Assert.IsTrue(root == null, "Objects from before the reopen are gone; handles to them are stale.");
+
             var (touched, _) = SceneMutationLedger.SnapshotForScene(ScenePath);
             Assert.IsEmpty(touched, "A merge save must clear the scene's ledger entries.");
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeKeepsTheSceneOpenWhenItsFileIsReadOnly()
+        {
+            // Regression: the scene was closed before the write failed, discarding the ledgered
+            // edits the merge was meant to keep.
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            string before = File.ReadAllText(ScenePath);
+            root.name = "ScopedRenamedRoot";
+            SceneMutationLedger.Record(root);
+            drift.name = "DriftRenamedObject";
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            File.SetAttributes(ScenePath, FileAttributes.ReadOnly);
+            try
+            {
+                JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+                {
+                    ["scenePath"] = ScenePath,
+                    ["unscopedChanges"] = "exclude"
+                }));
+
+                Assert.IsFalse(response["success"].Value<bool>(), response.ToString());
+                Assert.AreEqual("SAVE_FAILED", response["code"].Value<string>());
+                Assert.IsFalse(response["data"]["data"]["scene_written"].Value<bool>());
+                StringAssert.Contains("not writable", response["data"]["message"].Value<string>());
+            }
+            finally
+            {
+                File.SetAttributes(ScenePath, FileAttributes.Normal);
+            }
+
+            Assert.AreEqual(before, File.ReadAllText(ScenePath));
+            Assert.IsTrue(root != null, "The scene must stay open with its edits");
+            Assert.AreEqual("ScopedRenamedRoot", root.name);
+            Assert.IsTrue(testScene.isDirty);
+            var (touched, _) = SceneMutationLedger.SnapshotForScene(ScenePath);
+            Assert.IsNotEmpty(touched, "The unsaved edit stays ledgered for the next save");
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeWithoutDriftSavesInPlace()
+        {
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            root.name = "ScopedRenamedRoot";
+            SceneMutationLedger.Record(root);
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath,
+                ["unscopedChanges"] = "exclude"
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.AreEqual("merge_scoped", response["data"]["save_mode"].Value<string>());
+            Assert.AreEqual(ScenePath, response["data"]["assets_saved"][0].Value<string>());
+            Assert.AreEqual(0, response["data"]["blocks"]["drift_suppressed"].Value<int>());
+            Assert.IsFalse(testScene.isDirty);
+            Assert.IsFalse(response["data"]["scene_still_dirty_in_memory"].Value<bool>());
+            Assert.IsFalse(response["data"]["scene_reloaded"].Value<bool>());
+            Assert.IsTrue(root != null, "Nothing was reopened, so existing handles stay valid.");
+            StringAssert.Contains("ScopedRenamedRoot", File.ReadAllText(ScenePath));
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeWithOnlyDriftReopensTheSceneWithoutWriting()
+        {
+            // Regression: with drift held back and no scoped change the save cleared the ledger but
+            // left the scene dirty, so run_tests then refused it as an unsaved scene.
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            string before = File.ReadAllText(ScenePath);
+            drift.name = "DriftRenamedObject";
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath,
+                ["unscopedChanges"] = "exclude"
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            Assert.IsEmpty(response["data"]["assets_saved"], "Nothing was written");
+            Assert.IsTrue(response["data"]["scene_reloaded"].Value<bool>());
+            Assert.IsFalse(response["data"]["scene_still_dirty_in_memory"].Value<bool>());
+            Assert.AreEqual(before, File.ReadAllText(ScenePath));
+
+            testScene = SceneManager.GetSceneByPath(ScenePath);
+            Assert.IsTrue(testScene.isLoaded);
+            Assert.IsFalse(testScene.isDirty);
+            string[] rootNames = testScene.GetRootGameObjects().Select(go => go.name).ToArray();
+            CollectionAssert.Contains(rootNames, "DriftObject");
+            CollectionAssert.DoesNotContain(rootNames, "DriftRenamedObject");
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeOnAnUnchangedDirtySceneClearsItWithoutReportingASave()
+        {
+            string before = File.ReadAllText(ScenePath);
+            EditorSceneManager.MarkSceneDirty(testScene);
+
+            JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+            {
+                ["scenePath"] = ScenePath,
+                ["unscopedChanges"] = "exclude"
+            }));
+
+            Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+            StringAssert.Contains("already matches", response["message"].Value<string>());
+            Assert.IsEmpty(response["data"]["assets_saved"], "An unchanged scene is not reported as saved");
+            Assert.IsFalse(response["data"]["scene_reloaded"].Value<bool>());
+            Assert.IsFalse(testScene.isDirty);
+            Assert.IsTrue(root != null, "Nothing was reopened, so existing handles stay valid.");
+            Assert.AreEqual(before, File.ReadAllText(ScenePath));
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeLeavesAnUnchangedNonCanonicalFileByteForByte()
+        {
+            // Unity's own save would re-sort the blocks, the churn the merge exists to avoid.
+            Scene additiveScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var additiveObject = new GameObject("NonCanonicalObject");
+            SceneManager.MoveGameObjectToScene(additiveObject, additiveScene);
+            try
+            {
+                Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
+                Assert.IsTrue(EditorSceneManager.CloseScene(additiveScene, true));
+                string reordered = SwapFirstTwoBlocks(File.ReadAllText(AdditiveScenePath));
+                File.WriteAllText(AdditiveScenePath, reordered);
+                AssetDatabase.ImportAsset(AdditiveScenePath, ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                additiveScene = EditorSceneManager.OpenScene(AdditiveScenePath, OpenSceneMode.Additive);
+                EditorSceneManager.MarkSceneDirty(additiveScene);
+
+                JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+                {
+                    ["scenePath"] = AdditiveScenePath,
+                    ["unscopedChanges"] = "exclude"
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                Assert.IsEmpty(response["data"]["assets_saved"]);
+                Assert.IsTrue(response["data"]["scene_reloaded"].Value<bool>());
+                Assert.AreEqual(reordered, File.ReadAllText(AdditiveScenePath));
+                additiveScene = SceneManager.GetSceneByPath(AdditiveScenePath);
+                Assert.IsTrue(additiveScene.isLoaded);
+                Assert.IsFalse(additiveScene.isDirty);
+            }
+            finally
+            {
+                if (additiveScene.IsValid() && additiveScene.isLoaded)
+                    EditorSceneManager.CloseScene(additiveScene, true);
+            }
+        }
+
+        private static string SwapFirstTwoBlocks(string sceneText)
+        {
+            // parts[0] is the %YAML header; the first two blocks are scene settings, safe to reorder.
+            string[] parts = sceneText.Replace("\r\n", "\n").Split(new[] { "\n--- " }, System.StringSplitOptions.None);
+            Assert.Greater(parts.Length, 3, "Expected a header and several blocks");
+            (parts[1], parts[2]) = (parts[2], parts[1]);
+            return string.Join("\n--- ", parts);
+        }
+
+        [Test]
+        public void SaveSceneScoped_ExcludeReopensOnlyTheSavedAdditiveScene()
+        {
+            var drift = new GameObject("DriftObject");
+            Assert.IsTrue(EditorSceneManager.SaveScene(testScene, ScenePath));
+            Scene additiveScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Additive);
+            var additiveObject = new GameObject("AdditiveObject");
+            SceneManager.MoveGameObjectToScene(additiveObject, additiveScene);
+
+            try
+            {
+                Assert.IsTrue(EditorSceneManager.SaveScene(additiveScene, AdditiveScenePath));
+                additiveObject.name = "AdditiveUnsavedEdit";
+                EditorSceneManager.MarkSceneDirty(additiveScene);
+                MakeActiveScene(additiveScene);
+                int savedSceneIndex = Enumerable.Range(0, SceneManager.sceneCount)
+                    .First(i => SceneManager.GetSceneAt(i) == testScene);
+
+                root.name = "ScopedRenamedRoot";
+                SceneMutationLedger.Record(root);
+                drift.name = "DriftRenamedObject";
+                EditorSceneManager.MarkSceneDirty(testScene);
+
+                JObject response = JObject.FromObject(SaveSceneScoped.HandleCommand(new JObject
+                {
+                    ["scenePath"] = ScenePath,
+                    ["unscopedChanges"] = "exclude"
+                }));
+
+                Assert.IsTrue(response["success"].Value<bool>(), response.ToString());
+                testScene = SceneManager.GetSceneByPath(ScenePath);
+                Assert.IsTrue(testScene.isLoaded);
+                Assert.IsFalse(testScene.isDirty);
+                Assert.IsTrue(response["data"]["scene_reloaded"].Value<bool>());
+                Assert.AreEqual(ScenePath, SceneManager.GetSceneAt(savedSceneIndex).path, "The reopened scene keeps its place.");
+                CollectionAssert.Contains(testScene.GetRootGameObjects().Select(go => go.name).ToArray(), "ScopedRenamedRoot");
+
+                Assert.AreEqual(additiveScene, SceneManager.GetActiveScene());
+                Assert.IsTrue(additiveScene.isDirty, "Other scenes keep their unsaved in-memory state.");
+                Assert.IsTrue(additiveObject != null);
+                Assert.AreEqual("AdditiveUnsavedEdit", additiveObject.name);
+            }
+            finally
+            {
+                if (additiveScene.IsValid() && additiveScene.isLoaded)
+                    EditorSceneManager.CloseScene(additiveScene, true);
+                AssetDatabase.DeleteAsset(AdditiveScenePath);
+            }
         }
 
         [Test]

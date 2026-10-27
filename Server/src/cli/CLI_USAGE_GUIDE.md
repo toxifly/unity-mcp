@@ -40,7 +40,7 @@ uv pip install -e .
 
 ```bash
 # Run directly without installing
-uvx --from /path/to/unity-mcp/Server unity-mcp --help
+uv run --frozen --project /path/to/unity-mcp/Server unity-mcp --help
 
 # Or install as a tool
 uv tool install /path/to/unity-mcp/Server

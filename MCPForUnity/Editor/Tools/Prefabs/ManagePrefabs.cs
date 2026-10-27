@@ -47,6 +47,17 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                 return new ErrorResponse($"Action parameter is required. Valid actions are: {SupportedActions}.");
             }
 
+            // A dry run must never mutate: actions without a preview path reject it instead of
+            // silently running for real.
+            bool dryRun = @params["dryRun"]?.ToObject<bool?>() ?? false;
+            if (dryRun && !HonorsDryRun(action))
+            {
+                return new ErrorResponse("DRY_RUN_UNSUPPORTED", new
+                {
+                    message = $"'{action}' has no dry run; nothing was changed. dry_run is supported by {ACTION_CREATE_AND_REPLACE} and {ACTION_MODIFY_CONTENTS}."
+                });
+            }
+
             try
             {
                 switch (action)
@@ -87,6 +98,20 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             {
                 McpLog.Error($"[ManagePrefabs] Action '{action}' failed: {e}");
                 return new ErrorResponse($"Internal error: {e.Message}");
+            }
+        }
+
+        private static bool HonorsDryRun(string action)
+        {
+            switch (action)
+            {
+                case ACTION_CREATE_AND_REPLACE:
+                case ACTION_MODIFY_CONTENTS:
+                case ACTION_GET_INFO:
+                case ACTION_GET_HIERARCHY:
+                    return true;
+                default:
+                    return false;
             }
         }
 
@@ -203,7 +228,11 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                     GameObject linkedInstance = source;
                     if (linkSceneInstance)
                     {
-                        linkedInstance = PrefabUtility.InstantiatePrefab(prefab, source.scene) as GameObject;
+                        // Instantiate straight under the parent: a prefab with a Canvas created at the
+                        // scene root becomes a root canvas, whose drive leaves screen-size values behind.
+                        linkedInstance = (transformState.Parent != null
+                            ? PrefabUtility.InstantiatePrefab(prefab, transformState.Parent)
+                            : PrefabUtility.InstantiatePrefab(prefab, source.scene)) as GameObject;
                         if (linkedInstance == null)
                         {
                             transaction.Rollback();
@@ -213,7 +242,6 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                         // 6000.5+ names prefab roots after the asset file; keep the
                         // scene object's original name so the replacement is a true swap.
                         linkedInstance.name = source.name;
-                        linkedInstance.transform.SetParent(transformState.Parent, true);
                         linkedInstance.transform.SetSiblingIndex(transformState.SiblingIndex);
                         linkedInstance.transform.position = transformState.Position;
                         linkedInstance.transform.rotation = transformState.Rotation;
@@ -441,12 +469,7 @@ namespace MCPForUnity.Editor.Tools.Prefabs
             if (!stable.EndsWith("-0-0", StringComparison.Ordinal))
                 return stable;
 
-            Transform transform = OwnerTransform(value);
-            string assetPath = AssetDatabase.GetAssetPath(value);
-            string objectPath = transform != null
-                ? GetHierarchyPath(transform)
-                : (string.IsNullOrEmpty(assetPath) ? value.name : assetPath);
-            return $"temporary:{objectPath}:{value.GetType().FullName}:{value.GetInstanceIDCompat()}";
+            return $"temporary:{value.GetType().FullName}:{value.GetInstanceIDCompat()}";
         }
 
         private static int[] ChildIndexPath(Transform root, Transform target)
@@ -1049,8 +1072,19 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                     return new ErrorResponse($"Target {searchedFor} not found in prefab '{sanitizedPath}'.");
                 }
 
-                // Apply modifications
-                var modifyResult = ApplyModificationsToPrefabObject(targetGo, @params, prefabContents, sanitizedPath);
+                // Apply modifications; a dry run records what they changed in memory and never saves
+                bool dryRun = @params["dryRun"]?.ToObject<bool?>() ?? false;
+                (bool modified, ErrorResponse error) modifyResult = default;
+                IReadOnlyList<SerializedChange> changes = null;
+                if (dryRun)
+                {
+                    changes = MutationTransaction.DiffHierarchy(prefabContents,
+                        () => modifyResult = ApplyModificationsToPrefabObject(targetGo, @params, prefabContents, sanitizedPath));
+                }
+                else
+                {
+                    modifyResult = ApplyModificationsToPrefabObject(targetGo, @params, prefabContents, sanitizedPath);
+                }
                 if (modifyResult.error != null)
                 {
                     return modifyResult.error;
@@ -1066,6 +1100,20 @@ namespace MCPForUnity.Editor.Tools.Prefabs
                             prefabPath = sanitizedPath,
                             targetName = targetGo.name,
                             modified = false
+                        }
+                    );
+                }
+
+                if (dryRun)
+                {
+                    return new SuccessResponse(
+                        $"Dry run: prefab '{sanitizedPath}' was not saved.",
+                        new
+                        {
+                            prefabPath = sanitizedPath,
+                            targetName = targetGo.name,
+                            modified = true,
+                            change_preview = new { dry_run = true, committed = false, changes }
                         }
                     );
                 }

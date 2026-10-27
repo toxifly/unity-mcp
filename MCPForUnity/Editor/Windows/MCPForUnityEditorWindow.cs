@@ -33,8 +33,6 @@ namespace MCPForUnity.Editor.Windows
 
         // UI Elements
         private Label versionLabel;
-        private VisualElement updateNotification;
-        private Label updateNotificationText;
 
         private ToolbarToggle clientsTabToggle;
         private ToolbarToggle depsTabToggle;
@@ -55,8 +53,6 @@ namespace MCPForUnity.Editor.Windows
         private bool resourcesLoaded = false;
         private double lastRefreshTime = 0;
         private const double RefreshDebounceSeconds = 0.5;
-        private bool updateCheckQueued = false;
-        private bool updateCheckInFlight = false;
 
         private enum ActivePanel
         {
@@ -197,8 +193,6 @@ namespace MCPForUnity.Editor.Windows
 
             // Cache UI elements
             versionLabel = rootVisualElement.Q<Label>("version-label");
-            updateNotification = rootVisualElement.Q<VisualElement>("update-notification");
-            updateNotificationText = rootVisualElement.Q<Label>("update-notification-text");
 
             clientsPanel = rootVisualElement.Q<VisualElement>("clients-panel");
             depsPanel = rootVisualElement.Q<VisualElement>("deps-panel");
@@ -322,11 +316,7 @@ namespace MCPForUnity.Editor.Windows
                     if (connectionSection != null)
                         await connectionSection.VerifyBridgeConnectionAsync();
                 };
-                advancedSection.OnPackageDeployed += () =>
-                {
-                    UpdateVersionLabel();
-                    QueueUpdateCheck();
-                };
+                advancedSection.OnPackageDeployed += UpdateVersionLabel;
                 // Wire up health status updates from Connection to Advanced
                 connectionSection?.SetHealthStatusUpdateCallback((isHealthy, statusText) =>
                     advancedSection?.UpdateHealthStatus(isHealthy, statusText));
@@ -406,7 +396,6 @@ namespace MCPForUnity.Editor.Windows
 
             // Initial updates
             RefreshAllData();
-            QueueUpdateCheck();
         }
 
         private void UpdateVersionLabel()
@@ -418,99 +407,7 @@ namespace MCPForUnity.Editor.Windows
 
             string version = AssetPathUtility.GetPackageVersion();
             versionLabel.text = $"v{version}";
-            versionLabel.tooltip = AssetPathUtility.IsPreReleaseVersion()
-                ? $"{ProductInfo.ProductName} v{version} (pre-release package, using prerelease server channel)"
-                : $"{ProductInfo.ProductName} v{version}";
-        }
-
-        private void QueueUpdateCheck()
-        {
-            if (updateCheckQueued || updateCheckInFlight)
-            {
-                return;
-            }
-
-            updateCheckQueued = true;
-            EditorApplication.delayCall += CheckForPackageUpdates;
-        }
-
-        private void CheckForPackageUpdates()
-        {
-            updateCheckQueued = false;
-
-            if (updateNotification == null || updateNotificationText == null)
-            {
-                return;
-            }
-
-            string currentVersion = AssetPathUtility.GetPackageVersion();
-            if (string.IsNullOrEmpty(currentVersion) || currentVersion == "unknown")
-            {
-                updateNotification.RemoveFromClassList("visible");
-                return;
-            }
-
-            // Main thread: resolve service + read EditorPrefs cache (both require main thread)
-            var updateService = MCPServiceLocator.Updates;
-            var cachedResult = updateService.TryGetCachedResult(currentVersion);
-            if (cachedResult != null)
-            {
-                ApplyUpdateCheckResult(cachedResult, currentVersion);
-                return;
-            }
-
-            // Main thread: pre-compute installation info (uses main-thread-only Unity APIs)
-            bool isGitInstallation = updateService.IsGitInstallation();
-            string gitBranch = isGitInstallation ? updateService.GetGitUpdateBranch(currentVersion) : "main";
-
-            // Background thread: network I/O only (no EditorPrefs or Unity API access)
-            updateCheckInFlight = true;
-            Task.Run(() =>
-            {
-                try
-                {
-                    return updateService.FetchAndCompare(currentVersion, isGitInstallation, gitBranch);
-                }
-                catch (Exception ex)
-                {
-                    McpLog.Info($"Package update check skipped: {ex.Message}");
-                    return null;
-                }
-            }).ContinueWith(t =>
-            {
-                EditorApplication.delayCall += () =>
-                {
-                    updateCheckInFlight = false;
-
-                    // Main thread: cache the result in EditorPrefs
-                    var result = t.Status == TaskStatus.RanToCompletion ? t.Result : null;
-                    if (result != null && result.CheckSucceeded && !string.IsNullOrEmpty(result.LatestVersion))
-                    {
-                        updateService.CacheFetchResult(currentVersion, result.LatestVersion);
-                    }
-
-                    if (this == null || updateNotification == null || updateNotificationText == null)
-                    {
-                        return;
-                    }
-
-                    ApplyUpdateCheckResult(result, currentVersion);
-                };
-            }, TaskScheduler.Default);
-        }
-
-        private void ApplyUpdateCheckResult(UpdateCheckResult result, string currentVersion)
-        {
-            if (result != null && result.CheckSucceeded && result.UpdateAvailable && !string.IsNullOrEmpty(result.LatestVersion))
-            {
-                updateNotificationText.text = $"Update available: v{result.LatestVersion}  (current: v{currentVersion})";
-                updateNotificationText.tooltip = $"Latest version: v{result.LatestVersion}\nCurrent version: v{currentVersion}";
-                updateNotification.AddToClassList("visible");
-            }
-            else
-            {
-                updateNotification.RemoveFromClassList("visible");
-            }
+            versionLabel.tooltip = $"{ProductInfo.ProductName} v{version}";
         }
 
         private void EnsureToolsLoaded()

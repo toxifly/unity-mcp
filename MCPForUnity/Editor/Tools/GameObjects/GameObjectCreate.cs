@@ -27,6 +27,18 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             string primitiveType = @params["primitiveType"]?.ToString();
             GameObject newGo = null;
 
+            // Resolve the parent first, so a prefab is instantiated straight under it (see below).
+            JToken parentToken = @params["parent"];
+            GameObject parentGo = null;
+            if (parentToken != null)
+            {
+                parentGo = ManageGameObjectCommon.FindObjectInternal(parentToken, "by_id_or_name_or_path");
+                if (parentGo == null)
+                {
+                    return new ErrorResponse($"Parent specified ('{parentToken}') but not found.");
+                }
+            }
+
             // --- Try Instantiating Prefab First ---
             string originalPrefabPath = prefabPath;
             if (!saveAsPrefab && !string.IsNullOrEmpty(prefabPath))
@@ -91,7 +103,12 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                 {
                     try
                     {
-                        newGo = PrefabUtility.InstantiatePrefab(prefabAsset) as GameObject;
+                        // Instantiating at the scene root and reparenting afterwards turns a prefab
+                        // with a Canvas into a root canvas for a moment, and the screen-size values
+                        // that drive leaves behind are saved as overrides.
+                        newGo = (parentGo != null
+                            ? PrefabUtility.InstantiatePrefab(prefabAsset, parentGo.transform)
+                            : PrefabUtility.InstantiatePrefab(prefabAsset)) as GameObject;
 
                         if (newGo == null)
                         {
@@ -171,15 +188,8 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             Undo.RecordObject(newGo, "Set GameObject Properties");
 
             // Set Parent
-            JToken parentToken = @params["parent"];
-            if (parentToken != null)
+            if (parentGo != null)
             {
-                GameObject parentGo = ManageGameObjectCommon.FindObjectInternal(parentToken, "by_id_or_name_or_path");
-                if (parentGo == null)
-                {
-                    UnityEngine.Object.DestroyImmediate(newGo);
-                    return new ErrorResponse($"Parent specified ('{parentToken}') but not found.");
-                }
                 // worldPositionStays: false — a freshly created object has no meaningful world pose
                 // to preserve; keeping it would bake the parent's inverse transform into the local
                 // values (e.g. a prefab parented under a CanvasScaler-scaled Canvas arrives with

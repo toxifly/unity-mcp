@@ -1,8 +1,8 @@
 {
-  "$comment": "Single source of truth for Unity versions exercised by CI and tools/check-unity-versions.* local script. Versions are pinned to specific patch releases (no floating tags) per acceptance criteria in CoplayDev/unity-mcp#1107. Every id MUST have a corresponding GameCI Docker image at unityci/editor:ubuntu-<id>-base-3 since both CI (game-ci/unity-test-runner@v4) and local --docker mode pull from there. Verify availability before bumping: https://hub.docker.com/v2/repositories/unityci/editor/tags/?name=<id>",
-  "$coverageGap": "UNITY_6000_6_OR_NEWER branches are NOT exercised by this matrix because Unity 6000.6 has no GameCI Docker image yet. Bump the 'rolling' row once https://hub.docker.com/r/unityci/editor publishes one. Tracked branches in code: UnityObjectIdCompat.cs (6000.6 reflection path).",
+  "$comment": "Single source of truth for Unity versions exercised by the tools/check-unity-versions.* scripts. Versions are pinned to specific patch releases (no floating tags) per acceptance criteria in CoplayDev/unity-mcp#1107. Every id MUST have a corresponding GameCI Docker image at unityci/editor:ubuntu-<id>-base-3 since --docker mode pulls from there. Verify availability before bumping: https://hub.docker.com/v2/repositories/unityci/editor/tags/?name=<id>",
+  "$coverageGap": "UNITY_6000_6_OR_NEWER branches are NOT exercised by this matrix because Unity 6000.6 has no GameCI Docker image yet. Bump the 'rolling' row once https://hub.docker.com/r/unityci/editor publishes one. Tracked branches in code: UnityObjectIdCompat.cs (6000.6 entity-id handle table, persisted through SessionState).",
   "defaultVersion": "6000.0.75f1",
-  "$defaultVersionComment": "Unity version used when CI runs the narrow matrix (default PR feedback path). Must be one of the ids in 'versions' below. Today's pick is 6.0 LTS — the version most users target. The 'floor' role still identifies the package's minimum supported version separately.",
+  "$defaultVersionComment": "Unity version tools/local_harness.py boots when the target project has no ProjectVersion.txt. Must be one of the ids in 'versions' below. Today's pick is 6.0 LTS — the version most users target. The 'floor' role still identifies the package's minimum supported version separately.",
   "versions": [
     {
       "id": "2021.3.45f2",

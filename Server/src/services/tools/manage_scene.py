@@ -89,13 +89,19 @@ async def manage_scene(
                      "{'old_text': ..., 'new_text': ..., 'count': 1}. Every anchor must match exactly "
                      "'count' times or nothing is written. Omit for a pure discard-and-reload of a file "
                      "already changed on disk."] | None = None,
+    source_path: Annotated[str,
+                           "For apply_external_edit: a Unity scene file (absolute, or relative to the project "
+                           "root) whose bytes replace the scene verbatim, e.g. a snapshot to restore. "
+                           "Exclusive with 'edits'. Never write an open scene's file directly; pass the "
+                           "snapshot here instead."] | None = None,
     discard_unsaved: Annotated[bool | str,
                                "For load (single mode) and apply_external_edit: true to drop unsaved "
                                "in-memory changes, which both otherwise refuse to discard. A single load "
                                "checks every loaded scene, not only the active one. Rejected by other "
                                "actions and by additive loads."] | None = None,
     dry_run: Annotated[bool | str,
-                       "For apply_external_edit: true to report which anchors matched without writing."] | None = None,
+                       "For apply_external_edit: true to report which anchors matched (or that the "
+                       "source is readable) without writing."] | None = None,
 ) -> dict[str, Any]:
     unity_instance = await get_unity_instance_from_context(ctx)
     # apply_external_edit must not be preceded by a refresh: a refresh is exactly what makes Unity
@@ -171,6 +177,8 @@ async def manage_scene(
         # apply_external_edit
         if edits is not None:
             params["edits"] = edits
+        if source_path is not None:
+            params["source_path"] = source_path
         coerced_discard_unsaved = coerce_bool(discard_unsaved, default=None)
         if coerced_discard_unsaved is not None:
             params["discard_unsaved"] = coerced_discard_unsaved

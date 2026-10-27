@@ -1098,6 +1098,128 @@ namespace MCPForUnityTests.Editor.Tools
 
         #endregion
 
+        #region Dry Run Tests
+
+        // A dry run must never write: modify_contents previews its changes in memory, and actions
+        // without a preview path reject dryRun instead of running for real.
+
+        [Test]
+        public void ModifyContents_DryRun_ReportsChangesWithoutSaving()
+        {
+            string prefabPath = CreateTestPrefab("DryRunModify");
+            byte[] before = File.ReadAllBytes(prefabPath);
+
+            var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "modify_contents",
+                ["prefabPath"] = prefabPath,
+                ["position"] = new JArray(1f, 2f, 3f),
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            var preview = result["data"]?["change_preview"] as JObject;
+            Assert.IsNotNull(preview, result.ToString());
+            Assert.IsTrue(preview.Value<bool>("dry_run"));
+            Assert.IsFalse(preview.Value<bool>("committed"));
+            var changes = preview["changes"] as JArray;
+            Assert.IsNotNull(changes);
+            Assert.IsTrue(changes.Any(c => (c.Value<string>("Property") ?? "").StartsWith("m_LocalPosition", StringComparison.Ordinal)),
+                $"Expected a m_LocalPosition change, got: {changes}");
+
+            CollectionAssert.AreEqual(before, File.ReadAllBytes(prefabPath), "A dry run must leave the prefab file untouched.");
+            GameObject reloaded = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.AreEqual(Vector3.zero, reloaded.transform.localPosition);
+        }
+
+        [Test]
+        public void ModifyContents_DryRunRename_ReportsOnlyTheNameChange()
+        {
+            // Preview objects have no GlobalObjectId; keyed by path, a rename read as every
+            // property of the object and its components removed and re-added.
+            string prefabPath = CreateTestPrefab("DryRunRename");
+
+            var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "modify_contents",
+                ["prefabPath"] = prefabPath,
+                ["name"] = "DryRunRenamed",
+                ["dryRun"] = true
+            }));
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            var changes = (JArray)result["data"]["change_preview"]["changes"];
+            Assert.AreEqual(1, changes.Count, changes.ToString());
+            Assert.AreEqual("modified", changes[0].Value<string>("Kind"));
+            Assert.AreEqual("m_Name", changes[0].Value<string>("Property"));
+            Assert.AreEqual("DryRunRenamed", changes[0].Value<string>("After"));
+        }
+
+        [Test]
+        public void ModifyContents_WithoutDryRun_StillSaves()
+        {
+            string prefabPath = CreateTestPrefab("RealModify");
+
+            var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "modify_contents",
+                ["prefabPath"] = prefabPath,
+                ["position"] = new JArray(1f, 2f, 3f),
+                ["dryRun"] = false
+            }));
+
+            Assert.IsTrue(result.Value<bool>("success"), result.ToString());
+            Assert.IsNull(result["data"]?["change_preview"]);
+            GameObject reloaded = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            Assert.AreEqual(new Vector3(1f, 2f, 3f), reloaded.transform.localPosition);
+        }
+
+        [Test]
+        public void OpenPrefabStage_DryRun_IsRejectedWithoutOpeningStage()
+        {
+            string prefabPath = CreateTestPrefab("DryRunStage");
+
+            var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+            {
+                ["action"] = "open_prefab_stage",
+                ["prefabPath"] = prefabPath,
+                ["dryRun"] = true
+            }));
+
+            Assert.IsFalse(result.Value<bool>("success"));
+            Assert.AreEqual("DRY_RUN_UNSUPPORTED", result.Value<string>("code"));
+            Assert.IsNull(PrefabStageUtility.GetCurrentPrefabStage());
+        }
+
+        [Test]
+        public void CreateFromGameObject_DryRun_IsRejectedWithoutCreatingAsset()
+        {
+            string prefabPath = Path.Combine(TempDirectory, "NotCreated.prefab").Replace('\\', '/');
+            GameObject sceneObject = new GameObject("DryRunSource");
+
+            try
+            {
+                var result = ToJObject(ManagePrefabs.HandleCommand(new JObject
+                {
+                    ["action"] = "create_from_gameobject",
+                    ["target"] = sceneObject.name,
+                    ["prefabPath"] = prefabPath,
+                    ["dryRun"] = true
+                }));
+
+                Assert.IsFalse(result.Value<bool>("success"));
+                Assert.AreEqual("DRY_RUN_UNSUPPORTED", result.Value<string>("code"));
+                Assert.IsFalse(File.Exists(prefabPath));
+                Assert.IsFalse(PrefabUtility.IsPartOfPrefabInstance(sceneObject));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(sceneObject);
+            }
+        }
+
+        #endregion
+
         #region Test Helpers
 
         private static string CreateTestPrefab(string name)

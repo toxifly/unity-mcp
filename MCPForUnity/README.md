@@ -13,8 +13,8 @@ The window has four areas: Server Status, Unity Bridge, MCP Client Configuration
 1. Open Window > MCP for Unity.
 2. Click “Auto-Setup”.
 3. If prompted:
-   - Select the packaged server folder (`Server`) if you want to run the bundled implementation.
-   - Install Python and/or uv/uvx if missing so the server can be managed locally.
+   - Set **Server Source** (Advanced Settings) to the `Server/` directory of the unity-mcp checkout this package comes from. It is required.
+   - Install uv if missing; the server runs with `uv run --frozen --project <Server Source>`.
    - For Claude Code, ensure the `claude` CLI is installed.
 4. Click “Start Bridge” if the Unity Bridge shows “Stopped”.
 5. Use your MCP client (Cursor, VS Code, OpenClaw, Claude Code) to connect.
@@ -30,11 +30,11 @@ The window has four areas: Server Status, Unity Bridge, MCP Client Configuration
 - Actions:
   - Auto-Setup: Registers/updates your selected MCP client(s), ensures bridge connectivity. Shows “Connected ✓” after success.
   - Rebuild MCP Server: Rebuilds the Python based MCP server
-  - Select server folder…: Choose the local `Server` folder (dev only; usually not needed when using uvx).
+  - Select server folder…: Choose the local `Server` folder used as Server Source (required).
   - Verify again: Re-checks server presence.
   - If Python isn’t detected, use “Open Install Instructions”.
 - HTTP Server Command foldout:
-  - Expands to display the exact `uvx` command Unity will run.
+  - Expands to display the exact `uv run --frozen --project <Server Source>` command Unity will run.
   - Includes a copy button and the “Start Local HTTP Server” action so you can launch or reuse the command elsewhere.
 
 ---
@@ -50,11 +50,11 @@ The window has four areas: Server Status, Unity Bridge, MCP Client Configuration
 - Select Client: Choose your target MCP client (e.g., Cursor, VS Code, Windsurf, Claude Code).
 - Per-client actions:
   - Cursor / VS Code / Windsurf:
-    - Auto Configure: Writes/updates your config to launch the server via `uvx` with the current package version:
-      - Command: uvx (or your overridden path)
-      - Args: --from <git-url> mcp-for-unity
+    - Auto Configure: Writes/updates your config to launch the local server checkout:
+      - Command: uv (or your overridden path)
+      - Args: run --frozen --project <Server Source> mcp-for-unity --transport stdio
     - Manual Setup: Opens a window with a pre-filled JSON snippet to copy/paste into your client config.
-    - Choose UV Install Location: If uv/uvx isn’t on PATH, select the executable.
+    - Choose UV Install Location: If uv isn’t on PATH, select the executable.
     - A compact “Config:” line shows the resolved config file name once uv/server are detected.
   - Claude Code:
     - Register with Claude Code / Unregister MCP for Unity with Claude Code.

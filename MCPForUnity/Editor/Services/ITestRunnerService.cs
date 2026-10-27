@@ -47,7 +47,15 @@ namespace MCPForUnity.Editor.Services
         /// </summary>
         /// <param name="mode">The test mode (EditMode or PlayMode).</param>
         /// <param name="filterOptions">Optional filter options to run specific tests. Pass null to run all tests.</param>
-        Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null);
+        /// <param name="jobId">The MCP test job this run belongs to, if any. The run is
+        /// not dispatched once that job has ended.</param>
+        Task<TestRunResult> RunTestsAsync(TestMode mode, TestFilterOptions filterOptions = null, string jobId = null);
+
+        /// <summary>
+        /// True while a run started by <see cref="RunTestsAsync"/> has neither finished nor been
+        /// aborted, including one whose job was already failed because it never reported starting.
+        /// </summary>
+        bool HasPendingRun { get; }
 
         /// <summary>
         /// Cancels a pending test run whose runner died without delivering RunFinished (e.g. a

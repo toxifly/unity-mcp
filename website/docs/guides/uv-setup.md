@@ -10,8 +10,8 @@ description: Install or repair uv and Python — the runtime MCP for Unity needs
 
 The key to configuring MCP with **Cursor, VS Code, Windsurf, and Rider is [`uv`](https://docs.astral.sh/uv/)**.
 
-- `uv` is a fast Python package manager used to install and run the Unity MCP Server (`mcp-for-unity`).
-- **How it's used:** your MCP client config points to `command: uvx` with args like `--from mcpforunityserver mcp-for-unity --transport stdio`. The client invokes `uvx` directly to launch the server.
+- `uv` is a fast Python package manager used to run the Unity MCP Server (`mcp-for-unity`) from your local checkout.
+- **How it's used:** your MCP client config points to `command: uv` with args like `run --frozen --project /path/to/unity-mcp/Server mcp-for-unity --transport stdio`. The client invokes `uv` directly to launch the server in the environment `Server/uv.lock` pins.
 - **Why it matters:** if `uv` isn't installed or on PATH, Cursor / Windsurf / VS Code can't start the server. The MCP for Unity window will show **"uv Not Found"** until fixed.
 - **Detection / override:** the MCP for Unity window auto-detects `uv` in common locations and on PATH. If not found, use **"Choose UV Install Location"** to navigate to your `uv` binary and save the path.
 

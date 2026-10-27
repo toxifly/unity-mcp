@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Newtonsoft.Json.Linq;
 using NUnit.Framework;
@@ -20,13 +21,17 @@ namespace MCPForUnityTests.Editor.Helpers
 
         private string _tempRoot;
         private string _fakeUvPath;
-        private string _serverSrcDir;
+        private TempServerSource _serverSource;
 
         // Save/restore original pref values (must happen BEFORE Assert.Ignore since TearDown still runs)
         private bool _hadHttpTransport;
         private bool _originalHttpTransport;
         private bool _hadHttpUrl;
         private string _originalHttpUrl;
+        private bool _hadLockConfig;
+        private bool _originalLockConfig;
+        private bool _hadAutoRegister;
+        private bool _originalAutoRegister;
 
         [SetUp]
         public void SetUp()
@@ -36,6 +41,10 @@ namespace MCPForUnityTests.Editor.Helpers
             _originalHttpTransport = EditorPrefs.GetBool(UseHttpTransportPrefKey, true);
             _hadHttpUrl = EditorPrefs.HasKey(HttpUrlPrefKey);
             _originalHttpUrl = EditorPrefs.GetString(HttpUrlPrefKey, "");
+            _hadLockConfig = EditorPrefs.HasKey(EditorPrefKeys.LockCursorConfig);
+            _originalLockConfig = EditorPrefs.GetBool(EditorPrefKeys.LockCursorConfig, false);
+            _hadAutoRegister = EditorPrefs.HasKey(EditorPrefKeys.AutoRegisterEnabled);
+            _originalAutoRegister = EditorPrefs.GetBool(EditorPrefKeys.AutoRegisterEnabled, true);
 
             // Tests are designed for Linux/macOS runners. Skip on Windows due to ProcessStartInfo
             // restrictions when UseShellExecute=false for .cmd/.bat scripts.
@@ -52,13 +61,8 @@ namespace MCPForUnityTests.Editor.Helpers
             File.WriteAllText(_fakeUvPath, "#!/bin/sh\n\necho 'uv 9.9.9'\n");
             TryChmodX(_fakeUvPath);
 
-            // Create a fake server directory with server.py
-            _serverSrcDir = Path.Combine(_tempRoot, "server-src");
-            Directory.CreateDirectory(_serverSrcDir);
-            File.WriteAllText(Path.Combine(_serverSrcDir, "server.py"), "# dummy server\n");
-
-            // Point the editor to our server dir (so ResolveServerSrc() uses this)
-            EditorPrefs.SetString(EditorPrefKeys.ServerSrc, _serverSrcDir);
+            // Client configs run the Server Source checkout
+            _serverSource = new TempServerSource();
             // Ensure no lock is enabled
             EditorPrefs.SetBool(EditorPrefKeys.LockCursorConfig, false);
             // Disable auto-registration to avoid hitting user configs during tests
@@ -72,12 +76,20 @@ namespace MCPForUnityTests.Editor.Helpers
         [TearDown]
         public void TearDown()
         {
-            // Clean up editor preferences set during SetUp
-            EditorPrefs.DeleteKey(EditorPrefKeys.ServerSrc);
-            EditorPrefs.DeleteKey(EditorPrefKeys.LockCursorConfig);
-            EditorPrefs.DeleteKey(EditorPrefKeys.AutoRegisterEnabled);
+            _serverSource?.Dispose();
 
             // Restore original pref values (don't delete if user had them set!)
+            if (_hadLockConfig)
+                EditorPrefs.SetBool(EditorPrefKeys.LockCursorConfig, _originalLockConfig);
+            else
+                EditorPrefs.DeleteKey(EditorPrefKeys.LockCursorConfig);
+
+            // Deleting this key would re-enable startup rewrites of real client configs
+            if (_hadAutoRegister)
+                EditorPrefs.SetBool(EditorPrefKeys.AutoRegisterEnabled, _originalAutoRegister);
+            else
+                EditorPrefs.DeleteKey(EditorPrefKeys.AutoRegisterEnabled);
+
             if (_hadHttpTransport)
                 EditorPrefs.SetBool(UseHttpTransportPrefKey, _originalHttpTransport);
             else
@@ -214,7 +226,7 @@ namespace MCPForUnityTests.Editor.Helpers
                     var root = JObject.Parse(File.ReadAllText(configPath));
                     var unity = (JObject)root.SelectToken("mcpServers.unityMCP");
                     Assert.NotNull(unity, "Expected mcpServers.unityMCP node");
-                    Assert.AreEqual(_fakeUvPath, (string)unity["command"], "Claude Desktop should use absolute uvx path");
+                    Assert.AreEqual(_fakeUvPath, (string)unity["command"], "Claude Desktop should use absolute uv path");
                     Assert.IsNull(unity["env"], "Claude Desktop config should not include env block when not required");
                     AssertTransportConfiguration(unity, client);
                 }
@@ -405,7 +417,7 @@ namespace MCPForUnityTests.Editor.Helpers
             Assert.AreEqual("Configured successfully", result, "WriteMcpConfiguration should return success");
         }
 
-        private static void AssertTransportConfiguration(JObject unity, McpClient client)
+        private void AssertTransportConfiguration(JObject unity, McpClient client)
         {
             bool useHttp = EditorPrefs.GetBool(UseHttpTransportPrefKey, true);
             bool isWindsurf = string.Equals(client.HttpUrlProperty, "serverUrl", StringComparison.OrdinalIgnoreCase);
@@ -442,6 +454,9 @@ namespace MCPForUnityTests.Editor.Helpers
 
                 var args = (unity["args"] as JArray)?.ToObject<string[]>();
                 Assert.NotNull(args, "stdio transport should include args array");
+                CollectionAssert.AreEqual(
+                    new[] { "run", "--frozen", "--project", _serverSource.ServerDirectory, "mcp-for-unity" },
+                    args.Take(5), "stdio transport should run the Server Source checkout");
 
                 int transportIndex = Array.IndexOf(args, "--transport");
                 Assert.GreaterOrEqual(transportIndex, 0, "args should include --transport flag");

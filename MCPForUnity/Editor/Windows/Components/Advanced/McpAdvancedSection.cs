@@ -12,7 +12,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
 {
     /// <summary>
     /// Controller for the Advanced Settings section.
-    /// Handles path overrides, server source configuration, dev mode, and package deployment.
+    /// Handles path overrides, server source configuration, and package deployment.
     /// </summary>
     public class McpAdvancedSection
     {
@@ -27,7 +27,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
         private Toggle autoStartOnLoadToggle;
         private Toggle debugLogsToggle;
         private Toggle logRecordToggle;
-        private Toggle devModeForceRefreshToggle;
         private Toggle allowLanHttpBindToggle;
         private Toggle allowInsecureRemoteHttpToggle;
         private TextField screenshotsFolderOverride;
@@ -73,7 +72,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             autoStartOnLoadToggle = Root.Q<Toggle>("auto-start-on-load-toggle");
             debugLogsToggle = Root.Q<Toggle>("debug-logs-toggle");
             logRecordToggle = Root.Q<Toggle>("log-record-toggle");
-            devModeForceRefreshToggle = Root.Q<Toggle>("dev-mode-force-refresh-toggle");
             allowLanHttpBindToggle = Root.Q<Toggle>("allow-lan-http-bind-toggle");
             allowInsecureRemoteHttpToggle = Root.Q<Toggle>("allow-insecure-remote-http-toggle");
             screenshotsFolderOverride = Root.Q<TextField>("screenshots-folder-override");
@@ -98,7 +96,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             if (uvxPathOverride != null)
                 uvxPathOverride.tooltip = "Override path to uvx executable. Leave empty for auto-detection.";
             if (gitUrlOverride != null)
-                gitUrlOverride.tooltip = "Override server source for uvx --from. Leave empty to use default PyPI package. Example local dev: /path/to/unity-mcp/Server";
+                gitUrlOverride.tooltip = "Required: your local unity-mcp Server/ directory (containing pyproject.toml). Client configs and the HTTP server run it with 'uv run --frozen --project'; MCP for Unity never runs a published server package.";
             if (debugLogsToggle != null)
             {
                 debugLogsToggle.tooltip = "Enable verbose debug logging to the Unity Console.";
@@ -112,13 +110,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 var logRecordLabel = logRecordToggle?.parent?.Q<Label>();
                 if (logRecordLabel != null)
                     logRecordLabel.tooltip = logRecordToggle.tooltip;
-            }
-            if (devModeForceRefreshToggle != null)
-            {
-                devModeForceRefreshToggle.tooltip = "When enabled, generated uvx commands add '--no-cache --refresh' before launching (slower startup, but avoids stale cached builds while iterating on the Server).";
-                var forceRefreshLabel = devModeForceRefreshToggle?.parent?.Q<Label>();
-                if (forceRefreshLabel != null)
-                    forceRefreshLabel.tooltip = devModeForceRefreshToggle.tooltip;
             }
             if (allowLanHttpBindToggle != null)
             {
@@ -158,7 +149,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             if (browseGitUrlButton != null)
                 browseGitUrlButton.tooltip = "Select local server source folder";
             if (clearGitUrlButton != null)
-                clearGitUrlButton.tooltip = "Clear override and use default PyPI package";
+                clearGitUrlButton.tooltip = "Clear Server Source. Clients can't be configured until it is set again.";
             if (browseDeploySourceButton != null)
                 browseDeploySourceButton.tooltip = "Select MCPForUnity source folder";
             if (clearDeploySourceButton != null)
@@ -186,7 +177,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             if (logRecordToggle != null)
                 logRecordToggle.value = McpLogRecord.IsEnabled;
 
-            devModeForceRefreshToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             if (allowLanHttpBindToggle != null)
             {
                 allowLanHttpBindToggle.SetValueWithoutNotify(EditorPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false));
@@ -214,7 +204,7 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                 }
                 else
                 {
-                    url = ResolveServerPath(url);
+                    url = AssetPathUtility.ResolveLocalServerPath(url);
                     // Update the text field if the path was auto-corrected, without re-triggering the callback
                     if (url != evt.newValue?.Trim())
                     {
@@ -254,12 +244,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
                     EditorPrefs.SetBool(EditorPrefKeys.AutoStartOnLoad, evt.newValue);
                 });
             }
-
-            devModeForceRefreshToggle.RegisterValueChangedCallback(evt =>
-            {
-                EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, evt.newValue);
-                OnHttpServerCommandUpdateRequested?.Invoke();
-            });
 
             if (allowLanHttpBindToggle != null)
             {
@@ -404,7 +388,6 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             debugLogsToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
             if (logRecordToggle != null)
                 logRecordToggle.value = McpLogRecord.IsEnabled;
-            devModeForceRefreshToggle.value = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             if (allowLanHttpBindToggle != null)
             {
                 allowLanHttpBindToggle.value = EditorPrefs.GetBool(EditorPrefKeys.AllowLanHttpBind, false);
@@ -449,61 +432,13 @@ namespace MCPForUnity.Editor.Windows.Components.Advanced
             string picked = EditorUtility.OpenFolderPanel("Select Server folder (containing pyproject.toml)", string.Empty, string.Empty);
             if (!string.IsNullOrEmpty(picked))
             {
-                picked = ResolveServerPath(picked);
+                picked = AssetPathUtility.ResolveLocalServerPath(picked);
                 gitUrlOverride.value = picked;
                 EditorPrefs.SetString(EditorPrefKeys.GitUrlOverride, picked);
                 OnGitUrlChanged?.Invoke();
                 OnHttpServerCommandUpdateRequested?.Invoke();
                 McpLog.Info($"Server source override set to: {picked}");
             }
-        }
-
-        /// <summary>
-        /// Validates and auto-corrects a local server path to ensure it points to the directory
-        /// containing pyproject.toml (the Python package root). If the user selects a parent
-        /// directory (e.g. the repo root), this checks for a "Server" subdirectory with
-        /// pyproject.toml and returns that instead.
-        /// </summary>
-        private static string ResolveServerPath(string path)
-        {
-            if (string.IsNullOrEmpty(path))
-                return path;
-
-            // If path is not a local filesystem path, return as-is (git URLs, PyPI refs, etc.)
-            if (path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith("git+", StringComparison.OrdinalIgnoreCase) ||
-                path.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase))
-            {
-                return path;
-            }
-
-            // Strip file:// prefix for filesystem checks, but preserve it for the return value
-            string checkPath = path;
-            string prefix = string.Empty;
-            if (checkPath.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-            {
-                prefix = "file://";
-                checkPath = checkPath.Substring(7);
-            }
-
-            // Already points to a directory with pyproject.toml — correct path
-            if (File.Exists(Path.Combine(checkPath, "pyproject.toml")))
-            {
-                return path;
-            }
-
-            // Check if "Server" subdirectory contains pyproject.toml (common repo structure)
-            string serverSubDir = Path.Combine(checkPath, "Server");
-            if (File.Exists(Path.Combine(serverSubDir, "pyproject.toml")))
-            {
-                string corrected = prefix + serverSubDir;
-                McpLog.Info($"Auto-corrected server path to 'Server' subdirectory: {corrected}");
-                return corrected;
-            }
-
-            // Return as-is; uvx will report the error if the path is invalid
-            return path;
         }
 
         private void UpdateDeploymentSection()

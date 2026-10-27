@@ -1,35 +1,59 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
 using UnityEngine;
 #if UNITY_EDITOR
-using System.Reflection;
 using UnityEditor;
 #endif
+using Object = UnityEngine.Object;
 
 namespace MCPForUnity.Runtime.Helpers
 {
     // Part of MCP for Unity's compat-shim family. See UnityCompatShims.cs in this
     // folder for the full list of shims, the audit policy, and the reflection pattern.
-    /// <summary>
-    /// Version-gated wrappers for the InstanceID ↔ EntityId migration introduced in Unity 6.5
-    /// and tightened in 6.6.
-    ///   Forward (Object → int): <see cref="GetInstanceIDCompat"/>
-    ///   Reverse (int → Object, Editor-only): <see cref="InstanceIDToObjectCompat"/>
-    /// </summary>
+    /// <summary>Session-scoped object handles for MCP's int-shaped wire format.</summary>
     public static class UnityObjectIdCompat
     {
+#if UNITY_6000_6_OR_NEWER
+        private const string Prefix = "MCPForUnity.ObjectHandles.v1.";
+        // Lookups hit these first; in the Editor, SessionState only carries the table
+        // across domain reloads and is touched on a miss or a new handle.
+        private static readonly Dictionary<ulong, int> Handles = new Dictionary<ulong, int>();
+#if UNITY_EDITOR
+        private static readonly Dictionary<int, ulong> Entities = new Dictionary<int, ulong>();
+#else
+        private static int _nextHandle;
+#endif
+#endif
+
         /// <summary>
-        /// Returns a session-scoped int handle for the object. On 6.5+ truncates the
-        /// EntityId's underlying ulong; lossy but stable within a session and preserves
-        /// the int-shaped wire format that older consumers expect. For deserialization
-        /// round-trips on 6.5+, prefer the full <c>entityID</c> field.
+        /// Returns an opaque, nonzero handle. Unity 6.6 entity IDs retain all 64 bits
+        /// in a mapping; handles must never be cast directly to native entity IDs.
+        /// Editor mappings survive domain reloads through SessionState.
         /// </summary>
         public static int GetInstanceIDCompat(this Object obj)
         {
-            if (obj == null)
+            if (obj == null) return 0;
+#if UNITY_6000_6_OR_NEWER
+            ulong entityId = EntityId.ToULong(obj.GetEntityId());
+            if (Handles.TryGetValue(entityId, out int handle)) return handle;
+#if UNITY_EDITOR
+            string entityKey = entityId.ToString(CultureInfo.InvariantCulture);
+            handle = SessionState.GetInt(Prefix + "entity." + entityKey, 0);
+            if (handle == 0)
             {
-                return 0;
+                handle = checked(SessionState.GetInt(Prefix + "next", 0) + 1);
+                SessionState.SetInt(Prefix + "next", handle);
+                SessionState.SetString(Prefix + "handle." + handle, entityKey);
+                SessionState.SetInt(Prefix + "entity." + entityKey, handle);
             }
-
-#if UNITY_6000_5_OR_NEWER
+            Entities[handle] = entityId;
+#else
+            handle = checked(++_nextHandle);
+#endif
+            Handles[entityId] = handle;
+            return handle;
+#elif UNITY_6000_5_OR_NEWER
             return (int)EntityId.ToULong(obj.GetEntityId());
 #else
             return obj.GetInstanceID();
@@ -37,33 +61,20 @@ namespace MCPForUnity.Runtime.Helpers
         }
 
 #if UNITY_EDITOR
-#if UNITY_6000_6_OR_NEWER
-        private static MethodInfo _instanceIdToObject;
-        private static bool _instanceIdToObjectInitialized;
-#endif
-
-        /// <summary>
-        /// Resolves an int instance ID handle back to a UnityEngine.Object.
-        ///   Pre-6.0  : EditorUtility.InstanceIDToObject(int)
-        ///   6.0–6.5  : EditorUtility.EntityIdToObject(int)  (implicit int→EntityId cast)
-        ///   6.6+     : reflection on InstanceIDToObject(int) — the API still exists at runtime
-        ///              but is obsolete-as-error; reflection bypasses CS0619 until the public
-        ///              EntityId(int) ctor stabilizes.
-        /// </summary>
+        /// <summary>Resolves an issued handle, or null for an unknown/destroyed object.</summary>
         public static Object InstanceIDToObjectCompat(int instanceId)
         {
 #if UNITY_6000_6_OR_NEWER
-            if (!_instanceIdToObjectInitialized)
+            if (instanceId == 0) return null;
+            if (!Entities.TryGetValue(instanceId, out ulong entityId))
             {
-                _instanceIdToObject = typeof(EditorUtility).GetMethod(
-                    "InstanceIDToObject",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null,
-                    new[] { typeof(int) },
-                    null);
-                _instanceIdToObjectInitialized = true;
+                string value = SessionState.GetString(Prefix + "handle." + instanceId, "");
+                if (!ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out entityId))
+                    return null;
+                Entities[instanceId] = entityId;
+                Handles[entityId] = instanceId;
             }
-            return _instanceIdToObject?.Invoke(null, new object[] { instanceId }) as Object;
+            return EditorUtility.EntityIdToObject(EntityId.FromULong(entityId));
 #elif UNITY_6000_3_OR_NEWER
             return EditorUtility.EntityIdToObject(instanceId);
 #else

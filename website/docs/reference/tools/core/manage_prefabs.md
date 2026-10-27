@@ -31,7 +31,7 @@ Manages Unity Prefab assets. Read-only actions: get_info and get_hierarchy. Muta
 | `link_scene_instance` | `bool \| str \| None` | — | For create_and_replace, connect the source hierarchy to the new prefab; false creates only the asset. |
 | `dirty_scene_policy` | `Literal['reject', 'preserve', 'allow'] \| None` | — | Dirty-scene policy for create_and_replace. Defaults to reject; dry runs preserve prior dirtiness. |
 | `change_guard` | `dict[str, Any] \| None` | — | Expected serialized change scope for create_and_replace. |
-| `dry_run` | `bool \| str \| None` | — | Preview create_and_replace changes and roll back the scene and prefab asset. |
+| `dry_run` | `bool \| str \| None` | — | Preview without saving. create_and_replace rolls back the scene and prefab asset; modify_contents returns the change preview and leaves the prefab file untouched. Other mutating actions reject dry_run. |
 | `unpack_mode` | `str \| None` | — | For unpack_instance: unpack mode. Valid values: OutermostRoot, Completely. |
 | `position` | `list[float] \| dict[str, float] \| str \| None` | — | New local position [x, y, z] or {x, y, z} for modify_contents. |
 | `rotation` | `list[float] \| dict[str, float] \| str \| None` | — | New local rotation (euler angles) [x, y, z] or {x, y, z} for modify_contents. |

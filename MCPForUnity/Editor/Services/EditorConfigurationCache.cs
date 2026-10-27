@@ -48,7 +48,6 @@ namespace MCPForUnity.Editor.Services
         // Cached values - most frequently read
         private bool _useHttpTransport;
         private bool _debugLogs;
-        private bool _devModeForceServerRefresh;
         private string _uvxPathOverride;
         private string _gitUrlOverride;
         private string _httpBaseUrl;
@@ -68,12 +67,6 @@ namespace MCPForUnity.Editor.Services
         /// Default: false
         /// </summary>
         public bool DebugLogs => _debugLogs;
-
-        /// <summary>
-        /// Whether to force server refresh in dev mode (--no-cache --refresh).
-        /// Default: false
-        /// </summary>
-        public bool DevModeForceServerRefresh => _devModeForceServerRefresh;
 
         /// <summary>
         /// Custom path override for uvx executable.
@@ -130,7 +123,6 @@ namespace MCPForUnity.Editor.Services
         {
             _useHttpTransport = EditorPrefs.GetBool(EditorPrefKeys.UseHttpTransport, true);
             _debugLogs = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
-            _devModeForceServerRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
             _uvxPathOverride = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);
             _gitUrlOverride = EditorPrefs.GetString(EditorPrefKeys.GitUrlOverride, string.Empty);
             _httpBaseUrl = EditorPrefs.GetString(EditorPrefKeys.HttpBaseUrl, string.Empty);
@@ -163,19 +155,6 @@ namespace MCPForUnity.Editor.Services
                 _debugLogs = value;
                 EditorPrefs.SetBool(EditorPrefKeys.DebugLogs, value);
                 OnConfigurationChanged?.Invoke(nameof(DebugLogs));
-            }
-        }
-
-        /// <summary>
-        /// Set DevModeForceServerRefresh and update cache + EditorPrefs atomically.
-        /// </summary>
-        public void SetDevModeForceServerRefresh(bool value)
-        {
-            if (_devModeForceServerRefresh != value)
-            {
-                _devModeForceServerRefresh = value;
-                EditorPrefs.SetBool(EditorPrefKeys.DevModeForceServerRefresh, value);
-                OnConfigurationChanged?.Invoke(nameof(DevModeForceServerRefresh));
             }
         }
 
@@ -289,9 +268,6 @@ namespace MCPForUnity.Editor.Services
                     break;
                 case nameof(DebugLogs):
                     _debugLogs = EditorPrefs.GetBool(EditorPrefKeys.DebugLogs, false);
-                    break;
-                case nameof(DevModeForceServerRefresh):
-                    _devModeForceServerRefresh = EditorPrefs.GetBool(EditorPrefKeys.DevModeForceServerRefresh, false);
                     break;
                 case nameof(UvxPathOverride):
                     _uvxPathOverride = EditorPrefs.GetString(EditorPrefKeys.UvxPathOverride, string.Empty);

@@ -1,10 +1,10 @@
 #requires -Version 5
 <#
 .SYNOPSIS
-  Local parity check for the CI Unity-version matrix (Windows companion to check-unity-versions.sh).
+  Local check across the Unity-version matrix (Windows companion to check-unity-versions.sh).
 
 .DESCRIPTION
-  Reads tools\unity-versions.json (the shared source of truth used by .github\workflows\unity-tests.yml)
+  Reads tools\unity-versions.json (the shared source of truth for the matrix)
   and runs a compile-only batchmode pass on each Unity version installed via Unity Hub.
 
   -Docker switches to running inside GameCI containers (unityci/editor:ubuntu-<id>-base-<tag>) instead
@@ -15,7 +15,7 @@
   do not cause failure on their own.
 
 .PARAMETER Full
-  Run the full EditMode test suite per version instead of compile-only. Matches CI behavior; slower.
+  Run the full EditMode test suite per version instead of compile-only. Slower.
 
 .PARAMETER Only
   Filter to versions whose id starts with this prefix (e.g. -Only 6000.0).

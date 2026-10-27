@@ -3,12 +3,12 @@ id: testing
 slug: /contributing/testing
 title: Testing
 sidebar_label: Testing
-description: How to run Python and Unity tests locally, what CI runs, and how to add new tests.
+description: How to run Python and Unity tests locally and how to add new tests.
 ---
 
 # Testing
 
-Three test suites cover MCP for Unity: Python unit tests, Unity EditMode/PlayMode tests, and a multi-version Unity compile matrix. CI runs all three; you should run the two relevant to your change locally before pushing.
+Three test suites cover MCP for Unity: Python unit tests, Unity EditMode/PlayMode tests, and a multi-version Unity compile matrix. This fork has no CI, so run the suites relevant to your change before pushing.
 
 ## Python tests
 
@@ -25,8 +25,6 @@ cd Server && uv run pytest tests/test_manage_material.py -v
 cd Server && uv run pytest tests/ -k "test_create_material" -v
 ```
 
-CI workflow: `.github/workflows/python-tests.yml`. Coverage is uploaded to Codecov on every run.
-
 ### Adding a Python test
 
 For a new tool `manage_<domain>`, add `Server/tests/test_manage_<domain>.py`. Existing tests are the best template — most are integration-style: they spin up a fake Unity bridge, call the tool, and assert on the dispatched payload.
@@ -40,17 +38,13 @@ Location: `TestProjects/UnityMCPTests/Assets/Tests/`
 
 To run locally, open `TestProjects/UnityMCPTests` in Unity, then **Window → General → Test Runner**.
 
-CI runs both modes across a multi-Unity matrix via `.github/workflows/unity-tests.yml`.
-
 ### Local headless test harness
 
 One command boots a headless Hub-licensed Editor against `TestProjects/UnityMCPTests` and runs the smoke + EditMode + PlayMode legs over the bridge, then tears down:
 
 ```bash
-python tools/local_harness.py
+uv run --project Server python tools/local_harness.py
 ```
-
-This is the same entrypoint CI uses — `.github/workflows/e2e-bridge.yml` collapses its boot/wait/discover/run-smoke shell into this invocation.
 
 Key flags:
 
@@ -62,7 +56,7 @@ Key flags:
 
 Exit-code contract: `0` all blocking legs passed, `1` a blocking-leg regression, `2` bridge unreachable / setup failure, `3` project does not compile, `4` no Unity license / Hub seat, `5` Editor binary/version not found.
 
-It needs a Hub-activated Editor locally (no ULF/serial); none of the CI license staging applies.
+It needs a Hub-activated Editor (no ULF/serial).
 
 ### Adding a Unity test
 
@@ -93,7 +87,7 @@ To bypass for a single push: `git push --no-verify`. Use this when you're pushin
 
 ## Pre-commit hook (docs reference)
 
-The same install script wires a pre-commit hook that regenerates `website/docs/reference/` whenever you stage a change under `Server/src/services/{tools,resources,registry}/`. CI fails if you skip this and the committed reference drifts — see `.github/workflows/docs-generate.yml`.
+The same install script wires a pre-commit hook that regenerates `website/docs/reference/` whenever you stage a change under `Server/src/services/{tools,resources,registry}/`. Without the hook, regenerate or check the reference yourself; see [Docs Workflow](./docs.md).
 
 ## Stress / load testing
 
@@ -102,15 +96,4 @@ Two scripts under `tools/`:
 - `stress_mcp.py` — concurrent MCP tool calls; surfaces middleware contention
 - `stress_editor_state.py` — hammers the `editor_state` resource; surfaces serialization hotspots
 
-These are not part of CI; run them when you change transport, middleware, or hot-path serialization.
-
-## What CI actually runs on every PR
-
-| Workflow | Trigger | Duration | What it asserts |
-|---|---|---|---|
-| `python-tests.yml` | `Server/**` changes | ~2 min | `pytest` clean, coverage uploaded |
-| `unity-tests.yml` | `MCPForUnity/**` / `TestProjects/**` changes | ~15 min × N versions | EditMode + PlayMode tests clean across the matrix |
-| `docs-deploy.yml` | `website/**`, `docs/**`, tool/resource registry changes | ~1 min (build) | Docusaurus build succeeds; on push to `beta`, deploys to GitHub Pages |
-| `docs-generate.yml` | same triggers as docs-deploy | ~1 min | Reference docs are not stale; decorator count matches MD count |
-
-Skip-equivalent: if the only files you changed are README, governance, or unrelated metadata, only the relevant subset of these fires.
+Run them when you change transport, middleware, or hot-path serialization.

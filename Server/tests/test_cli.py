@@ -516,6 +516,28 @@ class TestSceneCommands:
             assert "edits" not in params
             assert params["discard_unsaved"] is True
 
+    def test_scene_apply_external_edit_from_source(self, runner, mock_unity_response):
+        """--source restores a whole file through the same reload-safe transaction."""
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, [
+                "scene", "apply-external-edit", "Assets/Scenes/Main.unity",
+                "--source", "/tmp/Main.snapshot.unity", "--discard-unsaved",
+            ])
+            assert result.exit_code == 0
+            params = mock_run.call_args[0][1]
+            assert params["source_path"] == "/tmp/Main.snapshot.unity"
+            assert "edits" not in params
+
+    def test_scene_apply_external_edit_rejects_source_with_edits(self, runner, mock_unity_response):
+        with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
+            result = runner.invoke(cli, [
+                "scene", "apply-external-edit", "Assets/Scenes/Main.unity",
+                "--source", "/tmp/Main.snapshot.unity",
+                "--edits", '[{"old_text": "a", "new_text": "b"}]',
+            ])
+            assert result.exit_code != 0
+            mock_run.assert_not_called()
+
     def test_scene_apply_external_edit_rejects_bad_json(self, runner, mock_unity_response):
         """A malformed --edits payload must fail before anything reaches Unity."""
         with patch("cli.commands.scene.run_command", return_value=mock_unity_response) as mock_run:
