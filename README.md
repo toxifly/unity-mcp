@@ -82,7 +82,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Branch off `develop` and open PRs agains
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=CoplayDev/unity-mcp&type=Date)](https://www.star-history.com/#CoplayDev/unity-mcp&Date)
+[![Star History Chart](https://star-history.dera.page/svg?repos=CoplayDev/unity-mcp&type=Date)](https://star-history.dera.page/#CoplayDev/unity-mcp&Date)
 
 ## Citation
 
