@@ -481,7 +481,7 @@ namespace MCPForUnity.Editor.Tools
                 raw,
                 previous = SplitDefines(previousRaw),
                 changed = true,
-                hint = "Unity will recompile; poll editor_state or call refresh_unity(wait_for_ready=true)."
+                hint = "Unity will recompile; poll mcpforunity://editor/state or call refresh_unity(wait_for_ready=true)."
             });
         }
 

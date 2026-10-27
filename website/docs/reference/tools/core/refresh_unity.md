@@ -21,7 +21,7 @@ Refresh Unity's asset database and optionally request script compilation. This m
 | `mode` | `Literal['if_dirty', 'force']` | — | Refresh mode |
 | `scope` | `Literal['assets', 'scripts', 'all']` | — | Refresh scope |
 | `compile` | `Literal['none', 'request']` | — | Whether to request compilation |
-| `wait_for_ready` | `bool` | — | If true, wait until editor_state.advice.ready_for_tools is true |
+| `wait_for_ready` | `bool` | — | If true, wait until mcpforunity://editor/state reports data.advice.ready_for_tools true |
 | `job_id` | `str \| None` | — | Resume a previously timed-out refresh job without requesting another refresh |
 
 ## Returns
