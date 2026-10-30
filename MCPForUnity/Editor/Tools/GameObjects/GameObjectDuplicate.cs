@@ -23,49 +23,53 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             Vector3? offset = VectorParsing.ParseVector3(@params["offset"]);
             JToken parentToken = @params["parent"];
 
-            GameObject duplicatedGo = UnityEngine.Object.Instantiate(sourceGo);
-            Undo.RegisterCreatedObjectUndo(duplicatedGo, $"Duplicate {sourceGo.name}");
-
-            if (!string.IsNullOrEmpty(newName))
+            bool reparent = parentToken != null;
+            Transform requestedParent = null;
+            if (reparent && parentToken.Type != JTokenType.Null
+                && !(parentToken.Type == JTokenType.String && string.IsNullOrEmpty(parentToken.ToString())))
             {
-                duplicatedGo.name = newName;
-            }
-            else
-            {
-                duplicatedGo.name = sourceGo.name.Replace("(Clone)", "").Trim() + "_Copy";
-            }
-
-            if (position.HasValue)
-            {
-                duplicatedGo.transform.position = position.Value;
-            }
-            else if (offset.HasValue)
-            {
-                duplicatedGo.transform.position = sourceGo.transform.position + offset.Value;
-            }
-
-            if (parentToken != null)
-            {
-                if (parentToken.Type == JTokenType.Null || (parentToken.Type == JTokenType.String && string.IsNullOrEmpty(parentToken.ToString())))
+                GameObject parentGo = ManageGameObjectCommon.FindObjectInternal(parentToken, "by_id_or_name_or_path");
+                if (parentGo == null)
                 {
-                    duplicatedGo.transform.SetParent(null);
+                    return new ErrorResponse($"Parent ('{parentToken}') not found.");
                 }
-                else
-                {
-                    GameObject newParent = ManageGameObjectCommon.FindObjectInternal(parentToken, "by_id_or_name_or_path");
-                    if (newParent != null)
-                    {
-                        duplicatedGo.transform.SetParent(newParent.transform, true);
-                    }
-                    else
-                    {
-                        McpLog.Warn($"[ManageGameObject.Duplicate] Parent '{parentToken}' not found. Object will remain at root level.");
-                    }
-                }
+                requestedParent = parentGo.transform;
             }
-            else
+
+            int undoGroup = Undo.GetCurrentGroup();
+            GameObject duplicatedGo = DuplicateLikeEditor(sourceGo);
+            if (duplicatedGo == null)
             {
-                duplicatedGo.transform.SetParent(sourceGo.transform.parent, true);
+                return new ErrorResponse($"Unity did not duplicate '{sourceGo.name}'.");
+            }
+
+            // Undo.RecordObject also records the rename as a prefab-instance override.
+            Undo.RecordObject(duplicatedGo, $"Duplicate {sourceGo.name}");
+            duplicatedGo.name = !string.IsNullOrEmpty(newName)
+                ? newName
+                : sourceGo.name.Replace("(Clone)", "").Trim() + "_Copy";
+
+            // Local values are kept: a world-space round trip through a zero-scale or zero-size
+            // parent chain cannot be inverted and corrupts the copy's local scale and position.
+            if (reparent && duplicatedGo.transform.parent != requestedParent)
+            {
+                duplicatedGo.transform.SetParent(requestedParent, false);
+            }
+
+            // Only the prefab contents root's hierarchy is saved; like Edit > Duplicate in a prefab
+            // stage, a copy left at the stage's scene root (or in its UI environment canvas) goes
+            // under the prefab contents root.
+            PrefabStage prefabStage = PrefabStageUtility.GetPrefabStage(duplicatedGo);
+            Transform contentsRoot = prefabStage != null ? prefabStage.prefabContentsRoot.transform : null;
+            if (contentsRoot != null && !duplicatedGo.transform.IsChildOf(contentsRoot))
+            {
+                duplicatedGo.transform.SetParent(contentsRoot, false);
+            }
+
+            if (position.HasValue || offset.HasValue)
+            {
+                Undo.RecordObject(duplicatedGo.transform, $"Duplicate {sourceGo.name}");
+                duplicatedGo.transform.position = position ?? (sourceGo.transform.position + offset.Value);
             }
 
             EditorUtility.SetDirty(duplicatedGo);
@@ -73,8 +77,7 @@ namespace MCPForUnity.Editor.Tools.GameObjects
             // an m_Children entry on its Transform.
             Services.MutationTransactions.SceneMutationLedger.Record(duplicatedGo.transform.parent);
             EditorSceneManager.MarkSceneDirty(duplicatedGo.scene);
-
-            Selection.activeGameObject = duplicatedGo;
+            Undo.CollapseUndoOperations(undoGroup);
 
             return new SuccessResponse(
                 $"Duplicated '{sourceGo.name}' as '{duplicatedGo.name}'.",
@@ -85,6 +88,20 @@ namespace MCPForUnity.Editor.Tools.GameObjects
                     duplicatedObject = Helpers.GameObjectSerializer.GetGameObjectData(duplicatedGo)
                 }
             );
+        }
+
+        // Runs Edit > Duplicate's engine path on the source alone. The copy lands in the source's
+        // scene (prefab stage included), right after the source under the same parent, with its
+        // serialized local values. A prefab instance stays linked to its asset with all overrides
+        // (property modifications, added/removed components and GameObjects) and references
+        // inside the copied hierarchy remapped; Object.Instantiate would unpack it into a plain
+        // clone in the active scene. The copy is left selected, as Edit > Duplicate leaves it.
+        private static GameObject DuplicateLikeEditor(GameObject source)
+        {
+            Selection.objects = new Object[] { source };
+            Unsupported.DuplicateGameObjectsUsingPasteboard();
+            GameObject[] copies = Selection.gameObjects;
+            return copies.Length == 1 && copies[0] != source ? copies[0] : null;
         }
     }
 }
