@@ -34,6 +34,7 @@ _SECTIONS: dict[str, dict[str, Any]] = {
             "If refresh_unity times out, resume the same refresh with its job_id instead of requesting another refresh or manually polling editor state.",
             "Pass wait_timeout to run_tests to start a run and block for its result in one call; get_test_job with wait_timeout is for resuming a wait that timed out, not for repeatedly polling job status.",
             "run_tests refuses to start while a loaded scene or the open prefab stage has unsaved changes (error unsaved_scenes). Keep intended edits with a scoped save and discard the rest; it never saves them for you.",
+            "A PlayMode run_tests imports changes still pending on disk (refresh_unity scope=scripts compiles without importing) before entering Play Mode; if that recompiles, it waits for the reload and then starts the run.",
             "After Unity is ready, call read_console filtered to Error and resolve compilation errors before proceeding.",
             "When the docs group is available, verify version- and package-specific APIs with unity_reflect and unity_docs before writing C#; search project assets for actual shader names.",
         ],

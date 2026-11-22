@@ -16,7 +16,8 @@ from services.tools import get_unity_instance_from_context
 from services.tools.preflight import preflight
 from services.tools.job_contract import ensure_test_job_summary
 import transport.unity_transport as unity_transport
-from transport.legacy.unity_connection import async_send_command_with_retry
+from transport.legacy.unity_connection import _extract_response_reason, async_send_command_with_retry
+import services.tools.refresh_unity as refresh_tool
 from transport.plugin_hub import PluginHub
 from utils.focus_nudge import nudge_unity_focus, should_nudge, reset_nudge_backoff
 
@@ -264,6 +265,12 @@ async def run_tests(
         params,
     )
 
+    if _extract_response_reason(response) == "pending_imports":
+        # Unity imported edits that were on disk but not yet imported and is recompiling. Play
+        # entry would have done that import mid-transition and stalled the run; wait out the
+        # reload here and start the run on the reloaded domain instead.
+        response = await _rerun_after_pending_imports(ctx, unity_instance, params, response)
+
     if not isinstance(response, dict):
         return MCPResponse(success=False, error=str(response))
     if not response.get("success", True):
@@ -278,6 +285,40 @@ async def run_tests(
         started.data.job_id,
         _detail_params(include_details, include_failed, include_skipped),
         wait_timeout,
+    )
+
+
+_PENDING_IMPORTS_RELOAD_TIMEOUT_S = 120.0
+
+
+async def _rerun_after_pending_imports(
+    ctx: Context,
+    unity_instance: str | None,
+    params: dict[str, Any],
+    refusal: Any,
+) -> Any:
+    """Wait for the reload Unity's import started, then send run_tests once more.
+
+    The refusal arrives before that reload can finish (compiling alone takes seconds), so the
+    last reload visible now is the baseline the new one must pass. A compile that fails never
+    reloads; the rerun then answers compile_errors.
+    """
+    state = await refresh_tool._read_editor_state(ctx)
+    compilation = (state or {}).get("compilation")
+    baseline = compilation.get("last_domain_reload_after_unix_ms") if isinstance(compilation, dict) else None
+    ready = await refresh_tool.wait_for_editor_ready(
+        ctx,
+        timeout_s=_PENDING_IMPORTS_RELOAD_TIMEOUT_S,
+        baseline_domain_reload_after_ms=baseline if isinstance(baseline, int) else None,
+        require_reload_observation=True,
+    )
+    if not ready.ready:
+        return refusal
+    return await unity_transport.send_with_unity_instance(
+        async_send_command_with_retry,
+        unity_instance,
+        "run_tests",
+        params,
     )
 
 

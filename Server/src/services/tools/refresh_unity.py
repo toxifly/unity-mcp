@@ -540,10 +540,11 @@ async def refresh_unity(
                                                   ready_result.observed_compile)},
             )
 
-    # After readiness is restored, clear any external-dirty flag for this instance so future tools can proceed cleanly.
+    # After readiness is restored, clear any external-dirty flag for this instance so future tools can
+    # proceed cleanly. scope=scripts compiles without importing, so the changes it saw are still pending.
     try:
         inst = unity_instance or await editor_state.infer_single_instance_id(ctx)
-        if inst:
+        if inst and scope != "scripts":
             external_changes_scanner.clear_dirty(inst)
     except Exception:
         pass

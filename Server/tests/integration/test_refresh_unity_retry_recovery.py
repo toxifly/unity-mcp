@@ -52,6 +52,37 @@ async def test_refresh_unity_recovers_from_retry_disconnect(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_scripts_scope_refresh_keeps_external_changes_dirty(monkeypatch):
+    """scope=scripts compiles without importing: the changes stay pending, so run_tests'
+    refresh-if-dirty preflight must still see them."""
+    from services.tools.refresh_unity import refresh_unity
+    import services.tools.refresh_unity as refresh_mod
+
+    inst = "UnityMCPTests@cc8756d4cce0805a"
+    ctx = DummyContext()
+    await ctx.set_state("unity_instance", inst)
+    external_changes_scanner._states[inst] = ExternalChangesState(dirty=True, dirty_since_unix_ms=1)
+
+    async def fake_send_with_unity_instance(send_fn, unity_instance, command_type, params, **kwargs):
+        return {"success": True, "data": {"refresh_triggered": False, "compile_requested": False}}
+
+    state_tick = 0
+
+    async def fake_get_editor_state(ctx):
+        nonlocal state_tick
+        state_tick += 1
+        return {"data": {"update_tick": state_tick, "advice": {"ready_for_tools": True}}}
+
+    monkeypatch.setattr(refresh_mod.unity_transport, "send_with_unity_instance", fake_send_with_unity_instance)
+    monkeypatch.setattr(refresh_mod.editor_state, "get_editor_state", fake_get_editor_state)
+
+    resp = await refresh_unity(ctx, scope="scripts", wait_for_ready=True)
+    payload = resp.model_dump() if hasattr(resp, "model_dump") else resp
+    assert payload["success"] is True
+    assert external_changes_scanner._states[inst].dirty is True
+
+
+@pytest.mark.asyncio
 async def test_compile_refresh_returns_terminal_summary_after_stable_ready(monkeypatch):
     import services.tools.refresh_unity as refresh_mod
 
