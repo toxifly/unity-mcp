@@ -540,3 +540,63 @@ async def test_preflight_rechecks_state_after_its_own_refresh(monkeypatch):
 
     assert gate is None
     assert reads == 2
+
+
+_PENDING_IMPORTS = {
+    "success": False,
+    "error": "pending_imports",
+    "data": {"reason": "pending_imports", "retry_after_ms": 1000},
+}
+
+
+def _patch_pending_imports(monkeypatch, responses, ready=True):
+    """Unity answers run_tests from `responses` in order; the reload wait returns `ready`."""
+    import services.tools.run_tests as mod
+    from services.tools.refresh_unity import EditorReadyResult
+
+    sent = []
+    waits = []
+
+    async def fake_send(send_fn, unity_instance, command_type, params, **kwargs):
+        sent.append(params)
+        return responses[len(sent) - 1]
+
+    async def fake_state(ctx):
+        return {"compilation": {"last_domain_reload_after_unix_ms": 1234}}
+
+    async def fake_wait(ctx, timeout_s=30.0, **kwargs):
+        waits.append(kwargs)
+        return EditorReadyResult(ready, 0.0, None, True, True)
+
+    monkeypatch.setattr(mod.unity_transport, "send_with_unity_instance", fake_send)
+    monkeypatch.setattr(mod.refresh_tool, "_read_editor_state", fake_state)
+    monkeypatch.setattr(mod.refresh_tool, "wait_for_editor_ready", fake_wait)
+    return sent, waits
+
+
+@pytest.mark.asyncio
+async def test_pending_imports_waits_for_the_reload_then_reruns(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    started = {"success": True, "data": {"job_id": "abc123", "status": "running", "mode": "PlayMode"}}
+    sent, waits = _patch_pending_imports(monkeypatch, [_PENDING_IMPORTS, started])
+
+    resp = await run_tests(DummyContext(), mode="PlayMode")
+
+    assert resp.success is True
+    assert resp.data.job_id == "abc123"
+    assert len(sent) == 2 and sent[0] == sent[1]
+    assert waits == [{"baseline_domain_reload_after_ms": 1234, "require_reload_observation": True}]
+
+
+@pytest.mark.asyncio
+async def test_pending_imports_reload_timeout_returns_the_refusal(monkeypatch):
+    from services.tools.run_tests import run_tests
+
+    sent, _ = _patch_pending_imports(monkeypatch, [_PENDING_IMPORTS], ready=False)
+
+    resp = await run_tests(DummyContext(), mode="PlayMode")
+
+    assert resp.success is False
+    assert resp.error == "pending_imports"
+    assert len(sent) == 1

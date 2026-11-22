@@ -48,6 +48,25 @@ namespace MCPForUnityTests.Editor.Tools
         }
 
         [Test]
+        public void AnImportThatCompiledNothingIsNotRefused()
+        {
+            Assert.IsNull(RunTests.PendingImportsRefusal(false));
+        }
+
+        [Test]
+        public void AnImportThatStartedACompileAsksTheCallerToWaitForTheReload()
+        {
+            // A PlayMode run dispatched while that compile and its domain reload are pending dies
+            // in the reload; the server's run_tests keys its wait-and-rerun on this reason.
+            var refusal = JObject.FromObject(RunTests.PendingImportsRefusal(true));
+
+            Assert.AreEqual("pending_imports", (string)refusal["error"]);
+            Assert.AreEqual("pending_imports", (string)refusal["data"]["reason"]);
+            Assert.Greater((int)refusal["data"]["retry_after_ms"], 0);
+            StringAssert.Contains("ready_for_tools", (string)refusal["data"]["message"]);
+        }
+
+        [Test]
         public void UnsavedScenesListsADirtyLoadedScene()
         {
             int before = TestRunnerService.UnsavedScenes().Count;

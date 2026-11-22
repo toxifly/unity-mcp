@@ -7,6 +7,7 @@ using MCPForUnity.Editor.Resources.Tests;
 using MCPForUnity.Editor.Services;
 using Newtonsoft.Json.Linq;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEditor.TestTools.TestRunner.Api;
 
 namespace MCPForUnity.Editor.Tools
@@ -68,6 +69,15 @@ namespace MCPForUnity.Editor.Tools
                     if (unsavedRefusal != null)
                     {
                         return Task.FromResult(unsavedRefusal);
+                    }
+
+                    if (parsedMode.Value == TestMode.PlayMode)
+                    {
+                        var importRefusal = PendingImportsRefusal(ImportPendingChanges());
+                        if (importRefusal != null)
+                        {
+                            return Task.FromResult(importRefusal);
+                        }
                     }
                 }
 
@@ -151,6 +161,52 @@ namespace MCPForUnity.Editor.Tools
                           + "they are saved or discarded. Keep intended edits with save_scene_scoped or "
                           + "save_prefab_scoped; drop the rest with manage_scene(action=\"load\", "
                           + "discard_unsaved=true). Then rerun."
+            });
+        }
+
+        /// <summary>
+        /// Entering Play Mode runs the Editor's own asset refresh. A script that was compiled but
+        /// never imported (refresh_unity scope=scripts) is imported there, and the recompile and
+        /// domain reload it starts land mid-transition: the run never starts and the job fails its
+        /// init window. Importing here moves that refresh, which Play entry would do anyway, ahead
+        /// of the run. Returns whether it started a compilation.
+        /// </summary>
+        private static bool ImportPendingChanges()
+        {
+            bool compileStarted = false;
+            void OnCompilationStarted(object _) => compileStarted = true;
+            CompilationPipeline.compilationStarted += OnCompilationStarted;
+            try
+            {
+                AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            }
+            finally
+            {
+                CompilationPipeline.compilationStarted -= OnCompilationStarted;
+            }
+
+            return compileStarted || EditorApplication.isCompiling;
+        }
+
+        /// <summary>
+        /// A run dispatched while the import's compilation and domain reload are pending dies in
+        /// that reload. Returns the refusal telling the caller to wait for the reload and rerun
+        /// (the server's run_tests does both), or null when nothing was recompiled.
+        /// </summary>
+        internal static object PendingImportsRefusal(bool compileStarted)
+        {
+            if (!compileStarted)
+            {
+                return null;
+            }
+
+            return new ErrorResponse("pending_imports", new
+            {
+                reason = "pending_imports",
+                retry_after_ms = 1000,
+                message = "Imported asset changes that were on disk but not yet imported (for example a "
+                          + "script compiled with refresh_unity scope=scripts); Unity is recompiling and "
+                          + "reloading scripts. Wait for editor_state ready_for_tools, then rerun."
             });
         }
 
