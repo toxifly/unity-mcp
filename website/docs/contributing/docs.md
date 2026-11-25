@@ -25,7 +25,7 @@ The generator owns everything inside the front-matter banner. The **examples blo
 1. Find the file under `website/docs/`.
 2. Edit the markdown.
 3. Local preview: `cd website && npm run start` → http://localhost:3000/unity-mcp/
-4. Commit and open a PR against `develop`.
+4. Commit and open a PR against `main`.
 
 Before opening the PR, run `cd website && npm run build`. The build fails on dead links and missing pages, so they surface before merge.
 

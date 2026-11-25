@@ -5,7 +5,7 @@
 
 ## Contributing
 
-**Branch off `develop`** and open PRs against `develop`.
+**Branch off `main`** and open PRs against `main`.
 
 Before proposing major new features, please reach out to discuss - someone may already be working on it or it may have been considered previously. Open an issue or discussion to coordinate.
 

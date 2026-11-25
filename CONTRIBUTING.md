@@ -5,13 +5,13 @@ Thanks for wanting to help! MCP for Unity is community-maintained and PRs of any
 ## Quick Start
 
 1. **Fork** this repo and **clone** your fork.
-2. Branch off `develop`:
+2. Branch off `main`:
    ```bash
-   git checkout -b feat/your-idea origin/develop
+   git checkout -b feat/your-idea origin/main
    ```
 3. Install the dev environment (see [Dev Setup](website/docs/contributing/dev-setup.md)).
 4. Make your change with tests.
-5. Open a PR against `develop`.
+5. Open a PR against `main`.
 
 ## What We Look For
 
@@ -37,7 +37,7 @@ The pre-commit hook regenerates `website/docs/reference/` whenever you touch a t
 
 ## Pull Request Checklist
 
-- [ ] Branched off `develop`
+- [ ] Branched off `main`
 - [ ] New or updated tests
 - [ ] Docs updated (the auto-gen handles the tool reference; narrative docs under `website/docs/` are hand-written)
 - [ ] No commented-out code, no `// removed for X` markers, no `_unused` renames
