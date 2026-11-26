@@ -212,7 +212,7 @@ Exit codes: `0` pass, `1` blocking-leg regression, `2` bridge unreachable / setu
 - Don't add features without tests
 - Don't create helper functions for one-time operations
 - Don't add error handling for scenarios that can't happen
-- Don't commit to `develop` or `main` directly - branch off `develop` and open PRs against `develop`
+- Don't commit to `main` directly - branch off `main` and open PRs against `main`
 - Don't add docstrings/comments to code you didn't change
 - Don't run, register, or fall back to a published server package; every server command runs the Server Source checkout
 
