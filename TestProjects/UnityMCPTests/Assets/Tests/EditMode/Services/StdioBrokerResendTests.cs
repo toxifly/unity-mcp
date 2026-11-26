@@ -25,13 +25,10 @@ namespace MCPForUnityTests.Editor.Services
         private const int ReadTimeoutMs = 10000;
 
         [Test]
-        public void IsBrokerResend_SamePayloadFromAnotherConnection_IsAResend()
+        public void IsBrokerResend_SameRequestIdFromAnotherConnection_IsAResend()
         {
-            object first = new object();
-            object second = new object();
-
-            Assert.IsTrue(StdioBridgeHost.IsBrokerResend("{\"type\":\"a\"}", first, "{\"type\":\"a\"}", second),
-                "same payload arriving on a different connection is the resend signature");
+            Assert.IsTrue(StdioBridgeHost.IsBrokerResend("r1", new object(), "r1", new object()),
+                "the same request id arriving on a different connection is the resend signature");
         }
 
         [Test]
@@ -39,24 +36,42 @@ namespace MCPForUnityTests.Editor.Services
         {
             object connection = new object();
 
-            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("{\"type\":\"a\"}", connection, "{\"type\":\"a\"}", connection),
-                "one connection handles commands sequentially, so identical payloads are distinct requests");
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("r1", connection, "r1", connection),
+                "one connection handles commands sequentially, so a repeat is a distinct request");
         }
 
         [Test]
-        public void IsBrokerResend_DifferentPayload_IsNotAResend()
+        public void IsBrokerResend_DifferentRequestId_IsNotAResend()
         {
-            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("{\"type\":\"a\"}", new object(), "{\"type\":\"b\"}", new object()),
-                "different work must never be collapsed");
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("r1", new object(), "r2", new object()),
+                "two clients sending the identical command must both run");
+        }
+
+        [Test]
+        public void IsBrokerResend_NoRequestId_IsNotAResend()
+        {
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend(null, new object(), null, new object()),
+                "commands without a request id cannot be proven to be a resend");
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("", new object(), "", new object()),
+                "an empty request id cannot be proven to be a resend");
         }
 
         [Test]
         public void IsBrokerResend_UnknownOwner_IsNotAResend()
         {
-            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("{\"type\":\"a\"}", null, "{\"type\":\"a\"}", new object()),
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("r1", null, "r1", new object()),
                 "a command with no recorded owner cannot be proven to be a resend");
-            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("{\"type\":\"a\"}", new object(), "{\"type\":\"a\"}", null),
+            Assert.IsFalse(StdioBridgeHost.IsBrokerResend("r1", new object(), "r1", null),
                 "an incoming command with no owner cannot be proven to be a resend");
+        }
+
+        [Test]
+        public void ReadRequestId_ReadsTheBrokerId()
+        {
+            Assert.AreEqual("r1", StdioBridgeHost.ReadRequestId("{\"type\":\"a\",\"request_id\":\"r1\"}"));
+            Assert.IsNull(StdioBridgeHost.ReadRequestId("{\"type\":\"a\"}"));
+            Assert.IsNull(StdioBridgeHost.ReadRequestId("{\"type\":\"a\",\"request_id\":7}"));
+            Assert.IsNull(StdioBridgeHost.ReadRequestId("not json"));
         }
 
         /// <summary>
@@ -77,7 +92,7 @@ namespace MCPForUnityTests.Editor.Services
             int port = StdioBridgeHost.GetCurrentPort();
             // MCP polls this same bridge while the test runs. Identify only our command,
             // so unrelated get_test_job traffic does not look like a duplicate resend.
-            string commandJson = "{\"type\":\"read_console\",\"test_nonce\":\""
+            string commandJson = "{\"type\":\"read_console\",\"request_id\":\""
                 + Guid.NewGuid().ToString("N") + "\",\"params\":{\"action\":\"get\",\"count\":1}}";
             byte[] command = Encoding.UTF8.GetBytes(commandJson);
 

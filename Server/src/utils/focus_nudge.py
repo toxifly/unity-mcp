@@ -685,7 +685,9 @@ async def nudge_unity_focus(
     original_app = None
     activation_attempted = False
     try:
-        original_app = _get_frontmost_app()
+        # The platform helpers run blocking subprocesses (PowerShell with Add-Type on Windows
+        # takes seconds); keep them off the event loop that serves every other agent.
+        original_app = await asyncio.to_thread(_get_frontmost_app)
         if original_app is None:
             logger.debug("Could not determine frontmost app")
             return False
@@ -700,14 +702,14 @@ async def nudge_unity_focus(
         # ShowWindow can change focus even if the later activation check fails.
         # Restore after every attempt, including a subprocess failure or timeout.
         activation_attempted = True
-        if not _focus_app("Unity", unity_project_path):
+        if not await asyncio.to_thread(_focus_app, "Unity", unity_project_path):
             logger.warning(f"Failed to focus Unity{project_info}")
             return False
 
         # macOS activation is asynchronous; Windows verifies the target HWND itself.
         await asyncio.sleep(0.5)
         if platform.system() != "Windows":
-            current_app = _get_frontmost_app()
+            current_app = await asyncio.to_thread(_get_frontmost_app)
             if current_app and "Unity" not in current_app.name:
                 logger.warning(f"Unity activation didn't complete - current app is {current_app}")
 
@@ -717,7 +719,7 @@ async def nudge_unity_focus(
     finally:
         try:
             if activation_attempted and original_app is not None:
-                if _focus_app(original_app):
+                if await asyncio.to_thread(_focus_app, original_app):
                     logger.info(f"Returned focus to {original_app}")
                 else:
                     logger.warning(f"Failed to return focus to {original_app}")

@@ -220,10 +220,12 @@ namespace MCPForUnity.Editor.Tools
             }
 
             string sceneFileName = string.IsNullOrEmpty(name) ? null : $"{name}.unity";
-            // Construct full system path correctly: ProjectRoot/<rootFolder>/relativeDir/sceneFileName
+            // Physical directory for the scene. "Packages/<name>/..." is virtual: the package may
+            // live in Library/PackageCache or a file: dependency outside the project, and Unity
+            // resolves it through Path.GetFullPath.
             string fullPathDir = rootFolder == "Assets"
                 ? Path.Combine(Application.dataPath, relativeDir) // Application.dataPath ends in Assets
-                : Path.Combine(GetProjectRoot(), rootFolder, relativeDir);
+                : Path.GetFullPath(AssetPathUtility.NormalizeSeparators(Path.Combine(rootFolder, relativeDir)));
             string fullPath = string.IsNullOrEmpty(sceneFileName)
                 ? null
                 : Path.Combine(fullPathDir, sceneFileName);
@@ -1657,11 +1659,6 @@ namespace MCPForUnity.Editor.Tools
 
         // ── Path helpers ───────────────────────────────────────────────────
 
-        private static string GetProjectRoot()
-        {
-            return Application.dataPath.Substring(0, Application.dataPath.Length - "Assets".Length);
-        }
-
         /// <summary>
         /// True when the path already carries a project root folder that Unity's asset APIs
         /// understand, so it must not be re-rooted under Assets/.
@@ -1691,7 +1688,7 @@ namespace MCPForUnity.Editor.Tools
 
             try
             {
-                return File.Exists(Path.Combine(GetProjectRoot(), projectRelativePath));
+                return File.Exists(Path.GetFullPath(projectRelativePath));
             }
             catch (ArgumentException)
             {

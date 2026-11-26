@@ -573,25 +573,41 @@ namespace MCPForUnity.Editor.Services
         // resolved and always fell back to the raw signal.
         private static bool _pipelineCompilationRunning;
 
+        // Grace window for the gap where EditorApplication.isCompiling is true but no compile is
+        // running: just before compilationStarted and between compilationFinished and the
+        // domain reload. Both normally last a second or two; a reload deferred by
+        // LockReloadAssemblies holds the gap indefinitely (issue #1276).
+        private const double CompileGapGraceSeconds = 10.0;
+        private static double _compileGapSince = -1;
+
         /// <summary>
         /// Returns the actual compilation state, working around known Unity quirks where
-        /// EditorApplication.isCompiling reports false positives while no compilation is
-        /// running: a recompile deferred by Recompile-After-Finished-Playing keeps it true
-        /// for the whole play session (issue #549), and a project holding
-        /// EditorApplication.LockReloadAssemblies keeps it true until the lock is released
-        /// (issue #1276). In both cases the event-tracked pipeline flag is authoritative.
+        /// EditorApplication.isCompiling reports true while no compilation is running: a
+        /// recompile deferred by Recompile-After-Finished-Playing keeps it true for the whole
+        /// play session (issue #549), and a project holding EditorApplication.LockReloadAssemblies
+        /// keeps it true until the lock is released (issue #1276). Outside Play mode a short gap
+        /// still counts as compiling, because a compile or domain reload is about to happen.
+        /// Main thread only.
         /// </summary>
         internal static bool GetActualIsCompiling()
         {
-            // If EditorApplication.isCompiling is false, Unity is definitely not compiling
-            if (!EditorApplication.isCompiling)
+            if (!EditorApplication.isCompiling || _pipelineCompilationRunning)
+            {
+                _compileGapSince = -1;
+                return EditorApplication.isCompiling;
+            }
+
+            if (EditorApplication.isPlaying)
             {
                 return false;
             }
 
-            // Otherwise trust the event-tracked pipeline state: isCompiling stays true for as
-            // long as an assembly reload is deferred, with no compilation actually running.
-            return _pipelineCompilationRunning;
+            double now = EditorApplication.timeSinceStartup;
+            if (_compileGapSince < 0)
+            {
+                _compileGapSince = now;
+            }
+            return now - _compileGapSince < CompileGapGraceSeconds;
         }
     }
 }

@@ -31,6 +31,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         private int state = Waiting;
 
         public string CommandJson;
+        public string RequestId;
         public TaskCompletionSource<string> Tcs;
         public long EnqueuedAtTimestamp;
 
@@ -403,28 +404,47 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         }
 
         /// <summary>
-        /// True when an already-queued command is the same payload arriving from a different
-        /// connection — the signature of a broker that reconnected and resent. Payload equality
-        /// alone is not enough: a single connection handles one command at a time, so two
-        /// identical payloads on the same connection are sequential and genuinely distinct.
+        /// True when an already-queued command carries the same broker request id as one arriving
+        /// from a different connection — the signature of a broker that reconnected and resent.
+        /// Payload equality is not enough: the stdio bridge serves several clients at once, and two
+        /// agents may legitimately send the identical command. Commands without a request id are
+        /// never collapsed. One connection handles one command at a time, so a repeat on the same
+        /// connection is a new request.
         /// </summary>
         internal static bool IsBrokerResend(
-            string queuedCommandJson, object queuedOwner, string incomingCommandJson, object incomingOwner)
+            string queuedRequestId, object queuedOwner, string incomingRequestId, object incomingOwner)
         {
             if (queuedOwner == null || incomingOwner == null) return false;
             if (ReferenceEquals(queuedOwner, incomingOwner)) return false;
-            return string.Equals(queuedCommandJson, incomingCommandJson, StringComparison.Ordinal);
+            if (string.IsNullOrEmpty(incomingRequestId)) return false;
+            return string.Equals(queuedRequestId, incomingRequestId, StringComparison.Ordinal);
+        }
+
+        /// <summary>
+        /// The broker's <c>request_id</c>, which it reuses when it resends a command. Null when
+        /// absent or the frame is not a JSON object.
+        /// </summary>
+        internal static string ReadRequestId(string commandText)
+        {
+            try
+            {
+                return (JObject.Parse(commandText)["request_id"] as JValue)?.Value as string;
+            }
+            catch (JsonException)
+            {
+                return null;
+            }
         }
 
         /// <summary>
         /// Finds the queue id of an in-flight command that <paramref name="incomingOwner"/> is
         /// resending. Callers must hold <see cref="lockObj"/>.
         /// </summary>
-        private static string FindBrokerResendTarget(string commandText, object incomingOwner)
+        private static string FindBrokerResendTarget(string requestId, object incomingOwner)
         {
             foreach (var kvp in commandQueue)
             {
-                if (IsBrokerResend(kvp.Value.CommandJson, kvp.Value.Owner, commandText, incomingOwner))
+                if (IsBrokerResend(kvp.Value.RequestId, kvp.Value.Owner, requestId, incomingOwner))
                 {
                     return kvp.Key;
                 }
@@ -790,9 +810,10 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                             // to the original instead of queueing a copy.
                             TaskCompletionSource<string> pending = tcs;
                             string awaitedId = commandId;
+                            string requestId = ReadRequestId(commandText);
                             lock (lockObj)
                             {
-                                string inFlightId = FindBrokerResendTarget(commandText, client);
+                                string inFlightId = FindBrokerResendTarget(requestId, client);
                                 if (inFlightId != null)
                                 {
                                     QueuedCommand inFlight = commandQueue[inFlightId];
@@ -809,6 +830,7 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
                                     commandQueue[commandId] = new QueuedCommand
                                     {
                                         CommandJson = commandText,
+                                        RequestId = requestId,
                                         Tcs = tcs,
                                         EnqueuedAtTimestamp = Stopwatch.GetTimestamp(),
                                         Owner = client

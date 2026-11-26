@@ -206,7 +206,7 @@ namespace MCPForUnity.Editor.Tools
                 retry_after_ms = 1000,
                 message = "Imported asset changes that were on disk but not yet imported (for example a "
                           + "script compiled with refresh_unity scope=scripts); Unity is recompiling and "
-                          + "reloading scripts. Wait for editor_state ready_for_tools, then rerun."
+                          + "reloading scripts. Wait for mcpforunity://editor/state ready_for_tools, then rerun."
             });
         }
 

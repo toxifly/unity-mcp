@@ -1248,15 +1248,24 @@ namespace MCPForUnity.Editor.Clients
         /// <summary>
         /// For a linked git worktree, the main repo root parsed from the .git
         /// pointer file ("gitdir: &lt;root&gt;/.git/worktrees/&lt;name&gt;"),
-        /// normalized. Null for a regular checkout (.git directory) or
+        /// normalized. The pointer is looked up from <paramref name="startDir"/>
+        /// upwards, since the Unity project may sit in a subfolder of the
+        /// worktree. Null for a regular checkout (.git directory), no repo, or
         /// anything unparseable.
         /// </summary>
-        private static string GetGitMainRepoRoot(string dir)
+        internal static string GetGitMainRepoRoot(string startDir)
         {
             try
             {
-                string gitPath = Path.Combine(dir, ".git");
-                if (!File.Exists(gitPath)) return null;
+                string dir = startDir;
+                string gitPath = null;
+                for (; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+                {
+                    gitPath = Path.Combine(dir, ".git");
+                    if (Directory.Exists(gitPath)) return null;
+                    if (File.Exists(gitPath)) break;
+                }
+                if (string.IsNullOrEmpty(dir)) return null;
                 string line = File.ReadAllText(gitPath).Trim();
                 if (!line.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) return null;
                 string gitDir = line.Substring("gitdir:".Length).Trim();

@@ -118,6 +118,31 @@ class TestNudgeUnityFocus:
             result = await nudge_unity_focus(force=False)
             assert result is False
 
+    @pytest.mark.asyncio
+    async def test_platform_calls_run_off_the_event_loop(self):
+        import threading
+        from utils.focus_nudge import _FrontmostAppInfo
+        loop_thread = threading.get_ident()
+        threads = []
+
+        def frontmost():
+            threads.append(threading.get_ident())
+            return _FrontmostAppInfo(name="Terminal")
+
+        def focus(*_args):
+            threads.append(threading.get_ident())
+            return True
+
+        with patch("utils.focus_nudge._is_available", return_value=True), \
+             patch("utils.focus_nudge.platform.system", return_value="Windows"), \
+             patch("utils.focus_nudge._get_frontmost_app", side_effect=frontmost), \
+             patch("utils.focus_nudge._focus_app", side_effect=focus), \
+             patch("utils.focus_nudge.asyncio.sleep", new=AsyncMock()):
+            assert await nudge_unity_focus(focus_duration_s=0.01, force=True) is True
+
+        assert len(threads) == 3
+        assert loop_thread not in threads
+
 
 @pytest.mark.parametrize("value", ["1", "true", " YES ", "On"])
 @pytest.mark.asyncio

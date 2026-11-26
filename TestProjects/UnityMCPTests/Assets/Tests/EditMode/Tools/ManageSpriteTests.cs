@@ -1068,6 +1068,7 @@ namespace MCPForUnityTests.Editor.Tools
             var sentinel = new AnimationClip { frameRate = 99f };
             AssetDatabase.CreateAsset(sentinel, $"{TempRoot}/walk.anim");
             AssetDatabase.SaveAssets();
+            string guidBefore = AssetDatabase.AssetPathToGUID($"{TempRoot}/walk.anim");
 
             var result = Run(new JObject
             {
@@ -1081,6 +1082,11 @@ namespace MCPForUnityTests.Editor.Tools
             Assert.AreEqual(1, result.Value<int>("clip_count"));
             var after = AssetDatabase.LoadAssetAtPath<AnimationClip>($"{TempRoot}/walk.anim");
             Assert.AreEqual(12f, after.frameRate, "an authorised overwrite must actually replace it");
+            var binding = AnimationUtility.GetObjectReferenceCurveBindings(after).Single();
+            Assert.AreEqual(4, AnimationUtility.GetObjectReferenceCurve(after, binding).Length,
+                "the replaced clip must carry the new frames");
+            Assert.AreEqual(guidBefore, AssetDatabase.AssetPathToGUID($"{TempRoot}/walk.anim"),
+                "overwriting must keep the clip's GUID, or controllers that use it lose their motion");
         }
 
         [Test]

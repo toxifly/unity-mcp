@@ -14,6 +14,7 @@ import struct
 import threading
 import time
 from typing import Any
+import uuid
 
 from models.models import MCPResponse, UnityInstanceInfo
 from core.bridge_handshake import (
@@ -392,6 +393,10 @@ class UnityConnection:
                 return None
 
         request_may_have_reached_unity = False
+        # Reused by every resend of this command below, so the bridge can attach a resend to
+        # the original instead of running it twice, without collapsing another client's
+        # identical command.
+        request_id = uuid.uuid4().hex
         # Extract hash suffix from instance id (e.g., Project@hash)
         target_hash: str | None = None
         if self.instance_id and '@' in self.instance_id:
@@ -445,6 +450,7 @@ class UnityConnection:
                     payload = json.dumps({
                         'type': command_type,
                         'params': params,
+                        'request_id': request_id,
                     }).encode('utf-8')
 
                 # Send/receive are serialized to protect the shared socket

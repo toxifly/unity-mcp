@@ -194,15 +194,27 @@ namespace MCPForUnity.Editor.Tools.Sprite2D
                 settings.loopTime = loop;
                 AnimationUtility.SetAnimationClipSettings(clip, settings);
 
-                // CreateAsset replaces an existing asset itself; deleting first left nothing at
-                // the path when the replacement failed to be written. Reference equality, not a
-                // null check: a failed replacement leaves the old asset loadable at the path.
-                AssetDatabase.CreateAsset(clip, clipPath);
-                if (AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath) != clip)
+                if (existing != null)
                 {
+                    // Overwrite in place: CreateAsset on an existing path deletes the asset and
+                    // its .meta, so the new GUID would leave every controller state that used
+                    // the old clip pointing at a missing asset.
+                    clip.name = existing.name; // CopySerialized copies m_Name too
+                    EditorUtility.CopySerialized(clip, existing);
                     Object.DestroyImmediate(clip);
-                    diagnostics.AddWarning("CLIP_WRITE_FAILED", $"Clip '{clipName}': Unity did not write '{clipPath}' - skipped.", "Check the Unity console for the AssetDatabase error.");
-                    continue;
+                    EditorUtility.SetDirty(existing);
+                }
+                else
+                {
+                    // Reference equality, not a null check: confirms this clip is the asset now
+                    // at the path.
+                    AssetDatabase.CreateAsset(clip, clipPath);
+                    if (AssetDatabase.LoadAssetAtPath<AnimationClip>(clipPath) != clip)
+                    {
+                        Object.DestroyImmediate(clip);
+                        diagnostics.AddWarning("CLIP_WRITE_FAILED", $"Clip '{clipName}': Unity did not write '{clipPath}' - skipped.", "Check the Unity console for the AssetDatabase error.");
+                        continue;
+                    }
                 }
 
                 created.Add(new SpriteClipInfo
