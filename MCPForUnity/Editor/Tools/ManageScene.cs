@@ -1672,13 +1672,11 @@ namespace MCPForUnity.Editor.Tools
         }
 
         /// <summary>
-        /// Existence check that works for both roots, accepting either answer.
-        /// The AssetDatabase is the only one that resolves "Packages/..." — embedded packages
-        /// live in Library/PackageCache, not under the project root, so File.Exists misses them
-        /// (ManageAsset.cs carries the same note). File.Exists still covers an Assets/ scene
-        /// written to disk but not yet imported, which the AssetDatabase does not know about
-        /// until a refresh. This guard only exists to produce a clearer error than
-        /// EditorSceneManager.OpenScene would, so erring toward accepting is the safe direction.
+        /// Existence check that works for both roots, accepting either answer: the AssetDatabase,
+        /// or the file on disk (Path.GetFullPath maps "Packages/..." to the package's real folder),
+        /// which also covers a scene written but not yet imported. This guard only exists to
+        /// produce a clearer error than EditorSceneManager.OpenScene would, so erring toward
+        /// accepting is the safe direction.
         /// </summary>
         internal static bool SceneAssetExists(string projectRelativePath)
         {

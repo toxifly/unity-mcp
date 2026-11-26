@@ -299,12 +299,10 @@ namespace MCPForUnity.Editor.Tools
             JObject queueWait)
         {
             var handlerInfo = GetHandlerInfo(commandName);
+            var queueWaitSnapshot = (JObject)queueWait?.DeepClone();
 
             if (handlerInfo.IsAsync)
             {
-                var queueWaitSnapshot = queueWait == null
-                    ? null
-                    : (JObject)queueWait.DeepClone();
                 ExecuteAsyncHandler(handlerInfo, @params, commandName, tcs, queueWaitSnapshot);
                 return null;
             }
@@ -325,7 +323,7 @@ namespace MCPForUnity.Editor.Tools
                     @params,
                     commandName,
                     tcs,
-                    queueWait == null ? null : (JObject)queueWait.DeepClone());
+                    queueWaitSnapshot);
                 return null;
             }
 

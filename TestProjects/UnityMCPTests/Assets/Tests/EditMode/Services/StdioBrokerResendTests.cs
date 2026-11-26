@@ -72,6 +72,10 @@ namespace MCPForUnityTests.Editor.Services
             Assert.IsNull(StdioBridgeHost.ReadRequestId("{\"type\":\"a\"}"));
             Assert.IsNull(StdioBridgeHost.ReadRequestId("{\"type\":\"a\",\"request_id\":7}"));
             Assert.IsNull(StdioBridgeHost.ReadRequestId("not json"));
+            Assert.IsNull(StdioBridgeHost.ReadRequestId("[\"request_id\"]"));
+            Assert.AreEqual("r1", StdioBridgeHost.ReadRequestId(
+                "{\"type\":\"a\",\"params\":{\"request_id\":\"inner\",\"list\":[1,{\"x\":2}]},\"request_id\":\"r1\"}"),
+                "only the top-level id counts; nested values are skipped");
         }
 
         /// <summary>

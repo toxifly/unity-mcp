@@ -421,14 +421,24 @@ namespace MCPForUnity.Editor.Services.Transport.Transports
         }
 
         /// <summary>
-        /// The broker's <c>request_id</c>, which it reuses when it resends a command. Null when
-        /// absent or the frame is not a JSON object.
+        /// The broker's top-level <c>request_id</c>, which it reuses when it resends a command.
+        /// Null when absent or the frame is not a JSON object. Scans tokens without building a
+        /// tree, skipping other values, and stops at the id (the broker sends it before params).
         /// </summary>
         internal static string ReadRequestId(string commandText)
         {
             try
             {
-                return (JObject.Parse(commandText)["request_id"] as JValue)?.Value as string;
+                using var reader = new JsonTextReader(new StringReader(commandText));
+                if (!reader.Read() || reader.TokenType != JsonToken.StartObject) return null;
+                while (reader.Read() && reader.TokenType == JsonToken.PropertyName)
+                {
+                    bool isId = (string)reader.Value == "request_id";
+                    if (!reader.Read()) return null;
+                    if (isId) return reader.TokenType == JsonToken.String ? (string)reader.Value : null;
+                    reader.Skip();
+                }
+                return null;
             }
             catch (JsonException)
             {

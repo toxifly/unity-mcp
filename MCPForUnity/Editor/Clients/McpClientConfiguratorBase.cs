@@ -1257,22 +1257,21 @@ namespace MCPForUnity.Editor.Clients
         {
             try
             {
-                string dir = startDir;
-                string gitPath = null;
-                for (; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
+                for (string dir = startDir; !string.IsNullOrEmpty(dir); dir = Path.GetDirectoryName(dir))
                 {
-                    gitPath = Path.Combine(dir, ".git");
+                    string gitPath = Path.Combine(dir, ".git");
                     if (Directory.Exists(gitPath)) return null;
-                    if (File.Exists(gitPath)) break;
+                    if (!File.Exists(gitPath)) continue;
+
+                    string line = File.ReadAllText(gitPath).Trim();
+                    if (!line.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) return null;
+                    string gitDir = line.Substring("gitdir:".Length).Trim();
+                    if (!Path.IsPathRooted(gitDir)) gitDir = Path.Combine(dir, gitDir);
+                    gitDir = NormalizePath(Path.GetFullPath(gitDir));
+                    int i = gitDir.LastIndexOf("/.git/", StringComparison.OrdinalIgnoreCase);
+                    return i > 0 ? gitDir.Substring(0, i) : null;
                 }
-                if (string.IsNullOrEmpty(dir)) return null;
-                string line = File.ReadAllText(gitPath).Trim();
-                if (!line.StartsWith("gitdir:", StringComparison.OrdinalIgnoreCase)) return null;
-                string gitDir = line.Substring("gitdir:".Length).Trim();
-                if (!Path.IsPathRooted(gitDir)) gitDir = Path.Combine(dir, gitDir);
-                gitDir = NormalizePath(Path.GetFullPath(gitDir));
-                int i = gitDir.LastIndexOf("/.git/", StringComparison.OrdinalIgnoreCase);
-                return i > 0 ? gitDir.Substring(0, i) : null;
+                return null;
             }
             catch { return null; }
         }

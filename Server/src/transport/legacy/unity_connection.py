@@ -449,8 +449,8 @@ class UnityConnection:
                 else:
                     payload = json.dumps({
                         'type': command_type,
+                        'request_id': request_id,  # before params: Unity stops reading here
                         'params': params,
-                        'request_id': request_id,
                     }).encode('utf-8')
 
                 # Send/receive are serialized to protect the shared socket

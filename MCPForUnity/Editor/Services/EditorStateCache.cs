@@ -280,11 +280,8 @@ namespace MCPForUnity.Editor.Services
                 // Tracks whether an assembly compilation is actually running, for
                 // GetActualIsCompiling. Statics reset on domain reload and this
                 // [InitializeOnLoad] ctor re-subscribes, so the flag is per-domain.
-                // Each edge also rebuilds the snapshot: a compile shorter than an update tick
-                // never shows up as a tick-sampled edge, so without this its timestamps stay
-                // hidden behind the cached snapshot. The tracker records those timestamps from
-                // the same events; running its constructor first subscribes it ahead of these
-                // handlers, so its SessionState writes land before the rebuild reads them.
+                // Each edge also rebuilds the snapshot, since tick sampling misses short compiles.
+                // The tracker's ctor runs first so its timestamps are written before the rebuild.
                 System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(CompilationStateTracker).TypeHandle);
                 UnityEditor.Compilation.CompilationPipeline.compilationStarted += _ =>
                 {

@@ -1,3 +1,4 @@
+import transport.legacy.unity_connection as uc
 from transport.legacy.unity_connection import UnityConnection
 from transport.legacy.port_discovery import PortDiscovery
 from core.bridge_handshake import BRIDGE_PROTOCOL_VERSION, BridgeCompatibilityError
@@ -436,6 +437,7 @@ class _DeliveryStageSocket:
     def __init__(self, fail_send_number: int | None = None):
         self.fail_send_number = fail_send_number
         self.send_count = 0
+        self.sent: list[bytes] = []
         self.closed = False
         self.timeout = None
 
@@ -454,8 +456,9 @@ class _DeliveryStageSocket:
     def recv(self, *_args):
         raise BlockingIOError()
 
-    def sendall(self, _data):
+    def sendall(self, data):
         self.send_count += 1
+        self.sent.append(data)
         if self.send_count == self.fail_send_number:
             raise ConnectionError("send failed")
 
@@ -522,3 +525,49 @@ def test_a_short_wait_adds_nothing_to_the_result(monkeypatch):
     result = conn.send_command("manage_scene", {"action": "get_active"}, max_attempts=0)
 
     assert result == {"name": "SampleScene"}
+
+
+def _sent_commands(monkeypatch, *commands):
+    """Send each command once with its first reply lost, so each is resent once."""
+    sock = _DeliveryStageSocket()
+    replies = iter([TimeoutError("reply was lost"), b'{"status":"success","result":{}}'] * len(commands))
+
+    def receive(_sock):
+        reply = next(replies)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    def connect(self, _timeout=None):
+        self.sock = sock
+        self.use_framing = True
+        return True
+
+    monkeypatch.setattr(UnityConnection, "connect", connect)
+    monkeypatch.setattr(UnityConnection, "_ensure_live_connection", lambda self: None)
+    monkeypatch.setattr(UnityConnection, "receive_full_response", lambda self, s: receive(s))
+    monkeypatch.setattr(uc.time, "sleep", lambda _s: None)
+
+    conn = UnityConnection(host="127.0.0.1", port=1)
+    for command_type, params in commands:
+        conn.send_command(command_type, params)
+    # Framing sends the length header, then the payload.
+    return [json.loads(data) for data in sock.sent[1::2]]
+
+
+def test_resend_reuses_the_request_id(monkeypatch):
+    first, resend = _sent_commands(monkeypatch, ("manage_gameobject", {"action": "create"}))
+
+    assert first["request_id"]
+    assert resend["request_id"] == first["request_id"]
+    assert list(first) == ["type", "request_id", "params"], "Unity stops reading at request_id"
+
+
+def test_identical_commands_get_distinct_request_ids(monkeypatch):
+    sent = _sent_commands(
+        monkeypatch,
+        ("manage_gameobject", {"action": "create"}),
+        ("manage_gameobject", {"action": "create"}),
+    )
+
+    assert sent[0]["request_id"] != sent[2]["request_id"]
